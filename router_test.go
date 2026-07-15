@@ -47,6 +47,22 @@ func TestRouterMiddleware_MissingHandlerIsNotFound(t *testing.T) {
 	}
 }
 
+func TestRouterMiddleware_MissingTopicIsValidationError(t *testing.T) {
+	registry := NewRegistry()
+	pipeline := NewPipeline(RouterMiddleware(registry))
+	ic := NewInvocationContext(NewTopic(""), nil, nil, nil)
+
+	if err := pipeline.Run(context.Background(), ic); err != nil {
+		t.Fatalf("Run() error = %v, want nil (a missing topic is a Result, not a Go error)", err)
+	}
+	if ic.Result.ResultStatus() != StatusValidationError {
+		t.Errorf("ResultStatus() = %q, want %q", ic.Result.ResultStatus(), StatusValidationError)
+	}
+	if len(ic.Result.ResultErrors()) == 0 {
+		t.Error("ValidationError result should carry a message explaining the missing topic")
+	}
+}
+
 func TestRouterMiddleware_RequestConversionFailureIsBadRequest(t *testing.T) {
 	registry := NewRegistry()
 	topic := NewTopic("hello:world")

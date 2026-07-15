@@ -10,14 +10,20 @@ import (
 // registered last in a Pipeline (core-concepts.md §4).
 //
 // Per core-concepts.md §2/§5, this middleware never returns a Go error for an application-
-// level outcome - a missing handler, a request-conversion failure, or a handler panic all
-// become a Result on ic.Result (NotFound, BadRequest, and ServiceUnavailable respectively),
-// so every caller uniformly reads ic.Result rather than distinguishing "no handler" from
-// "handler ran" via the Go error return. A handler panic specifically MUST NOT crash the
-// transport adapter (§5) - recovered here and mapped to ServiceUnavailable, which
-// wire-contracts.md §3 defines as "also the mapping for uncaught handler exceptions."
+// level outcome - a missing topic, a missing handler, a request-conversion failure, or a
+// handler panic all become a Result on ic.Result (ValidationError, NotFound, BadRequest, and
+// ServiceUnavailable respectively), so every caller uniformly reads ic.Result rather than
+// distinguishing "no handler" from "handler ran" via the Go error return. A handler panic
+// specifically MUST NOT crash the transport adapter (§5) - recovered here and mapped to
+// ServiceUnavailable, which wire-contracts.md §3 defines as "also the mapping for uncaught
+// handler exceptions."
 func RouterMiddleware(registry *Registry) Middleware {
 	return func(ctx context.Context, ic *InvocationContext, next func(context.Context) error) (err error) {
+		if ic.Topic.ID == "" {
+			ic.Result = ValidationError[any]("topic is missing")
+			return next(ctx)
+		}
+
 		handler, ok := registry.resolve(ic.Topic)
 		if !ok {
 			ic.Result = NotFound[any](fmt.Sprintf("no handler found for topic %q", ic.Topic))
