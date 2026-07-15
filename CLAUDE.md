@@ -1,0 +1,90 @@
+# benzene-go — Project Guide for Claude Code
+
+## What this is
+
+`benzene-go` is the Go port of [Benzene](https://github.com/daniellepelley/Benzene), a
+middleware-based library for hexagonal (ports-and-adapters) architecture. It lives in its own
+repo (not a subdirectory of the main C# repo) for the same reasons a Go module normally gets
+its own repo: an idiomatic `module` path, independent versioning/tagging, and a contributor
+surface that doesn't require a .NET toolchain.
+
+The main repo's `docs/specification/` is the source of truth for cross-language behavior -
+`core-concepts.md`, `wire-contracts.md`, `transport-bindings.md`, `porting-guide.md`. When this
+port and the spec disagree, the spec wins; fix the Go code, not the spec, unless the
+disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
+
+## Structure
+
+- Root package (`benzene`) - Topic, Status, Result[T], Registry, Middleware/Pipeline, the
+  DI-lite Container/Scope, the three-phase App lifecycle. No sub-package may import this in a
+  cycle; everything else imports it.
+- `wire/` - the transport-neutral message envelope. Deliberately has **no dependency on the
+  rest of this module** - keep it that way (see the package doc comment).
+- `httpstatus/` - the Benzene<->HTTP status mapping tables, cross-checked against
+  `docs/specification/conformance/http-status-mapping.json` in the main repo.
+- `envelope/` - dispatches a `wire.Request` through a `Pipeline`, shared by `httpbinding`,
+  `httpclient`, and `conformance`.
+- `httpbinding/` - the HTTP transport binding (native + envelope-over-HTTP entry points).
+- `httpclient/` - the HTTP outbound client.
+- `healthcheck/` - reserved-topic health-check interception middleware.
+- `conformance/` - the fixture runner; `testdata/*.json` are vendored copies from the main
+  repo's `docs/specification/conformance/` (see `conformance/README.md` for how to re-sync).
+- `examples/` - runnable example services (currently `examples/helloworld`).
+
+## Before making changes
+
+- Read the relevant section of the main repo's `docs/specification/` first (it's usually
+  cloned/available alongside this repo when doing cross-repo work) - don't invent behavior that
+  the spec already defines.
+- Read an existing package's pattern (doc comments, error handling, test style) before adding a
+  new one - follow it rather than introducing a new convention.
+- Every package's tests are table-driven where the fixture shape allows it, using `t.Run` for
+  subtests. Match this style.
+
+## Conventions
+
+- Language: Go, see `go.mod` for the minimum version.
+- No third-party dependencies. The standard library has covered everything so far (generics for
+  type-safe registration with type-erased storage, `context.Context` for
+  cancellation/invocation-scoped values, `encoding/json` for the wire format). Ask before adding
+  one - a Go port with zero dependencies is itself a selling point over the .NET original.
+- Generics: used where they buy real type safety (`Handler[TReq, TRes]`, `Result[T]`,
+  `GetService[T]`) but the `Registry` stores handlers behind a **type-erased** `erasedHandler`
+  signature - Go generics can't hold heterogeneous `Result[T]` instantiations in one
+  collection. Recover the concrete type via the `ResultInfo` interface, not reflection.
+- DI: `Container`/`Scope` are a small first-party DI-lite object, not a reflection-based
+  framework. A handler resolves a scoped/transient dependency via
+  `benzene.ScopeFromContext(ctx)` + `benzene.GetService[T]`, since `Handler`'s signature
+  carries no `*Scope` parameter (see `scope.go`'s `ContextWithScope` doc comment for why). A
+  singleton dependency can just be captured in the handler's closure at registration time.
+- Concurrency: `Container`/`Scope` use double-checked locking, not a lock held across a
+  factory call - a factory is allowed to resolve other services from the same scope, and
+  Go's `sync.Mutex` is not reentrant. Don't "simplify" this back to a single lock scope; it
+  will deadlock the moment a factory does that (see the comment above `typedSingleton` in
+  `scope.go`).
+
+## Do NOT
+
+- Do not add third-party dependencies without asking first.
+- Do not change the `Handler[TReq, TRes]` signature (e.g. adding a `*Scope` parameter) without
+  flagging it as a breaking change and considering how every existing package would need to
+  change - it's meant to stay a plain, easily-testable function.
+- Do not weaken `envelope`/`httpbinding`/`httpclient`'s "never return a Go error to the
+  transport" rule - a missing handler, a conversion failure, a handler panic, and a transport-
+  level failure are all supposed to become a `Result`/`wire.Response`, never a panic that
+  reaches the caller or a Go error the caller has to specially handle.
+- Do not skip or weaken the conformance runner's fixtures to make it pass - if a fixture seems
+  wrong, that's a signal to re-check the spec, not to loosen the assertion.
+
+## Workflow expectations
+
+- Run `gofmt -w .` before every commit; CI fails on unformatted files.
+- Run `go vet ./... && go build ./... && go test ./... -race -cover` before considering a task
+  complete. Every non-test-only package should sit at 100% coverage, or just under it with the
+  gap being a documented, genuinely-unreachable defensive branch (not an untested real code
+  path) - if you can't tell which one a gap is, write the test that would prove it one way or
+  the other rather than assuming.
+- Keep commits scoped to one logical change (one package, one fix), matching this repo's
+  history so far.
+- New capability = new package + new tests + a README/doc-comment update in the same commit,
+  not a follow-up "add tests later" commit.
