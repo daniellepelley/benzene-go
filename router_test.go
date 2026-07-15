@@ -86,6 +86,36 @@ func TestRouterMiddleware_RequestConversionFailureIsBadRequest(t *testing.T) {
 	}
 }
 
+func TestRouterMiddleware_HandlerCanResolveScopedServiceFromContext(t *testing.T) {
+	container := NewContainer()
+	AddScoped(container, "greeting-prefix", func(s *Scope) string { return "Hi" })
+
+	registry := NewRegistry()
+	topic := NewTopic("hello:world")
+	usesScope := Handler[helloRequest, helloResponse](func(ctx context.Context, req helloRequest) Result[helloResponse] {
+		scope, ok := ScopeFromContext(ctx)
+		if !ok {
+			return Fail[helloResponse](StatusUnexpectedError, "no scope on context")
+		}
+		prefix := GetService[string](scope, "greeting-prefix")
+		return Ok(helloResponse{Message: prefix + " " + req.Name})
+	})
+	if err := Register(registry, topic, usesScope); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	pipeline := NewPipeline(RouterMiddleware(registry))
+	ic := NewInvocationContext(topic, nil, helloRequest{Name: "World"}, container.NewScope())
+	if err := pipeline.Run(context.Background(), ic); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	payload, ok := ic.Result.ResultPayload().(helloResponse)
+	if !ok || payload.Message != "Hi World" {
+		t.Errorf("ResultPayload() = %v, want {Message: Hi World}", ic.Result.ResultPayload())
+	}
+}
+
 func TestRouterMiddleware_HandlerPanicIsServiceUnavailable(t *testing.T) {
 	registry := NewRegistry()
 	topic := NewTopic("panics")

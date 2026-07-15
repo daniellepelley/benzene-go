@@ -1,6 +1,7 @@
 package benzene
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -216,5 +217,27 @@ func TestScope_ScopedFactoryCanResolveOtherServicesFromTheSameScope(t *testing.T
 	got := GetService[*counter](c.NewScope(), "doubled")
 	if got.n != 2 {
 		t.Errorf("doubled.n = %d, want 2", got.n)
+	}
+}
+
+func TestContextWithScope_RoundTrip(t *testing.T) {
+	c := NewContainer()
+	scope := c.NewScope()
+
+	ctx := ContextWithScope(context.Background(), scope)
+
+	got, ok := ScopeFromContext(ctx)
+	if !ok {
+		t.Fatal("ScopeFromContext() ok = false, want true")
+	}
+	if got != scope {
+		t.Error("ScopeFromContext() should return the exact scope passed to ContextWithScope")
+	}
+}
+
+func TestScopeFromContext_AbsentReturnsFalse(t *testing.T) {
+	_, ok := ScopeFromContext(context.Background())
+	if ok {
+		t.Error("ScopeFromContext() ok = true, want false for a context with no scope attached")
 	}
 }

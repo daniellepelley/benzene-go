@@ -30,7 +30,11 @@ func RouterMiddleware(registry *Registry) Middleware {
 			return next(ctx)
 		}
 
-		ic.Result = dispatch(ctx, handler, ic.Request)
+		handlerCtx := ctx
+		if ic.Scope != nil {
+			handlerCtx = ContextWithScope(ctx, ic.Scope)
+		}
+		ic.Result = dispatch(handlerCtx, handler, ic.Request)
 		return next(ctx)
 	}
 }

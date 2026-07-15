@@ -1,6 +1,7 @@
 package benzene
 
 import (
+	"context"
 	"fmt"
 	"sync"
 )
@@ -145,6 +146,27 @@ func TryGetService[T any](s *Scope, key serviceKey) (T, bool) {
 		value, _ := reg.factory(s).(T)
 		return value, true
 	}
+}
+
+// scopeContextKey is an unexported type so ContextWithScope's value can't collide with a key
+// some other package puts on the same context.Context.
+type scopeContextKey struct{}
+
+// ContextWithScope returns a copy of ctx carrying scope, retrievable with ScopeFromContext.
+// core-concepts.md §4 says invocation-scoped facts ride on the context "(or an accessor
+// resolved from the invocation's scope)" - this is that accessor. RouterMiddleware calls this
+// before invoking a handler, so a handler that needs a scoped or transient dependency (a
+// singleton can simply be captured in the handler's closure at registration time) resolves it
+// via ScopeFromContext(ctx) rather than needing Scope added to the Handler signature itself.
+func ContextWithScope(ctx context.Context, scope *Scope) context.Context {
+	return context.WithValue(ctx, scopeContextKey{}, scope)
+}
+
+// ScopeFromContext retrieves the Scope previously attached with ContextWithScope, ok = false
+// if ctx carries none (e.g. in a unit test that calls a handler directly).
+func ScopeFromContext(ctx context.Context) (*Scope, bool) {
+	scope, ok := ctx.Value(scopeContextKey{}).(*Scope)
+	return scope, ok
 }
 
 func (c *Container) lookup(key serviceKey) (registration, bool) {
