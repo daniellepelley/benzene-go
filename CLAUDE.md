@@ -34,8 +34,15 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
   Schema derivation is the one sanctioned use of `reflect` - startup-only, never on the
   dispatch path. Every feed is independent and optional - degradation (nil registry, nil
   or failing exporter, unprovisioned descriptor endpoint) must reduce the mesh, never
-  break the service. Later phases (push exporter, the `meshd` collector) need their wire
-  shapes promoted to the main repo's spec first.
+  break the service. The `mesh:*` wire topics and shapes (wire.go) are shared with the
+  collector and proposed for spec promotion (`docs/design/mesh-spec-draft.md`).
+- `meshd/` - Phases 3-4 of `docs/design/mesh.md`: the collector - an ordinary Benzene
+  service (register/heartbeat/traces ingest + `mesh:query:*` read models over an
+  in-memory store with a bounded trace ring) and the Mesh View (an embedded,
+  self-contained HTML page - no JS framework, per the zero-dependency stance). Consumer
+  edges are derived from trace parentage at query time; providers from descriptors;
+  nothing is declared. It must accept partial fleets: a missing feed renders a service
+  as reduced (`missingFeeds`), never fails ingestion or queries.
 - `awslambda/` - AWS Lambda binding: a hand-rolled Lambda Runtime API bootstrap loop, plus
   HTTP (API Gateway v2 / Function URL) and envelope adapters.
 - `azurefunctions/` - Azure Functions custom-handler binding (the Data/Metadata JSON contract
