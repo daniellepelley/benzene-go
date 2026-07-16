@@ -100,6 +100,15 @@ source-generator/codegen equivalent to the C# attribute-scanning sugar (per `por
 explicit registration is the framework contract in every language; attribute scanning is
 .NET-specific idiom, not something every port needs).
 
+## Design proposals
+
+Larger not-yet-implemented capabilities are designed in `docs/design/` before any code lands.
+Currently there: [Benzene Mesh](docs/design/mesh.md) - a fleet-wide, multi-cloud view of every
+service, its topics/schemas, health, and live traffic stats, derived from running services
+rather than declared in a catalog (with a [static mockup](docs/design/mesh-view-mockup.html)
+of the Fleet Overview screen). Wire shapes proposed there must be promoted into the main
+repo's spec before implementation.
+
 ## Developing
 
 ```
