@@ -1,5 +1,8 @@
 # Builds, vets, and tests every package in this module: a gofmt check, go vet, go build ./...,
-# and go test ./... -race -cover. See README.md for the local equivalent of each step.
+# go test ./... -race -cover, and a cross-compile smoke check for each cloud example's actual
+# deployment target (Lambda: linux/arm64, Azure/Cloud Run: linux/amd64) so a change that breaks
+# cross-compilation for a target this runner's own GOOS/GOARCH can't build natively is still
+# caught. See README.md for the local equivalent of each step.
 
 name: CI
 
@@ -40,3 +43,10 @@ jobs:
 
       - name: go test
         run: go test ./... -race -cover
+
+      - name: cross-compile cloud examples
+        run: |
+          set -euo pipefail
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/aws-lambda-helloworld ./examples/aws-lambda-helloworld
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/azure-functions-helloworld ./examples/azure-functions-helloworld
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/gcp-cloudrun-helloworld ./examples/gcp-cloudrun-helloworld
