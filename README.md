@@ -106,8 +106,9 @@ Larger not-yet-implemented capabilities are designed in `docs/design/` before an
 Currently there: [Benzene Mesh](docs/design/mesh.md) - a fleet-wide, multi-cloud view of every
 service, its topics/schemas, health, and live traffic stats, derived from running services
 rather than declared in a catalog (with a [static mockup](docs/design/mesh-view-mockup.html)
-of the Fleet Overview screen). Wire shapes proposed there must be promoted into the main
-repo's spec before implementation.
+of the Fleet Overview screen, and the [research and positioning](docs/design/mesh-research.md)
+behind it). Wire shapes proposed there must be promoted into the main repo's spec before
+implementation.
 
 ## Developing
 

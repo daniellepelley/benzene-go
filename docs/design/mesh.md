@@ -40,7 +40,9 @@ zero YAML, and zero third-party dependencies.
 
 ## 2. The problems this solves (researched)
 
-What developers and platform teams actually report struggling with:
+What developers and platform teams actually report struggling with — condensed here;
+the full findings, the why-incumbents-can't-fix-it analysis per problem, and the
+positioning material for future writing live in [`mesh-research.md`](./mesh-research.md):
 
 **No unified view across clouds.** In a 2025/26 survey of IT leaders running
 hybrid/multi-cloud, the single top pain point (47%) was *"getting a global view of
