@@ -3,6 +3,7 @@ package benzene
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 )
 
@@ -147,4 +148,86 @@ func TestConvertRequest_JSONRawMessage(t *testing.T) {
 	if got.Name != "Raw" {
 		t.Errorf("convertRequest() = %+v, want Name=Raw", got)
 	}
+}
+
+func TestRegistry_Topics(t *testing.T) {
+	tests := []struct {
+		name   string
+		topics []Topic
+		want   []Topic
+	}{
+		{
+			name:   "empty registry",
+			topics: nil,
+			want:   []Topic{},
+		},
+		{
+			name:   "sorted by id then version",
+			topics: []Topic{NewTopic("b"), NewTopic("a").WithVersion("v2"), NewTopic("a"), NewTopic("a").WithVersion("v1")},
+			want:   []Topic{NewTopic("a"), NewTopic("a").WithVersion("v1"), NewTopic("a").WithVersion("v2"), NewTopic("b")},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := NewRegistry()
+			for _, topic := range tt.topics {
+				if err := Register(r, topic, Handler[helloRequest, helloResponse](helloHandler)); err != nil {
+					t.Fatalf("Register(%v) error = %v", topic, err)
+				}
+			}
+
+			got := r.Topics()
+			if len(got) != len(tt.want) {
+				t.Fatalf("Topics() = %v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("Topics()[%d] = %v, want %v", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestRegistry_TopicTypes(t *testing.T) {
+	r := NewRegistry()
+	topic := NewTopic("hello:world")
+	if err := Register(r, topic, Handler[helloRequest, helloResponse](helloHandler)); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	t.Run("returns the types captured at registration", func(t *testing.T) {
+		request, response, ok := r.TopicTypes(topic)
+		if !ok {
+			t.Fatal("TopicTypes() ok = false for a registered topic")
+		}
+		if request != reflect.TypeOf(helloRequest{}) {
+			t.Errorf("request = %v, want %v", request, reflect.TypeOf(helloRequest{}))
+		}
+		if response != reflect.TypeOf(helloResponse{}) {
+			t.Errorf("response = %v, want %v", response, reflect.TypeOf(helloResponse{}))
+		}
+	})
+
+	t.Run("reports ok=false for an unregistered topic", func(t *testing.T) {
+		request, response, ok := r.TopicTypes(NewTopic("no:such:topic"))
+		if ok || request != nil || response != nil {
+			t.Errorf("TopicTypes() = (%v, %v, %v), want (nil, nil, false)", request, response, ok)
+		}
+	})
+
+	t.Run("captures an interface type parameter as the interface", func(t *testing.T) {
+		anyTopic := NewTopic("hello:any")
+		if err := Register(r, anyTopic, Handler[any, helloResponse](func(_ context.Context, _ any) Result[helloResponse] {
+			return Ok(helloResponse{})
+		})); err != nil {
+			t.Fatalf("Register() error = %v", err)
+		}
+
+		request, _, ok := r.TopicTypes(anyTopic)
+		if !ok || request == nil || request.Kind() != reflect.Interface {
+			t.Errorf("request = %v (ok=%v), want the empty interface type", request, ok)
+		}
+	})
 }

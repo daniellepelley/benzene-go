@@ -65,6 +65,8 @@ check, and both HTTP entry points wired through the three-phase `App` lifecycle.
 | `httpbinding` | 95%+ | The HTTP transport binding: a native REST-style `Handler` (real HTTP status codes, explicit route table) and an `EnvelopeHandler` (the wire envelope over HTTP) |
 | `httpclient` | 97%+ | The HTTP outbound client - one `Send(topic, headers, message)` method, mapping transport failures to `ServiceUnavailable` |
 | `healthcheck` | 100% | Middleware that intercepts the reserved `healthcheck` topic and responds with the standard aggregate health response |
+| `mesh` | 100% | Phases 1-2 of [Benzene Mesh](docs/design/mesh.md): the service `Descriptor` derived from the live `Registry` - topics, per-topic request/response JSON Schemas derived at startup from the registered handler types, and the contract `descriptorHash` - plus reserved-`mesh`-topic descriptor middleware and `TraceMiddleware` + `LogExporter` emitting semantic per-invocation trace events. Every feed is optional - a service with only some feeds provisioned runs a reduced mesh, never a broken one |
+| `meshd` | 100% | Phases 3-4 of [Benzene Mesh](docs/design/mesh.md): the collector - itself an ordinary Benzene service serving `mesh:register`/`mesh:heartbeat`/`mesh:traces` and the `mesh:query:*` read models over an in-memory store, plus the Mesh View (one embedded self-contained page, no JS framework). Accepts partial fleets: a service missing a feed renders as reduced, never breaks ingestion or queries |
 | `awslambda` | 90%+ | AWS Lambda binding: a hand-rolled Lambda Runtime API bootstrap loop (`Start`), plus `HTTPHandler` (API Gateway v2 / Function URL events) and `EnvelopeHandler` (direct invoke) |
 | `azurefunctions` | 93%+ | Azure Functions custom-handler binding: `Handler` adapts the Data/Metadata JSON contract the Functions host forwards HTTP-triggered invocations over |
 | `client` | 100% | Outbound-client decorators (`CorrelationDecorator`, `RetryDecorator`) over a transport-agnostic `Sender` interface |
@@ -79,6 +81,7 @@ check, and both HTTP entry points wired through the three-phase `App` lifecycle.
 | `examples/gcp-cloudrun-helloworld` | - | The same service, deployable to Google Cloud Run (Dockerfile, no new package needed) |
 | `examples/aws-sqs-helloworld` ([own module](RELEASING.md)) | - | A publisher Lambda (Function URL) forwarding to SQS + a consumer Lambda triggered by that queue |
 | `examples/aws-sns-helloworld` ([own module](RELEASING.md)) | - | A publisher Lambda (Function URL) forwarding to SNS + a consumer Lambda subscribed to that topic |
+| `examples/mesh-helloworld` | - | The whole mesh story in one process: a `meshd` collector + two meshed services with a cross-service traced call - open the Mesh View and watch the derived fleet |
 
 Every non-test-only package sits at 100% coverage, or just under it where the gap is a
 defensively-unreachable branch (documented at the call site - e.g. a `json.Marshal` failure on
@@ -123,6 +126,19 @@ explicit registration is the framework contract in every language; attribute sca
 
 See `ROADMAP.md` for the fuller picture: what's next with zero new dependencies, what's next
 *pending* a dependency decision, and what's deliberately not being ported at all (and why).
+
+## Benzene Mesh
+
+Benzene Mesh - a fleet-wide, multi-cloud view of every service, its topics/schemas, health,
+and live traffic stats, derived from running services rather than declared in a catalog - is
+designed in `docs/design/` ([mesh.md](docs/design/mesh.md), with a
+[static mockup](docs/design/mesh-view-mockup.html) of the Fleet Overview screen and the
+[research and positioning](docs/design/mesh-research.md) behind it). All phases of its
+delivery plan are complete on this repo's side: the `mesh` and `meshd` packages and the
+`examples/mesh-helloworld` demo above implement it, and the wire contracts are promoted and
+merged as the main repo's `docs/specification/mesh.md` - now the normative text, with this
+port as its reference implementation (the `mesh-*.json` fixtures in `conformance/` pin that,
+and pass).
 
 ## Developing
 

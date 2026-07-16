@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"sort"
 )
 
 // Handler is a function from a request to a result (core-concepts.md §3). The handler
@@ -53,6 +55,18 @@ func convertRequest[TReq any](raw any) (TReq, error) {
 	return typed, nil
 }
 
+// handlerRegistration is what the Registry stores per topic: the type-erased handler plus the
+// concrete request/response types captured at the Register call site (where TReq/TRes are
+// statically known and free to record - they are unrecoverable from the erased closure
+// afterwards). The types exist for startup-time introspection only - the mesh package
+// derives JSON Schemas from them (docs/design/mesh.md Phase 2); dispatch never touches
+// them and still recovers concrete results via ResultInfo, not reflection.
+type handlerRegistration struct {
+	handler  erasedHandler
+	request  reflect.Type
+	response reflect.Type
+}
+
 // Registry holds (topic -> handler) registrations.
 //
 // The concept behind handler discovery is explicit registration (core-concepts.md §9);
@@ -62,12 +76,12 @@ func convertRequest[TReq any](raw any) (TReq, error) {
 // first-class path in every language regardless - so there is nothing to defer to later
 // here, this is simply the Go idiom.
 type Registry struct {
-	handlers map[Topic]erasedHandler
+	handlers map[Topic]handlerRegistration
 }
 
 // NewRegistry returns an empty Registry.
 func NewRegistry() *Registry {
-	return &Registry{handlers: make(map[Topic]erasedHandler)}
+	return &Registry{handlers: make(map[Topic]handlerRegistration)}
 }
 
 // Register adds handler for topic. Returns an error if topic is already registered -
@@ -77,12 +91,18 @@ func Register[TReq, TRes any](r *Registry, topic Topic, handler Handler[TReq, TR
 	if _, exists := r.handlers[topic]; exists {
 		return fmt.Errorf("benzene: handler already registered for topic %q", topic)
 	}
-	r.handlers[topic] = func(ctx context.Context, raw any) (ResultInfo, error) {
-		typedReq, err := convertRequest[TReq](raw)
-		if err != nil {
-			return nil, fmt.Errorf("benzene: topic %q: %w", topic, err)
-		}
-		return handler(ctx, typedReq), nil
+	r.handlers[topic] = handlerRegistration{
+		handler: func(ctx context.Context, raw any) (ResultInfo, error) {
+			typedReq, err := convertRequest[TReq](raw)
+			if err != nil {
+				return nil, fmt.Errorf("benzene: topic %q: %w", topic, err)
+			}
+			return handler(ctx, typedReq), nil
+		},
+		// TypeOf on a pointer's Elem rather than on a zero TReq value, so interface type
+		// parameters yield their interface type instead of nil.
+		request:  reflect.TypeOf((*TReq)(nil)).Elem(),
+		response: reflect.TypeOf((*TRes)(nil)).Elem(),
 	}
 	return nil
 }
@@ -91,12 +111,38 @@ func Register[TReq, TRes any](r *Registry, topic Topic, handler Handler[TReq, TR
 // id and version travel as literal strings once resolved (core-concepts.md §2); any
 // normalization a transport binding wants to apply happens before calling resolve.
 func (r *Registry) resolve(topic Topic) (erasedHandler, bool) {
-	h, ok := r.handlers[topic]
-	return h, ok
+	reg, ok := r.handlers[topic]
+	return reg.handler, ok
+}
+
+// TopicTypes returns the request and response types captured when topic's handler was
+// registered (reflect.TypeOf TReq and TRes), or ok = false when topic isn't registered.
+// Startup-time introspection for service self-description - not a dispatch mechanism.
+func (r *Registry) TopicTypes(topic Topic) (request, response reflect.Type, ok bool) {
+	reg, ok := r.handlers[topic]
+	return reg.request, reg.response, ok
 }
 
 // Has reports whether a handler is registered for topic.
 func (r *Registry) Has(topic Topic) bool {
 	_, ok := r.handlers[topic]
 	return ok
+}
+
+// Topics returns every registered topic, sorted by ID then Version. This is the
+// enumeration behind service self-description (the mesh package's Descriptor): explicit
+// registration means the Registry is the complete, authoritative list of what this
+// service serves, so a catalog derived from it cannot drift from the running code.
+func (r *Registry) Topics() []Topic {
+	topics := make([]Topic, 0, len(r.handlers))
+	for topic := range r.handlers {
+		topics = append(topics, topic)
+	}
+	sort.Slice(topics, func(i, j int) bool {
+		if topics[i].ID != topics[j].ID {
+			return topics[i].ID < topics[j].ID
+		}
+		return topics[i].Version < topics[j].Version
+	})
+	return topics
 }

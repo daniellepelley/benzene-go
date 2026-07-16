@@ -27,6 +27,24 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
 - `httpbinding/` - the HTTP transport binding (native + envelope-over-HTTP entry points).
 - `httpclient/` - the HTTP outbound client.
 - `healthcheck/` - reserved-topic health-check interception middleware.
+- `mesh/` - Phases 1-2 of `docs/design/mesh.md`: service `Descriptor` derived from the
+  `Registry` (topics + JSON Schemas derived at startup from the `TReq`/`TRes` types the
+  Registry captures at `Register` time, plus the contract `descriptorHash`),
+  reserved-`mesh`-topic descriptor middleware, and trace middleware + log exporter.
+  Schema derivation is the one sanctioned use of `reflect` - startup-only, never on the
+  dispatch path. Every feed is independent and optional - degradation (nil registry, nil
+  or failing exporter, unprovisioned descriptor endpoint) must reduce the mesh, never
+  break the service. The `mesh:*` wire topics and shapes (wire.go) are shared with the
+  collector and promoted to the main repo's spec (`docs/specification/mesh.md` there, now
+  the normative text; `docs/design/mesh-spec-draft.md` is the historical draft), pinned by
+  the vendored `mesh-*.json` fixtures in `conformance/`.
+- `meshd/` - Phases 3-4 of `docs/design/mesh.md`: the collector - an ordinary Benzene
+  service (register/heartbeat/traces ingest + `mesh:query:*` read models over an
+  in-memory store with a bounded trace ring) and the Mesh View (an embedded,
+  self-contained HTML page - no JS framework, per the zero-dependency stance). Consumer
+  edges are derived from trace parentage at query time; providers from descriptors;
+  nothing is declared. It must accept partial fleets: a missing feed renders a service
+  as reduced (`missingFeeds`), never fails ingestion or queries.
 - `awslambda/` - AWS Lambda binding: a hand-rolled Lambda Runtime API bootstrap loop, plus
   HTTP (API Gateway v2 / Function URL) and envelope adapters.
 - `azurefunctions/` - Azure Functions custom-handler binding (the Data/Metadata JSON contract
@@ -43,7 +61,8 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
   `batchItemFailures` response body.
 - `conformance/` - the fixture runner; `testdata/*.json` are vendored copies from the main
   repo's `docs/specification/conformance/` (see `conformance/README.md` for how to re-sync).
-- `examples/` - runnable example services: `helloworld` (plain HTTP), and one
+- `examples/` - runnable example services: `helloworld` (plain HTTP),
+  `mesh-helloworld` (collector + two meshed services, the Phases 1-4 demo), and one
   `<provider>-helloworld` per cloud deployment target (`aws-lambda-helloworld`,
   `azure-functions-helloworld`, `gcp-cloudrun-helloworld`, `aws-sqs-helloworld`,
   `aws-sns-helloworld`) - each with its own README stating the concrete deploy steps and exactly
