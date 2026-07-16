@@ -126,6 +126,9 @@ explicit registration is the framework contract in every language; attribute sca
 
 See `ROADMAP.md` for the fuller picture: what's next with zero new dependencies, what's next
 *pending* a dependency decision, and what's deliberately not being ported at all (and why).
+For how this project compares to the other ways of building cloud-portable services in Go
+(Dapr, Go CDK, Watermill, Encore) and when you'd pick each, see
+[docs/comparison.md](docs/comparison.md).
 
 ## Benzene Mesh
 

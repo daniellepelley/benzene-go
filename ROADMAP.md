@@ -36,12 +36,22 @@ delivery order - just the current honest picture, kept up to date as things land
   just this module). Unlike SQS's event source mapping, a direct SNS-to-Lambda subscription has
   no batch/partial-failure mechanism - `Handler` instead returns a Go error for a failed
   notification, triggering AWS's own async-invoke retry.
+- `mesh` - Phases 1-2 of `docs/design/mesh.md`: the service `Descriptor` derived from the live
+  `Registry` (topics + startup-derived JSON Schemas + `descriptorHash`), reserved-`mesh`-topic
+  descriptor middleware, `TraceMiddleware` with W3C `traceparent` propagation, and the
+  `LogExporter`/`PushExporter` trace feeds - every feed independent and optional.
+- `meshd` - Phases 3-4 of `docs/design/mesh.md`: the collector (register/heartbeat/traces
+  ingest + `mesh:query:*` read models over an in-memory store with a bounded trace ring) and
+  the Mesh View (one embedded self-contained page, no JS framework). The wire contract is
+  promoted to the main repo's `docs/specification/mesh.md` and pinned by vendored
+  `mesh-*.json` conformance fixtures.
 - `conformance` - runs this port against the main repo's vendored language-neutral fixtures.
 - Examples: `helloworld` (plain HTTP + DI + health check), `aws-lambda-helloworld`,
   `azure-functions-helloworld`, `gcp-cloudrun-helloworld` (no new package needed for GCP - see
   its README), `aws-sqs-helloworld` (publisher + consumer Lambdas, its own module),
-  `aws-sns-helloworld` (publisher + consumer Lambdas, its own module) - each with a matching CI
-  build/test path and a gated GitHub Actions deploy workflow
+  `aws-sns-helloworld` (publisher + consumer Lambdas, its own module),
+  `mesh-helloworld` (collector + two meshed services, local-only) - each cloud example with a
+  matching CI build/test path and a gated GitHub Actions deploy workflow
   (`.github/workflows/deploy-*.yml`).
 
 Every non-test-only package sits at 100% coverage or just under it with the gap being a
@@ -108,7 +118,10 @@ equivalent to port, not gaps in this port:
 - **Code generation tooling** (`Benzene.CodeGen.*`) - .NET source generators and Go code
   generation work completely differently; if this port ever wants generated OpenAPI docs or a
   typed client, that's a fresh design, not a port of the C# generator.
-- **`Benzene.Mesh.*`** - the service-mesh visibility tooling is aggregator/UI infrastructure
-  that talks to *any* language's health-check endpoint over HTTP; it doesn't need a per-language
-  port at all, Go services already work with the existing (C#) aggregator once they expose the
-  standard health-check response shape (which `healthcheck` already produces).
+- ~~**`Benzene.Mesh.*`** - doesn't need a per-language port~~ - **superseded.** This entry
+  predates `docs/design/mesh.md`. The mesh as actually designed is not just an HTTP
+  health-check aggregator: the service-side feeds (descriptor derivation from the live
+  `Registry`, trace emission) are necessarily per-language, and this port ships them (`mesh`,
+  `meshd` - see Done above). What stays true is that the *collector* is language-neutral: any
+  implementation's collector can host any implementation's services over the shared
+  `mesh:*` wire contract.
