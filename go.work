@@ -2,10 +2,11 @@ go 1.24.7
 
 use (
 	.
-	./awssqs
 	./awssns
-	./examples/aws-sqs-helloworld
+	./awssqs
 	./examples/aws-sns-helloworld
+	./examples/aws-sqs-helloworld
+	./kafka
 )
 
 // Scoped to this workspace only - never affects real external consumers of either module
@@ -15,8 +16,9 @@ use (
 // directives above until they're actually tagged and pushed.
 replace (
 	github.com/daniellepelley/benzene-go v0.1.0 => ./
-	github.com/daniellepelley/benzene-go/awssqs v0.1.0 => ./awssqs
 	github.com/daniellepelley/benzene-go/awssns v0.1.0 => ./awssns
+	github.com/daniellepelley/benzene-go/awssqs v0.1.0 => ./awssqs
+	github.com/daniellepelley/benzene-go/kafka v0.1.0 => ./kafka
 )
 
 // examples/aws-sns-helloworld has no genuinely external dependency of its own beyond what

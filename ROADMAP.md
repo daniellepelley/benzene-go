@@ -57,6 +57,14 @@ delivery order - just the current honest picture, kept up to date as things land
   for a push subscription's endpoint, with wire-contracts §2 topic resolution and ack/nack
   via the response status code. The outbound (publish) half needs the Pub/Sub SDK - see
   "Later" below.
+- `kafka` - Kafka binding, in its **own Go module** (see `RELEASING.md`): a `Consumer` loop
+  over a consumer group (one pipeline invocation + DI scope per record, explicit commits;
+  Kafka has no broker-side redelivery/DLQ, so a failed message goes to the `OnFailure` hook -
+  dead-letter publish, log - and is then committed past, keeping the partition moving) and an
+  outbound `Client` satisfying `client.Sender`. Needs `github.com/segmentio/kafka-go` (chosen
+  over `franz-go` for its narrow Reader/Writer surface, which this repo's
+  fake-behind-an-interface test style wraps cleanly) - a broker wire protocol is not
+  reasonably hand-rollable, hence the module split.
 - `conformance` - runs this port against the main repo's vendored language-neutral fixtures.
 - Examples: `helloworld` (plain HTTP + DI + health check), `aws-lambda-helloworld`,
   `azure-functions-helloworld`, `gcp-cloudrun-helloworld` (no new package needed for GCP - see
@@ -88,11 +96,6 @@ Per `CLAUDE.md`: no third-party dependency without asking first. These are real,
 extensions, but each needs an explicit yes on a specific dependency before starting, not a
 unilateral add:
 
-- **Kafka bindings.** SQS and SNS are both now done (`awssqs`, `awssns`, each its own module -
-  see Done above). A self-hosted Kafka consumer/producer is the same shape (a broker protocol,
-  not reasonably hand-rollable) and would similarly need its own module - it needs a client
-  library (e.g. `github.com/segmentio/kafka-go` or `github.com/twmb/franz-go`), a dependency
-  this repo has not taken a position on yet.
 - **gRPC binding.** Go has no gRPC support in the standard library at all; this needs
   `google.golang.org/grpc` + protobuf codegen tooling, a materially bigger dependency and
   build-step footprint than anything else in this repo.

@@ -75,6 +75,12 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
   SNS-to-Lambda subscription has no batch/partial-failure concept, so `Handler` reports a failed
   notification by returning a Go error - triggering AWS's own async-invoke retry - rather than a
   `batchItemFailures` response body.
+- `kafka/` - Kafka binding, in **its own Go module** (`kafka/go.mod`, needs
+  `segmentio/kafka-go` - a broker wire protocol isn't hand-rollable): `Consumer` loop (one
+  scope per record, explicit commits; no broker-side redelivery/DLQ exists, so failures go to
+  the `OnFailure` hook and are committed past) + outbound `Client` satisfying `client.Sender`.
+  Both halves depend on narrow interfaces (`MessageSource`, `MessageWriter`) so tests run
+  against fakes, no live broker.
 - `conformance/` - the fixture runner; `testdata/*.json` are vendored copies from the main
   repo's `docs/specification/conformance/` (see `conformance/README.md` for how to re-sync).
 - `examples/` - runnable example services: `helloworld` (plain HTTP),
@@ -88,9 +94,10 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
   applying that bar to any new platform package. `aws-sqs-helloworld` and
   `aws-sns-helloworld` are each their own module (depends on both the root module and its
   respective binding - would be a cycle inside either).
-- `go.work` - ties the root module, `awssqs/`, `awssns/`, `examples/aws-sqs-helloworld/`, and
-  `examples/aws-sns-helloworld/` together for local development (see `RELEASING.md`). Its
-  `replace` lines are workspace-scoped only and never affect real external consumers.
+- `go.work` - ties the root module, `awssqs/`, `awssns/`, `kafka/`,
+  `examples/aws-sqs-helloworld/`, and `examples/aws-sns-helloworld/` together for local
+  development (see `RELEASING.md`). Its `replace` lines are workspace-scoped only and never
+  affect real external consumers.
 - `.github/workflows/ci.yml` - build+test on every push/PR (gofmt, vet, build, race+cover test,
   plus a cross-compile smoke check per cloud example's real target). `.github/workflows/
   deploy-<provider>-helloworld.yml` (one per cloud example) - each gated on that provider's
@@ -116,8 +123,9 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
   standard library covers everything there (generics for type-safe registration with
   type-erased storage, `context.Context` for cancellation/invocation-scoped values,
   `encoding/json` for the wire format) - zero dependencies is itself a selling point over the
-  .NET original. `awssqs` and `awssns` are the deliberate exceptions (needing
-  `aws-sdk-go-v2/service/sqs` and `aws-sdk-go-v2/service/sns` respectively for signed API calls)
+  .NET original. `awssqs`, `awssns`, and `kafka` are the deliberate exceptions (needing
+  `aws-sdk-go-v2/service/sqs` and `aws-sdk-go-v2/service/sns` for signed API calls, and
+  `segmentio/kafka-go` for the broker wire protocol)
   and each lives in its own module specifically so that exception doesn't spread. Ask before
   adding any other dependency; if one is approved, give it its own module rather than adding it
   to the root's `go.mod` - see `RELEASING.md`.
@@ -159,7 +167,7 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
 ## Workflow expectations
 
 - Run `gofmt -w .` before every commit; CI fails on unformatted files.
-- Run `go vet ./... ./awssqs/... ./awssns/... ./examples/aws-sqs-helloworld/...
+- Run `go vet ./... ./awssqs/... ./awssns/... ./kafka/... ./examples/aws-sqs-helloworld/...
   ./examples/aws-sns-helloworld/... && go build (same paths) && go test (same paths) -race
   -cover` before considering a task complete - `./...` from the root does not cross a nested
   module boundary even with `go.work` present, so the nested modules need their own explicit
