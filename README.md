@@ -104,6 +104,9 @@ source-generator/codegen equivalent to the C# attribute-scanning sugar (per `por
 explicit registration is the framework contract in every language; attribute scanning is
 .NET-specific idiom, not something every port needs).
 
+See `ROADMAP.md` for the fuller picture: what's next with zero new dependencies, what's next
+*pending* a dependency decision, and what's deliberately not being ported at all (and why).
+
 ## Developing
 
 ```
