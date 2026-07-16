@@ -1,8 +1,13 @@
 # Benzene Mesh — design
 
-**Status: PHASES 1-2 IMPLEMENTED** (the in-process `mesh/` package - descriptor,
-reserved-topic middleware, trace middleware + log exporter, schema derivation +
-`descriptorHash`); everything else remains a design proposal. Cross-service wire shapes proposed here need to be promoted into the main
+**Status: PHASES 1-4 IMPLEMENTED, PHASE 5 DRAFTED.** The in-process `mesh/` package
+(descriptor, reserved-topic middleware, trace middleware, log + push exporters, schema
+derivation + `descriptorHash`, span propagation), the `meshd/` collector with the Mesh
+View, and the `examples/mesh-helloworld` end-to-end demo are implemented in this repo.
+Phase 5's promotable artifact - the language-neutral wire-contract text plus a
+conformance-fixture plan - is drafted in [`mesh-spec-draft.md`](./mesh-spec-draft.md);
+landing it in the main repo's `docs/specification/` (and bringing the C# port up to it)
+happens in the main repo, which remains the source of truth once promoted. Cross-service wire shapes proposed here need to be promoted into the main
 repo's `docs/specification/` (which remains the source of truth) before the later
 phases land, so that every language port meshes identically.
 
@@ -368,13 +373,21 @@ docs in one commit, 100%-or-documented coverage):
    the Registry now captures at the `Register` call site (`Registry.TopicTypes`), and the
    contract hash (excluding per-instance and transient fields, so two instances of one
    build hash identically). Dispatch remains reflection-free.
-3. **`PushExporter` + `meshd` MVP** (in-memory store, register/heartbeat/traces/query
-   topics) + a `mesh-helloworld` example wiring two services and the collector.
-4. **Mesh View**: `meshd`-served dashboard (single static page + `mesh:query:*`,
-   no JS framework — same zero-dependency stance).
-5. **Spec promotion**: wire shapes → main repo `docs/specification/mesh.md` +
-   conformance fixtures; C# port catches up; cross-language fleet demo (Go on
-   Lambda + C# on Functions in one view) becomes *the* flagship demo.
+3. **`PushExporter` + `meshd` MVP** - ✅ implemented: batching push exporter behind a
+   `Sender` interface (lossy by design in every failure mode), span propagation
+   (`SpanFromContext`/`Traceparent`) for cross-service joins, and the `meshd` collector
+   (in-memory store, register/heartbeat/traces ingest + `mesh:query:*` read models,
+   consumer edges derived from trace parentage at query time) + the
+   `examples/mesh-helloworld` demo, whose tests run the whole story over real HTTP.
+4. **Mesh View** - ✅ implemented: a single self-contained page embedded in `meshd`
+   (no JS framework, per the zero-dependency stance), polling `mesh:query:fleet`
+   through the envelope endpoint.
+5. **Spec promotion** - drafted: [`mesh-spec-draft.md`](./mesh-spec-draft.md) is the
+   language-neutral contract text + conformance-fixture plan, ready to land as the main
+   repo's `docs/specification/mesh.md`. The remaining work lives in the main repo: merge
+   the spec, author the fixtures (then vendor them into `conformance/` here), bring the
+   C# port up to them, and ship the cross-language fleet demo (Go on Lambda + C# on
+   Functions in one view) as *the* flagship demo.
 
 ## 9. Open questions
 

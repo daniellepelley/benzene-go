@@ -110,8 +110,10 @@ Larger capabilities are designed in `docs/design/` before any code lands. Curren
 topics/schemas, health, and live traffic stats, derived from running services rather than
 declared in a catalog (with a [static mockup](docs/design/mesh-view-mockup.html) of the Fleet
 Overview screen, and the [research and positioning](docs/design/mesh-research.md) behind it).
-Phases 1-2 of its delivery plan are implemented as the `mesh` package above; the wire shapes for
-the later cross-service phases must be promoted into the main repo's spec before they land.
+Phases 1-4 of its delivery plan are implemented (the `mesh` and `meshd` packages and the
+`examples/mesh-helloworld` demo above); Phase 5 - promoting the wire contracts into the main
+repo's spec so other language ports mesh identically - is drafted in
+[docs/design/mesh-spec-draft.md](docs/design/mesh-spec-draft.md) and lands in the main repo.
 
 ## Developing
 
