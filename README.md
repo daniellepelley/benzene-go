@@ -65,22 +65,40 @@ check, and both HTTP entry points wired through the three-phase `App` lifecycle.
 | `httpbinding` | 95%+ | The HTTP transport binding: a native REST-style `Handler` (real HTTP status codes, explicit route table) and an `EnvelopeHandler` (the wire envelope over HTTP) |
 | `httpclient` | 97%+ | The HTTP outbound client - one `Send(topic, headers, message)` method, mapping transport failures to `ServiceUnavailable` |
 | `healthcheck` | 100% | Middleware that intercepts the reserved `healthcheck` topic and responds with the standard aggregate health response |
+| `awslambda` | 90%+ | AWS Lambda binding: a hand-rolled Lambda Runtime API bootstrap loop (`Start`), plus `HTTPHandler` (API Gateway v2 / Function URL events) and `EnvelopeHandler` (direct invoke) |
+| `azurefunctions` | 93%+ | Azure Functions custom-handler binding: `Handler` adapts the Data/Metadata JSON contract the Functions host forwards HTTP-triggered invocations over |
 | `conformance` | n/a (test-only) | Runs this port against the fixtures vendored from the main repo's `docs/specification/conformance/` |
-| `examples/helloworld` | - | A runnable example service |
+| `examples/helloworld` | - | A runnable example service - DI, health check, both HTTP entry points |
+| `examples/aws-lambda-helloworld` | - | The same service, deployable to AWS Lambda (Dockerfile + SAM template) |
+| `examples/azure-functions-helloworld` | - | The same service, deployable to Azure Functions (host.json/function.json) |
+| `examples/gcp-cloudrun-helloworld` | - | The same service, deployable to Google Cloud Run (Dockerfile, no new package needed) |
 
 Every non-test-only package sits at 100% coverage, or just under it where the gap is a
 defensively-unreachable branch (documented at the call site - e.g. a `json.Marshal` failure on
 a type that can't actually fail to marshal). Run `go test ./... -cover` to see current numbers.
 
+## Deploying to a cloud provider
+
+| Provider | Path | New package needed? |
+|---|---|---|
+| AWS | Lambda (container image) + a Function URL | `awslambda` - Lambda has no HTTP-server contract, only the Runtime API |
+| Azure | Azure Functions custom handler | `azurefunctions` - Azure has no native Go worker |
+| Google Cloud | Cloud Run | None - Cloud Run's contract is "listen on `$PORT`", which `httpbinding` + `net/http` already satisfies |
+
+Each `examples/*-helloworld` directory's README documents the concrete deploy steps and states
+what was and wasn't verified in this repo's own CI sandbox (none of the three have live cloud
+credentials, so deployment itself isn't automated here - only the code, cross-compilation, and
+unit tests are).
+
 ## Scope
 
 This port covers core-concepts.md and wire-contracts.md end to end (pipeline, DI, health
-checks, HTTP binding + client, conformance) but does **not** yet have: a gRPC binding, a
-message-queue binding (SQS/Kafka/etc - core-concepts.md's binding contract, not this repo's
-scope decision, is what a binding must satisfy once one exists), or a source-generator/codegen
-equivalent to the C# attribute-scanning sugar (per `porting-guide.md`, explicit registration is
-the framework contract in every language; attribute scanning is .NET-specific idiom, not
-something every port needs).
+checks, HTTP binding + client, conformance, AWS/Azure/GCP deployment) but does **not** yet have:
+a gRPC binding, a message-queue binding (SQS/Kafka/etc - core-concepts.md's binding contract,
+not this repo's scope decision, is what a binding must satisfy once one exists), or a
+source-generator/codegen equivalent to the C# attribute-scanning sugar (per `porting-guide.md`,
+explicit registration is the framework contract in every language; attribute scanning is
+.NET-specific idiom, not something every port needs).
 
 ## Developing
 

@@ -27,9 +27,18 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
 - `httpbinding/` - the HTTP transport binding (native + envelope-over-HTTP entry points).
 - `httpclient/` - the HTTP outbound client.
 - `healthcheck/` - reserved-topic health-check interception middleware.
+- `awslambda/` - AWS Lambda binding: a hand-rolled Lambda Runtime API bootstrap loop, plus
+  HTTP (API Gateway v2 / Function URL) and envelope adapters.
+- `azurefunctions/` - Azure Functions custom-handler binding (the Data/Metadata JSON contract
+  the Functions host forwards HTTP-triggered invocations over - Azure has no native Go worker).
 - `conformance/` - the fixture runner; `testdata/*.json` are vendored copies from the main
   repo's `docs/specification/conformance/` (see `conformance/README.md` for how to re-sync).
-- `examples/` - runnable example services (currently `examples/helloworld`).
+- `examples/` - runnable example services: `helloworld` (plain HTTP), and one
+  `<provider>-helloworld` per cloud deployment target (`aws-lambda-helloworld`,
+  `azure-functions-helloworld`, `gcp-cloudrun-helloworld`) - each with its own README stating
+  the concrete deploy steps and exactly what was/wasn't verified without live cloud credentials.
+  Google Cloud has no dedicated package (see `gcp-cloudrun-helloworld/README.md` for why Cloud
+  Run needs none) - don't add one without a concrete reason `httpbinding` alone can't cover.
 
 ## Before making changes
 
@@ -69,12 +78,19 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
 - Do not change the `Handler[TReq, TRes]` signature (e.g. adding a `*Scope` parameter) without
   flagging it as a breaking change and considering how every existing package would need to
   change - it's meant to stay a plain, easily-testable function.
-- Do not weaken `envelope`/`httpbinding`/`httpclient`'s "never return a Go error to the
-  transport" rule - a missing handler, a conversion failure, a handler panic, and a transport-
-  level failure are all supposed to become a `Result`/`wire.Response`, never a panic that
-  reaches the caller or a Go error the caller has to specially handle.
+- Do not weaken `envelope`/`httpbinding`/`httpclient`/`awslambda`/`azurefunctions`'s "never
+  return a Go error to the transport" rule - a missing handler, a conversion failure, a handler
+  panic, and a transport-level failure are all supposed to become a `Result`/`wire.Response`
+  (or the platform's own error-reporting shape - the Lambda Runtime API's error endpoint, the
+  Functions host's outer-200/`Outputs.res.statusCode` split), never a panic that reaches the
+  caller or a Go error the caller has to specially handle.
 - Do not skip or weaken the conformance runner's fixtures to make it pass - if a fixture seems
   wrong, that's a signal to re-check the spec, not to loosen the assertion.
+- Do not fabricate deployment config (a Dockerfile base image, an env var, a CLI flag) you
+  can't verify - this repo has no live AWS/Azure/GCP credentials, so "verified" here means
+  cross-compilation + unit tests against the platform's documented contract, not an actual
+  deploy. Say so explicitly in the example's README (see `azure-functions-helloworld/README.md`
+  for why it has no container Dockerfile) rather than presenting a guess as fact.
 
 ## Workflow expectations
 
