@@ -14,10 +14,13 @@ import (
 	"net/http"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/client"
 	"github.com/daniellepelley/benzene-go/wire"
 )
 
-// Client sends outbound Benzene messages over HTTP as wire-contracts.md envelopes.
+// Client sends outbound Benzene messages over HTTP as wire-contracts.md envelopes. Client
+// satisfies client.Sender, so it can be wrapped in client.CorrelationDecorator/RetryDecorator
+// (or any other Sender decorator) without modification.
 type Client struct {
 	// Endpoint is the full URL of the target service's envelope endpoint (e.g.
 	// "http://orders:8080/invoke").
@@ -31,6 +34,8 @@ type Client struct {
 func NewClient(endpoint string) *Client {
 	return &Client{Endpoint: endpoint}
 }
+
+var _ client.Sender = (*Client)(nil)
 
 func (c *Client) httpClient() *http.Client {
 	if c.HTTPClient != nil {
