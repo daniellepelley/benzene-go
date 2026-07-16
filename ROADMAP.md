@@ -23,6 +23,8 @@ delivery order - just the current honest picture, kept up to date as things land
 - `cors` - portable CORS middleware for HTTP-fronted services (origin/scheme/port matching,
   header wildcard, preflight handling), a Go port of the main repo's own portable CORS
   middleware.
+- `benzenetest` - in-process test host (`Invoke[TReq, TRes]`) for a consuming application's own
+  tests, the Go counterpart to `Benzene.Testing`/`BenzeneTestHost`.
 - `conformance` - runs this port against the main repo's vendored language-neutral fixtures.
 - Examples: `helloworld` (plain HTTP + DI + health check), `aws-lambda-helloworld`,
   `azure-functions-helloworld`, `gcp-cloudrun-helloworld` (no new package needed for GCP - see
@@ -32,16 +34,17 @@ delivery order - just the current honest picture, kept up to date as things land
 Every non-test-only package sits at 100% coverage or just under it with the gap being a
 documented, genuinely-unreachable defensive branch - see each package's own comments.
 
-## Next (zero new dependencies - in progress or planned)
+## Next (zero new dependencies)
 
-These extend existing capabilities using only the standard library, matching this repo's
-current zero-third-party-dependency posture:
+The three items previously listed here (`client`, `cors`, `benzenetest`) have all landed. One
+candidate remains, not yet started:
 
-1. **`benzenetest` package - in-process test host.** A small fluent helper so an application's
-   *own* tests can invoke a registered handler or a full pipeline directly (build a request,
-   run it, assert on the `Result`) without spinning up real HTTP - mirroring `Benzene.Testing`/
-   `BenzeneTestHost` in the main repo. This is about DX for *consumers* of this library, not
-   this repo's own tests (which already use the pipeline/registry directly).
+1. **Basic request logging/timing middleware.** A `benzene.Middleware` using only `log/slog`
+   (standard library since Go 1.21) - per-invocation duration and outcome, no tracing/metrics
+   export. This is deliberately *not* the OpenTelemetry-based diagnostics the main repo's
+   `Benzene.Diagnostics` provides (that needs `go.opentelemetry.io/otel`, a dependency decision -
+   see below); it's a smaller, dependency-free stopgap for anyone who wants basic visibility
+   before reaching for full tracing.
 
 ## Later - needs a dependency decision first
 
@@ -67,6 +70,10 @@ unilateral add:
   documented in `examples/gcp-cloudrun-helloworld` - needs
   `github.com/GoogleCloudPlatform/functions-framework-go`, the one Google-specific dependency
   this port has avoided by targeting Cloud Run instead.
+- **OpenTelemetry-based diagnostics** (tracing/metrics export), the Go equivalent of the main
+  repo's `Benzene.Diagnostics` - needs `go.opentelemetry.io/otel` plus an exporter. The basic
+  `log/slog`-only stopgap above covers "some visibility" without this dependency in the
+  meantime.
 
 ## Deliberately out of scope (not a "later" - a "no, and here's why")
 
