@@ -1,13 +1,13 @@
 # Mesh wire contracts — DRAFT for promotion to the main repo's specification
 
-**Status: SUPERSEDED — promotion authored.** This draft has been promoted: the main
-repo's `claude/mesh-spec-promotion` branch carries the resulting
-`docs/specification/mesh.md` and the three `mesh-*-cases.json` conformance fixtures
-(vendored back into this repo's `conformance/` and passing). Once that branch merges,
-the main repo's spec is the normative text for the mesh contracts; this file is kept
-only as the historical draft it was authored from. Differences between this draft and
-the promoted spec (e.g. the conformance-fixture formats, which the promotion made
-concrete) are resolved in the promoted spec's favor.
+**Status: SUPERSEDED — promotion merged.** This draft has been promoted and merged to
+the main repo's `main`: `docs/specification/mesh.md` there is now the normative text
+for the mesh contracts, with the three `mesh-*-cases.json` conformance fixtures
+(vendored back into this repo's `conformance/` and passing). This file is kept only as
+the historical draft it was authored from. Differences between this draft and the
+promoted spec (e.g. the conformance-fixture formats, which the promotion made concrete,
+and the promoted §9 reconciliation with the .NET `Benzene.Mesh.*` packages) are
+resolved in the promoted spec's favor.
 
 Everything below follows the existing wire conventions: camelCase field names, flat
 string→string headers, pre-serialized string bodies inside envelopes, the shared status

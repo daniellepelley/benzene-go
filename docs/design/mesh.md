@@ -1,18 +1,18 @@
 # Benzene Mesh — design
 
-**Status: PHASES 1-4 IMPLEMENTED, PHASE 5 AUTHORED.** The in-process `mesh/` package
+**Status: ALL PHASES COMPLETE (this repo's side).** The in-process `mesh/` package
 (descriptor, reserved-topic middleware, trace middleware, log + push exporters, schema
 derivation + `descriptorHash`, span propagation), the `meshd/` collector with the Mesh
 View, and the `examples/mesh-helloworld` end-to-end demo are implemented in this repo.
-Phase 5's spec promotion is authored in the main repo (branch
-`claude/mesh-spec-promotion`: `docs/specification/mesh.md` plus the three
-`mesh-*-cases.json` conformance fixtures), and those fixtures are vendored into this
-repo's `conformance/` and passing. Once that branch merges, the main repo's spec is the
-source of truth for the mesh contracts; C# parity and the cross-language fleet demo
-remain future main-repo work. [`mesh-spec-draft.md`](./mesh-spec-draft.md) is kept as
-the historical draft the promotion was authored from. Cross-service wire shapes proposed here need to be promoted into the main
-repo's `docs/specification/` (which remains the source of truth) before the later
-phases land, so that every language port meshes identically.
+Phase 5's spec promotion is **merged to the main repo's `main`**: the mesh wire
+contracts are now normative as `docs/specification/mesh.md` there, with three
+`mesh-*-cases.json` conformance fixtures that are vendored into this repo's
+`conformance/` and passing - this port is that spec's reference implementation. C# parity
+(reconciling the main repo's pre-existing `Benzene.Mesh.*` visibility packages onto the
+promoted contracts) and the cross-language fleet demo are scoped as .NET-side work in
+the main repo's `work/service-mesh-roadmap-1.0.md`.
+[`mesh-spec-draft.md`](./mesh-spec-draft.md) is kept as the historical draft the
+promotion was authored from.
 
 A degradation rule became explicit during Phase 1 implementation and binds every later
 phase: **every mesh feed is independent and optional, and an unavailable feed reduces
@@ -385,12 +385,12 @@ docs in one commit, 100%-or-documented coverage):
 4. **Mesh View** - ✅ implemented: a single self-contained page embedded in `meshd`
    (no JS framework, per the zero-dependency stance), polling `mesh:query:fleet`
    through the envelope endpoint.
-5. **Spec promotion** - ✅ complete to this repo's boundary. The main repo's
-   `claude/mesh-spec-promotion` branch carries `docs/specification/mesh.md` (the promoted
-   contract; the Go port is that document's reference implementation) plus the three
-   conformance fixture files - `mesh-descriptor-cases.json` (schema derivation + hash
-   properties), `mesh-trace-cases.json` (traceparent join/reject + invocation→status
-   mapping, including the new `conformance:panic` canonical handler), and
+5. **Spec promotion** - ✅ complete and **merged to the main repo's `main`**:
+   `docs/specification/mesh.md` there is the normative contract (the Go port is that
+   document's reference implementation), alongside the three conformance fixture files -
+   `mesh-descriptor-cases.json` (schema derivation + hash properties),
+   `mesh-trace-cases.json` (traceparent join/reject + invocation→status mapping,
+   including the new `conformance:panic` canonical handler), and
    `mesh-collector-cases.json` (ingest/derivation/degradation sequences). All three are
    vendored into this repo's `conformance/` with runners in
    `conformance/mesh_conformance_test.go`, and pass.
@@ -408,10 +408,9 @@ docs in one commit, 100%-or-documented coverage):
 
    What remains is .NET-side and could not be honestly done from here: the authoring
    environment has no .NET SDK and its network policy blocks obtaining one, so writing
-   untested C# was rejected in favor of scoping it precisely. The Go half of the
-   cross-language demo is ready today (`examples/mesh-helloworld` + the fixtures pin
-   exactly what C# must match), and merging the promotion branch is the repo owner's
-   call.
+   untested C# was rejected in favor of scoping it precisely in the main repo's roadmap.
+   The Go half of the cross-language demo is ready today (`examples/mesh-helloworld` +
+   the fixtures pin exactly what C# must match).
 
 ## 9. Open questions
 
