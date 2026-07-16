@@ -3,6 +3,7 @@ package benzene
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 )
 
@@ -187,4 +188,46 @@ func TestRegistry_Topics(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRegistry_TopicTypes(t *testing.T) {
+	r := NewRegistry()
+	topic := NewTopic("hello:world")
+	if err := Register(r, topic, Handler[helloRequest, helloResponse](helloHandler)); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	t.Run("returns the types captured at registration", func(t *testing.T) {
+		request, response, ok := r.TopicTypes(topic)
+		if !ok {
+			t.Fatal("TopicTypes() ok = false for a registered topic")
+		}
+		if request != reflect.TypeOf(helloRequest{}) {
+			t.Errorf("request = %v, want %v", request, reflect.TypeOf(helloRequest{}))
+		}
+		if response != reflect.TypeOf(helloResponse{}) {
+			t.Errorf("response = %v, want %v", response, reflect.TypeOf(helloResponse{}))
+		}
+	})
+
+	t.Run("reports ok=false for an unregistered topic", func(t *testing.T) {
+		request, response, ok := r.TopicTypes(NewTopic("no:such:topic"))
+		if ok || request != nil || response != nil {
+			t.Errorf("TopicTypes() = (%v, %v, %v), want (nil, nil, false)", request, response, ok)
+		}
+	})
+
+	t.Run("captures an interface type parameter as the interface", func(t *testing.T) {
+		anyTopic := NewTopic("hello:any")
+		if err := Register(r, anyTopic, Handler[any, helloResponse](func(_ context.Context, _ any) Result[helloResponse] {
+			return Ok(helloResponse{})
+		})); err != nil {
+			t.Fatalf("Register() error = %v", err)
+		}
+
+		request, _, ok := r.TopicTypes(anyTopic)
+		if !ok || request == nil || request.Kind() != reflect.Interface {
+			t.Errorf("request = %v (ok=%v), want the empty interface type", request, ok)
+		}
+	})
 }

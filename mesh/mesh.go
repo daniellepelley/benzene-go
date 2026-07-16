@@ -1,9 +1,11 @@
-// Package mesh implements Phase 1 of the Benzene Mesh design (docs/design/mesh.md §8):
-// a service's self-description (Descriptor) derived from its live Registry, a
-// reserved-topic interception middleware that serves that descriptor, and a trace
-// middleware (trace.go) that turns every pipeline invocation into a semantic TraceEvent
-// handed to an Exporter. Schema derivation, descriptorHash, the push exporter, and the
-// meshd collector are later phases.
+// Package mesh implements Phases 1 and 2 of the Benzene Mesh design (docs/design/mesh.md
+// §8): a service's self-description (Descriptor) derived from its live Registry -
+// including per-topic request/response JSON Schemas derived at startup from the
+// registered handler types, and the contract hash that makes drift detectable
+// (schema.go) - a reserved-topic interception middleware that serves that descriptor,
+// and a trace middleware (trace.go) that turns every pipeline invocation into a semantic
+// TraceEvent handed to an Exporter. The push exporter and the meshd collector are later
+// phases.
 //
 // Every feed this package provides is independent and optional, and unavailability
 // degrades the mesh rather than the service. A deployment that provisions only the trace
@@ -37,11 +39,15 @@ type Placement struct {
 	Region string `json:"region,omitempty"`
 }
 
-// TopicDescriptor is one registered topic in a Descriptor (mesh.md §5.1). Request/response
-// schemas are Phase 2 and deliberately absent here.
+// TopicDescriptor is one registered topic in a Descriptor (mesh.md §5.1). The schemas
+// describe the marshaled request/response forms, derived at startup from the TReq/TRes
+// types captured at the Register call site (see deriveSchema for the exact mapping); they
+// are what lets the mesh flag schema drift from live data instead of hand-written specs.
 type TopicDescriptor struct {
-	ID      string `json:"id"`
-	Version string `json:"version,omitempty"`
+	ID             string         `json:"id"`
+	Version        string         `json:"version,omitempty"`
+	RequestSchema  map[string]any `json:"requestSchema,omitempty"`
+	ResponseSchema map[string]any `json:"responseSchema,omitempty"`
 }
 
 // Descriptor is the service self-description of mesh.md §5.1: identity, placement, and
@@ -55,6 +61,11 @@ type Descriptor struct {
 	Binding        string            `json:"binding,omitempty"`
 	Placement      Placement         `json:"placement"`
 	Topics         []TopicDescriptor `json:"topics"`
+	// DescriptorHash is the contract hash (mesh.md §5.1): stable across instances and
+	// heartbeats of the same build, changed exactly when the contract changes - which is
+	// what lets a collector detect a redeploy (or a schema change without a version bump)
+	// from the hash alone. See descriptorHash for what it covers and excludes.
+	DescriptorHash string `json:"descriptorHash,omitempty"`
 	// Degraded lists the feeds that were unavailable when the descriptor was built (e.g.
 	// FeedRegistry when Describe was given a nil Registry), so a reduced mesh is visible
 	// as reduced rather than mistaken for a service with no topics.
@@ -94,11 +105,22 @@ func Describe(registry *benzene.Registry, info ServiceInfo) Descriptor {
 	}
 	if registry == nil {
 		desc.Degraded = append(desc.Degraded, FeedRegistry)
-		return desc
+	} else {
+		for _, topic := range registry.Topics() {
+			// The blank ok: Topics() and TopicTypes() read the same registrations, so a
+			// topic from the former always resolves in the latter - and if a future
+			// Registry change ever broke that, deriveSchema(nil) degrades the entry to
+			// schema-less rather than failing, per this package's degradation rule.
+			requestType, responseType, _ := registry.TopicTypes(topic)
+			desc.Topics = append(desc.Topics, TopicDescriptor{
+				ID:             topic.ID,
+				Version:        topic.Version,
+				RequestSchema:  deriveSchema(requestType),
+				ResponseSchema: deriveSchema(responseType),
+			})
+		}
 	}
-	for _, topic := range registry.Topics() {
-		desc.Topics = append(desc.Topics, TopicDescriptor{ID: topic.ID, Version: topic.Version})
-	}
+	desc.DescriptorHash = descriptorHash(desc)
 	return desc
 }
 

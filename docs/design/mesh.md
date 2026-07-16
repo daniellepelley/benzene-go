@@ -1,8 +1,8 @@
 # Benzene Mesh — design
 
-**Status: PHASE 1 IMPLEMENTED** (the in-process `mesh/` package - descriptor, reserved-
-topic middleware, trace middleware + log exporter); everything else remains a design
-proposal. Cross-service wire shapes proposed here need to be promoted into the main
+**Status: PHASES 1-2 IMPLEMENTED** (the in-process `mesh/` package - descriptor,
+reserved-topic middleware, trace middleware + log exporter, schema derivation +
+`descriptorHash`); everything else remains a design proposal. Cross-service wire shapes proposed here need to be promoted into the main
 repo's `docs/specification/` (which remains the source of truth) before the later
 phases land, so that every language port meshes identically.
 
@@ -363,7 +363,11 @@ docs in one commit, 100%-or-documented coverage):
    `Registry.Topics()`), reserved-topic middleware, `TraceMiddleware` + `LogExporter`,
    placement detection. Immediately useful standalone (structured invocation logs with
    zero setup).
-2. **Schema derivation** (`reflect`-based, startup-only) + `descriptorHash`.
+2. **Schema derivation** (`reflect`-based, startup-only) + `descriptorHash` - ✅
+   implemented: per-topic request/response schemas derived from the `TReq`/`TRes` types
+   the Registry now captures at the `Register` call site (`Registry.TopicTypes`), and the
+   contract hash (excluding per-instance and transient fields, so two instances of one
+   build hash identically). Dispatch remains reflection-free.
 3. **`PushExporter` + `meshd` MVP** (in-memory store, register/heartbeat/traces/query
    topics) + a `mesh-helloworld` example wiring two services and the collector.
 4. **Mesh View**: `meshd`-served dashboard (single static page + `mesh:query:*`,
@@ -377,9 +381,12 @@ docs in one commit, 100%-or-documented coverage):
 - **Reserved topic naming**: `mesh` vs `mesh:describe` — the healthcheck precedent
   is a bare reserved id; multi-segment ids are conventional elsewhere (`mesh:*` for
   collector topics). Spec decision.
-- **Schema dialect**: JSON Schema draft to target (2020-12 proposed) and how much of
-  Go's type system to map (pointers → nullable, `json` tags → names; interfaces
-  likely opt-out).
+- **Schema dialect** - resolved by the Phase 2 implementation: a documented subset of
+  the JSON Schema 2020-12 vocabulary describing the *marshaled* form (pointers →
+  nullable, `json` tags → names/required, `[]byte` → base64 string, `time.Time` →
+  date-time, interfaces and custom `json.Marshaler`s → unconstrained `{}`, recursion cut
+  at the cycle). The exact mapping lives on `deriveSchema` in `mesh/schema.go` and is
+  what must be promoted to the spec so other language ports derive compatibly.
 - **Retention/aggregation in `meshd`**: raw events vs. pre-aggregated rings for the
   MVP in-memory store; what the pluggable store interface must support.
 - **Auth between services and `meshd`**: MVP is header-based shared secret; anything

@@ -58,12 +58,34 @@ func TestDescribe(t *testing.T) {
 			t.Fatalf("Topics = %v, want %v", desc.Topics, want)
 		}
 		for i := range want {
-			if desc.Topics[i] != want[i] {
+			if desc.Topics[i].ID != want[i].ID || desc.Topics[i].Version != want[i].Version {
 				t.Errorf("Topics[%d] = %v, want %v", i, desc.Topics[i], want[i])
+			}
+			if desc.Topics[i].RequestSchema == nil || desc.Topics[i].ResponseSchema == nil {
+				t.Errorf("Topics[%d] schemas = %v/%v, want both derived", i, desc.Topics[i].RequestSchema, desc.Topics[i].ResponseSchema)
 			}
 		}
 		if len(desc.Degraded) != 0 {
 			t.Errorf("Degraded = %v, want empty", desc.Degraded)
+		}
+	})
+
+	t.Run("derives request and response schemas from the handler types", func(t *testing.T) {
+		registry := newTestRegistry(t, benzene.NewTopic("order:create"))
+
+		desc := Describe(registry, info)
+
+		schema := desc.Topics[0].RequestSchema
+		if schema["type"] != "object" {
+			t.Fatalf(`RequestSchema["type"] = %v, want "object": %v`, schema["type"], schema)
+		}
+		properties, ok := schema["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("RequestSchema has no properties: %v", schema)
+		}
+		text, ok := properties["text"].(map[string]any)
+		if !ok || text["type"] != "string" {
+			t.Errorf(`properties["text"] = %v, want {"type":"string"} (echoRequest.Text has json:"text")`, properties["text"])
 		}
 	})
 
@@ -131,7 +153,7 @@ func TestDescriptor_WireFieldNamesAreCamelCase(t *testing.T) {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
 
-	for _, key := range []string{"service", "serviceVersion", "instanceId", "runtime", "binding", "placement", "topics", "degraded"} {
+	for _, key := range []string{"service", "serviceVersion", "instanceId", "runtime", "binding", "placement", "topics", "descriptorHash", "degraded"} {
 		if _, ok := raw[key]; !ok {
 			t.Errorf("marshaled descriptor is missing key %q: %s", key, data)
 		}

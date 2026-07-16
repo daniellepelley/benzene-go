@@ -65,7 +65,7 @@ check, and both HTTP entry points wired through the three-phase `App` lifecycle.
 | `httpbinding` | 95%+ | The HTTP transport binding: a native REST-style `Handler` (real HTTP status codes, explicit route table) and an `EnvelopeHandler` (the wire envelope over HTTP) |
 | `httpclient` | 97%+ | The HTTP outbound client - one `Send(topic, headers, message)` method, mapping transport failures to `ServiceUnavailable` |
 | `healthcheck` | 100% | Middleware that intercepts the reserved `healthcheck` topic and responds with the standard aggregate health response |
-| `mesh` | 100% | Phase 1 of [Benzene Mesh](docs/design/mesh.md): the service `Descriptor` derived from the live `Registry`, reserved-`mesh`-topic descriptor middleware, and `TraceMiddleware` + `LogExporter` emitting semantic per-invocation trace events. Every feed is optional - a service with only some feeds provisioned runs a reduced mesh, never a broken one |
+| `mesh` | 100% | Phases 1-2 of [Benzene Mesh](docs/design/mesh.md): the service `Descriptor` derived from the live `Registry` - topics, per-topic request/response JSON Schemas derived at startup from the registered handler types, and the contract `descriptorHash` - plus reserved-`mesh`-topic descriptor middleware and `TraceMiddleware` + `LogExporter` emitting semantic per-invocation trace events. Every feed is optional - a service with only some feeds provisioned runs a reduced mesh, never a broken one |
 | `awslambda` | 90%+ | AWS Lambda binding: a hand-rolled Lambda Runtime API bootstrap loop (`Start`), plus `HTTPHandler` (API Gateway v2 / Function URL events) and `EnvelopeHandler` (direct invoke) |
 | `azurefunctions` | 93%+ | Azure Functions custom-handler binding: `Handler` adapts the Data/Metadata JSON contract the Functions host forwards HTTP-triggered invocations over |
 | `conformance` | n/a (test-only) | Runs this port against the fixtures vendored from the main repo's `docs/specification/conformance/` |
@@ -108,7 +108,7 @@ Larger capabilities are designed in `docs/design/` before any code lands. Curren
 topics/schemas, health, and live traffic stats, derived from running services rather than
 declared in a catalog (with a [static mockup](docs/design/mesh-view-mockup.html) of the Fleet
 Overview screen, and the [research and positioning](docs/design/mesh-research.md) behind it).
-Phase 1 of its delivery plan is implemented as the `mesh` package above; the wire shapes for
+Phases 1-2 of its delivery plan are implemented as the `mesh` package above; the wire shapes for
 the later cross-service phases must be promoted into the main repo's spec before they land.
 
 ## Developing
