@@ -6,9 +6,11 @@
 // transport-bindings.md's HTTP binding entry that Handler here mirrors httpbinding.Handler's
 // shape (an explicit Route table, real HTTP status codes) rather than inventing a new one.
 //
-// This implements the *default* custom-handler payload for HTTP-triggered functions only (not
-// the raw-forwarding mode, and not other trigger types like Timer/Queue - see the package
-// README for both). Setting host.json's customHandler.enableForwardingHttpRequest to true
+// This implements the *default* custom-handler payload. Handler covers HTTP-triggered
+// functions; QueueHandler (queue.go) covers queue-shaped triggers (Azure Storage Queue and
+// Service Bus). Other trigger types (Timer, Blob, ...) are not implemented - they follow the
+// same Data/Metadata envelope, so a new adapter is the QueueHandler pattern with a different
+// payload interpretation. Setting host.json's customHandler.enableForwardingHttpRequest to true
 // switches Azure to forward the raw HTTP request/response instead of this JSON envelope; in
 // that mode, skip this package and pass httpbinding.Handler straight to http.ListenAndServe -
 // see examples/azure-functions-helloworld's README for the tradeoff between the two modes.

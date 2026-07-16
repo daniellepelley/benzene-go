@@ -51,7 +51,10 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
 - `awslambda/` - AWS Lambda binding: a hand-rolled Lambda Runtime API bootstrap loop, plus
   HTTP (API Gateway v2 / Function URL) and envelope adapters.
 - `azurefunctions/` - Azure Functions custom-handler binding (the Data/Metadata JSON contract
-  the Functions host forwards HTTP-triggered invocations over - Azure has no native Go worker).
+  the Functions host forwards invocations over - Azure has no native Go worker): `Handler` for
+  HTTP-triggered functions, `QueueHandler` for queue-shaped triggers (Storage Queue, Service
+  Bus - failure is a non-2xx outer status, handing the message to the platform's own
+  redelivery/poison-queue machinery).
 - `awssqs/` - AWS SQS binding, in **its own Go module** (`awssqs/go.mod`) - one of the packages
   with a third-party dependency (`aws-sdk-go-v2/service/sqs`, needed for the outbound publish
   client; the inbound Lambda-trigger `Handler` is zero-dependency, like `awslambda`). See

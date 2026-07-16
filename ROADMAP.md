@@ -18,7 +18,9 @@ delivery order - just the current honest picture, kept up to date as things land
 - `awslambda` - AWS Lambda binding (hand-rolled Runtime API bootstrap, HTTP + envelope
   adapters; the HTTP adapter handles Function URL / API Gateway v2.0, API Gateway
   REST/v1.0, and ALB target-group event shapes, detected per invocation).
-- `azurefunctions` - Azure Functions custom-handler binding.
+- `azurefunctions` - Azure Functions custom-handler binding: `Handler` for HTTP-triggered
+  functions, `QueueHandler` for queue-shaped triggers (Storage Queue, Service Bus) with
+  wire-contracts §2 topic resolution and platform-native retry on failure.
 - `client` - outbound-client decorators (`CorrelationDecorator`, `RetryDecorator`) over a
   transport-agnostic `Sender` interface; `httpclient.Client` satisfies it structurally.
 - `cors` - portable CORS middleware for HTTP-fronted services (origin/scheme/port matching,
