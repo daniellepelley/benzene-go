@@ -1,12 +1,13 @@
 # Mesh wire contracts — DRAFT for promotion to the main repo's specification
 
-**Status: DRAFT.** This is the Phase 5 deliverable that can be produced from this repo
-(mesh.md §8): the mesh wire contracts written in the language-neutral style of
-`docs/specification/`, ready to be lifted into the main Benzene repo as
-`docs/specification/mesh.md` (plus conformance fixtures, sketched in §7). Until it lands
-there, the main repo's spec remains the source of truth and this draft binds nothing.
-The Go implementation (`mesh/`, `meshd/`) is the reference; where this draft and that
-code disagree, fix whichever is wrong *before* promotion — after promotion, the spec wins.
+**Status: SUPERSEDED — promotion authored.** This draft has been promoted: the main
+repo's `claude/mesh-spec-promotion` branch carries the resulting
+`docs/specification/mesh.md` and the three `mesh-*-cases.json` conformance fixtures
+(vendored back into this repo's `conformance/` and passing). Once that branch merges,
+the main repo's spec is the normative text for the mesh contracts; this file is kept
+only as the historical draft it was authored from. Differences between this draft and
+the promoted spec (e.g. the conformance-fixture formats, which the promotion made
+concrete) are resolved in the promoted spec's favor.
 
 Everything below follows the existing wire conventions: camelCase field names, flat
 string→string headers, pre-serialized string bodies inside envelopes, the shared status

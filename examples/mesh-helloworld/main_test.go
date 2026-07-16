@@ -24,7 +24,7 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 	defer meshdServer.Close()
 	meshdEndpoint := meshdServer.URL + "/invoke"
 
-	greeter := newService("greeter", meshdEndpoint, func(registry *benzene.Registry) {
+	greeter := newService("greeter", meshdEndpoint, true, func(registry *benzene.Registry) {
 		if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
 			t.Fatalf("register greet: %v", err)
 		}
@@ -32,7 +32,7 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 	greeterServer := httptest.NewServer(greeter.handler)
 	defer greeterServer.Close()
 
-	frontdoor := newService("frontdoor", meshdEndpoint, func(registry *benzene.Registry) {
+	frontdoor := newService("frontdoor", meshdEndpoint, true, func(registry *benzene.Registry) {
 		greeterClient := httpclient.NewClient(greeterServer.URL + "/invoke")
 		if err := benzene.Register(registry, benzene.NewTopic("welcome"), welcomeHandler(greeterClient)); err != nil {
 			t.Fatalf("register welcome: %v", err)
@@ -40,6 +40,16 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 	}, []httpbinding.Route{{Method: http.MethodPost, Path: "/welcome", Topic: benzene.NewTopic("welcome")}})
 	frontdoorServer := httptest.NewServer(frontdoor.handler)
 	defer frontdoorServer.Close()
+
+	// legacy-portal: trace feed only - no descriptor endpoint, no announce, no heartbeat.
+	legacy := newService("legacy-portal", meshdEndpoint, false, func(registry *benzene.Registry) {
+		greeterClient := httpclient.NewClient(greeterServer.URL + "/invoke")
+		if err := benzene.Register(registry, benzene.NewTopic("legacy:relay"), welcomeHandler(greeterClient)); err != nil {
+			t.Fatalf("register legacy:relay: %v", err)
+		}
+	}, []httpbinding.Route{{Method: http.MethodPost, Path: "/relay", Topic: benzene.NewTopic("legacy:relay")}})
+	legacyServer := httptest.NewServer(legacy.handler)
+	defer legacyServer.Close()
 
 	ctx := context.Background()
 	greeter.announce(ctx)
@@ -65,9 +75,34 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 		t.Fatalf("Message = %q, want the relayed greeting", welcome.Message)
 	}
 
-	// Flush both trace feeds, then read the fleet back from the collector.
+	// And one through the reduced service.
+	relayResponse, err := http.Post(legacyServer.URL+"/relay", "application/json", strings.NewReader(`{"name":"Legacy"}`))
+	if err != nil {
+		t.Fatalf("POST /relay: %v", err)
+	}
+	relayBody, _ := io.ReadAll(relayResponse.Body)
+	relayResponse.Body.Close()
+	if relayResponse.StatusCode != http.StatusOK {
+		t.Fatalf("POST /relay = %d %s - a reduced service must serve like any other", relayResponse.StatusCode, relayBody)
+	}
+
+	// The reserved mesh topic serves the descriptor - schemas and contract hash included.
+	descResult := httpclient.NewClient(greeterServer.URL+"/invoke").Send(ctx, benzene.NewTopic(mesh.TopicID), nil, nil)
+	descriptor, err := httpclient.Unmarshal[mesh.Descriptor](descResult)
+	if err != nil || descriptor.Payload == nil {
+		t.Fatalf("mesh topic: %v %v", descResult.Status, err)
+	}
+	if descriptor.Payload.Service != "greeter" || len(descriptor.Payload.Topics) != 1 || descriptor.Payload.Topics[0].RequestSchema == nil {
+		t.Errorf("descriptor = %+v, want greeter's derived contract with schemas", descriptor.Payload)
+	}
+	if !strings.HasPrefix(descriptor.Payload.DescriptorHash, "sha256:") {
+		t.Errorf("DescriptorHash = %q, want sha256:…", descriptor.Payload.DescriptorHash)
+	}
+
+	// Flush every trace feed, then read the fleet back from the collector.
 	greeter.exporter.Close()
 	frontdoor.exporter.Close()
+	legacy.exporter.Close()
 
 	meshdClient := httpclient.NewClient(meshdEndpoint)
 	result := meshdClient.Send(ctx, benzene.NewTopic(mesh.TopicQueryFleet), nil, []byte(`{}`))
@@ -99,7 +134,20 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 		}
 	}
 
-	// The consumer edge was derived from trace parentage, not declared anywhere.
+	// The reduced service is on the view too: anonymous-but-live, visibly reduced.
+	legacySummary, ok := services["legacy-portal"]
+	if !ok {
+		t.Fatalf("fleet is missing legacy-portal: %+v", fleet.Payload.Services)
+	}
+	if len(legacySummary.MissingFeeds) != 2 || legacySummary.MissingFeeds[0] != "descriptor" || legacySummary.MissingFeeds[1] != "health" {
+		t.Errorf("legacy-portal missingFeeds = %v, want [descriptor health]", legacySummary.MissingFeeds)
+	}
+	if legacySummary.Invocations == 0 {
+		t.Errorf("legacy-portal invocations = 0, want its traced traffic counted despite the reduced feeds")
+	}
+
+	// Consumer edges were derived from trace parentage, not declared anywhere - including
+	// the reduced service's edge.
 	topicResult := meshdClient.Send(ctx, benzene.NewTopic(mesh.TopicQueryTopic), nil, []byte(`{"topic":"greet"}`))
 	greet, err := httpclient.Unmarshal[meshd.TopicSummary](topicResult)
 	if err != nil || greet.Payload == nil {
@@ -108,16 +156,40 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 	if len(greet.Payload.Providers) != 1 || greet.Payload.Providers[0] != "greeter" {
 		t.Errorf("greet providers = %v, want [greeter]", greet.Payload.Providers)
 	}
-	if len(greet.Payload.Consumers) != 1 || greet.Payload.Consumers[0] != "frontdoor" {
-		t.Errorf("greet consumers = %v, want [frontdoor] derived from the propagated traceparent", greet.Payload.Consumers)
+	if len(greet.Payload.Consumers) != 2 || greet.Payload.Consumers[0] != "frontdoor" || greet.Payload.Consumers[1] != "legacy-portal" {
+		t.Errorf("greet consumers = %v, want [frontdoor legacy-portal] derived from propagated traceparents", greet.Payload.Consumers)
 	}
 
-	// Both events joined into one flow.
-	if len(fleet.Payload.Traces) != 1 || fleet.Payload.Traces[0].Events != 2 {
-		t.Fatalf("Traces = %+v, want one flow with both services' events", fleet.Payload.Traces)
+	// Each cross-service call joined into one flow of two events. (The descriptor query
+	// above was itself traced - the trace middleware sees every invocation, including
+	// reserved-topic interceptions - so it appears as a third, single-event flow.)
+	var crossServiceFlows []meshd.TraceSummary
+	for _, flow := range fleet.Payload.Traces {
+		if flow.Events == 2 {
+			crossServiceFlows = append(crossServiceFlows, flow)
+		}
 	}
-	if got := fleet.Payload.Traces[0].Services; len(got) != 2 || got[0] != "frontdoor" || got[1] != "greeter" {
-		t.Errorf("flow services = %v, want frontdoor and greeter", got)
+	if len(crossServiceFlows) != 2 {
+		t.Fatalf("Traces = %+v, want the welcome flow and the relay flow among them", fleet.Payload.Traces)
+	}
+	for _, flow := range crossServiceFlows {
+		callers := map[string]bool{}
+		for _, svc := range flow.Services {
+			callers[svc] = true
+		}
+		if len(flow.Services) != 2 || !callers["greeter"] || (!callers["frontdoor"] && !callers["legacy-portal"]) {
+			t.Errorf("flow = %+v, want two events across caller+greeter", flow)
+		}
+	}
+
+	// Drill into one flow the way the view's flow explorer would.
+	traceResult := meshdClient.Send(ctx, benzene.NewTopic(mesh.TopicQueryTrace), nil, []byte(`{"traceId":"`+crossServiceFlows[0].TraceID+`"}`))
+	flow, err := httpclient.Unmarshal[meshd.TraceView](traceResult)
+	if err != nil || flow.Payload == nil {
+		t.Fatalf("trace query: %v %v", traceResult.Status, err)
+	}
+	if len(flow.Payload.Events) != 2 || flow.Payload.Events[1].ParentSpanID != flow.Payload.Events[0].SpanID {
+		t.Errorf("flow events = %+v, want the greet span parented on the caller span", flow.Payload.Events)
 	}
 
 	// And the Mesh View is served at the collector's root.
@@ -137,7 +209,7 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 // unmeshed one.
 func TestReducedMeshStillServes(t *testing.T) {
 	unreachable := "http://127.0.0.1:1/invoke" // nothing listens there
-	greeter := newService("greeter", unreachable, func(registry *benzene.Registry) {
+	greeter := newService("greeter", unreachable, true, func(registry *benzene.Registry) {
 		if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
 			t.Fatalf("register greet: %v", err)
 		}

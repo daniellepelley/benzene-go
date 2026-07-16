@@ -1,13 +1,16 @@
 # Benzene Mesh — design
 
-**Status: PHASES 1-4 IMPLEMENTED, PHASE 5 DRAFTED.** The in-process `mesh/` package
+**Status: PHASES 1-4 IMPLEMENTED, PHASE 5 AUTHORED.** The in-process `mesh/` package
 (descriptor, reserved-topic middleware, trace middleware, log + push exporters, schema
 derivation + `descriptorHash`, span propagation), the `meshd/` collector with the Mesh
 View, and the `examples/mesh-helloworld` end-to-end demo are implemented in this repo.
-Phase 5's promotable artifact - the language-neutral wire-contract text plus a
-conformance-fixture plan - is drafted in [`mesh-spec-draft.md`](./mesh-spec-draft.md);
-landing it in the main repo's `docs/specification/` (and bringing the C# port up to it)
-happens in the main repo, which remains the source of truth once promoted. Cross-service wire shapes proposed here need to be promoted into the main
+Phase 5's spec promotion is authored in the main repo (branch
+`claude/mesh-spec-promotion`: `docs/specification/mesh.md` plus the three
+`mesh-*-cases.json` conformance fixtures), and those fixtures are vendored into this
+repo's `conformance/` and passing. Once that branch merges, the main repo's spec is the
+source of truth for the mesh contracts; C# parity and the cross-language fleet demo
+remain future main-repo work. [`mesh-spec-draft.md`](./mesh-spec-draft.md) is kept as
+the historical draft the promotion was authored from. Cross-service wire shapes proposed here need to be promoted into the main
 repo's `docs/specification/` (which remains the source of truth) before the later
 phases land, so that every language port meshes identically.
 
@@ -382,12 +385,17 @@ docs in one commit, 100%-or-documented coverage):
 4. **Mesh View** - ✅ implemented: a single self-contained page embedded in `meshd`
    (no JS framework, per the zero-dependency stance), polling `mesh:query:fleet`
    through the envelope endpoint.
-5. **Spec promotion** - drafted: [`mesh-spec-draft.md`](./mesh-spec-draft.md) is the
-   language-neutral contract text + conformance-fixture plan, ready to land as the main
-   repo's `docs/specification/mesh.md`. The remaining work lives in the main repo: merge
-   the spec, author the fixtures (then vendor them into `conformance/` here), bring the
-   C# port up to them, and ship the cross-language fleet demo (Go on Lambda + C# on
-   Functions in one view) as *the* flagship demo.
+5. **Spec promotion** - authored: the main repo's `claude/mesh-spec-promotion` branch
+   carries `docs/specification/mesh.md` (the promoted contract; the Go port is that
+   document's reference implementation) plus the three conformance fixture files -
+   `mesh-descriptor-cases.json` (schema derivation + hash properties),
+   `mesh-trace-cases.json` (traceparent join/reject + invocation→status mapping,
+   including the new `conformance:panic` canonical handler), and
+   `mesh-collector-cases.json` (ingest/derivation/degradation sequences). All three are
+   vendored into this repo's `conformance/` with runners in
+   `conformance/mesh_conformance_test.go`, and pass. Remaining main-repo work: merge the
+   branch, bring the C# port up to the fixtures, and ship the cross-language fleet demo
+   (Go on Lambda + C# on Functions in one view) as *the* flagship demo.
 
 ## 9. Open questions
 
