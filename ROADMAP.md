@@ -25,11 +25,17 @@ delivery order - just the current honest picture, kept up to date as things land
   middleware.
 - `benzenetest` - in-process test host (`Invoke[TReq, TRes]`) for a consuming application's own
   tests, the Go counterpart to `Benzene.Testing`/`BenzeneTestHost`.
+- `awssqs` - AWS SQS binding, in its **own Go module** (see `RELEASING.md`): an inbound
+  `Handler` for a Lambda triggered by an SQS event source mapping (zero dependencies - hand-
+  rolled JSON, like `awslambda`), and an outbound `Client` that publishes via `SendMessage`
+  (needs `aws-sdk-go-v2/service/sqs` - this repo's first third-party dependency, isolated to
+  just this module).
 - `conformance` - runs this port against the main repo's vendored language-neutral fixtures.
 - Examples: `helloworld` (plain HTTP + DI + health check), `aws-lambda-helloworld`,
   `azure-functions-helloworld`, `gcp-cloudrun-helloworld` (no new package needed for GCP - see
-  its README) - each with a matching CI build/test path and a gated GitHub Actions deploy
-  workflow (`.github/workflows/deploy-*.yml`).
+  its README), `aws-sqs-helloworld` (publisher + consumer Lambdas, its own module) - each with a
+  matching CI build/test path and a gated GitHub Actions deploy workflow
+  (`.github/workflows/deploy-*.yml`).
 
 Every non-test-only package sits at 100% coverage or just under it with the gap being a
 documented, genuinely-unreachable defensive branch - see each package's own comments.
@@ -52,20 +58,20 @@ Per `CLAUDE.md`: no third-party dependency without asking first. These are real,
 extensions, but each needs an explicit yes on a specific dependency before starting, not a
 unilateral add:
 
-- **SQS / SNS / Kafka bindings.** Unlike Lambda's Runtime API (a small, stable, hand-rollable
-  HTTP polling protocol) or Azure Functions' custom-handler contract (also a small hand-rolled
-  JSON-over-HTTP contract), a real SQS/Kafka client means SigV4 request signing, connection
-  pooling, consumer-group/offset management - reimplementing that from scratch is a correctness
-  and security liability, not a reasonable zero-dependency stretch. Would need
-  `github.com/aws/aws-sdk-go-v2` (SQS/SNS) or a Kafka client library (e.g.
-  `github.com/segmentio/kafka-go` or `github.com/twmb/franz-go`).
+- **SNS / Kafka bindings.** SQS is now done (`awssqs`, its own module - see Done above). SNS
+  publish and a self-hosted Kafka consumer/producer are the same shape (signed API calls or a
+  broker protocol, not reasonably hand-rollable) and would each similarly need their own module:
+  SNS can likely reuse `aws-sdk-go-v2` (already a dependency, via `awssqs` or a new `awssns`);
+  Kafka needs a client library (e.g. `github.com/segmentio/kafka-go` or
+  `github.com/twmb/franz-go`), a dependency this repo has not taken a position on yet.
 - **gRPC binding.** Go has no gRPC support in the standard library at all; this needs
   `google.golang.org/grpc` + protobuf codegen tooling, a materially bigger dependency and
   build-step footprint than anything else in this repo.
 - **EventBridge / DynamoDB Streams bindings.** Same shape as SQS - needs
-  `aws-sdk-go-v2` for the outbound (`PutEvents`) side at minimum; the inbound (Lambda event)
-  side could plausibly be hand-rolled similarly to `awslambda`'s existing HTTP v2 adapter, since
-  it's "just" JSON event parsing, no signed API calls.
+  `aws-sdk-go-v2` for the outbound (`PutEvents`) side at minimum (already a dependency via
+  `awssqs`, so this one's cheaper now); the inbound (Lambda event) side could plausibly be
+  hand-rolled similarly to `awslambda`'s existing HTTP v2 adapter and `awssqs`'s own inbound
+  handler, since it's "just" JSON event parsing, no signed API calls.
 - **Google Cloud Functions Gen2 (buildpack) deploy**, as opposed to the Cloud Run path already
   documented in `examples/gcp-cloudrun-helloworld` - needs
   `github.com/GoogleCloudPlatform/functions-framework-go`, the one Google-specific dependency

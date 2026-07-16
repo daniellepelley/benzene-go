@@ -31,14 +31,23 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
   HTTP (API Gateway v2 / Function URL) and envelope adapters.
 - `azurefunctions/` - Azure Functions custom-handler binding (the Data/Metadata JSON contract
   the Functions host forwards HTTP-triggered invocations over - Azure has no native Go worker).
+- `awssqs/` - AWS SQS binding, in **its own Go module** (`awssqs/go.mod`) - the only package
+  with a third-party dependency (`aws-sdk-go-v2/service/sqs`, needed for the outbound publish
+  client; the inbound Lambda-trigger `Handler` is zero-dependency, like `awslambda`). See
+  `RELEASING.md` for the multi-module layout and why.
 - `conformance/` - the fixture runner; `testdata/*.json` are vendored copies from the main
   repo's `docs/specification/conformance/` (see `conformance/README.md` for how to re-sync).
 - `examples/` - runnable example services: `helloworld` (plain HTTP), and one
   `<provider>-helloworld` per cloud deployment target (`aws-lambda-helloworld`,
-  `azure-functions-helloworld`, `gcp-cloudrun-helloworld`) - each with its own README stating
-  the concrete deploy steps and exactly what was/wasn't verified without live cloud credentials.
-  Google Cloud has no dedicated package (see `gcp-cloudrun-helloworld/README.md` for why Cloud
-  Run needs none) - don't add one without a concrete reason `httpbinding` alone can't cover.
+  `azure-functions-helloworld`, `gcp-cloudrun-helloworld`, `aws-sqs-helloworld`) - each with its
+  own README stating the concrete deploy steps and exactly what was/wasn't verified without
+  live cloud credentials. Google Cloud has no dedicated package (see
+  `gcp-cloudrun-helloworld/README.md` for why Cloud Run needs none) - don't add one without a
+  concrete reason `httpbinding` alone can't cover. `aws-sqs-helloworld` is its own module (depends
+  on both the root module and `awssqs` - would be a cycle inside either).
+- `go.work` - ties the root module, `awssqs/`, and `examples/aws-sqs-helloworld/` together for
+  local development (see `RELEASING.md`). Its `replace` lines are workspace-scoped only and
+  never affect real external consumers.
 - `.github/workflows/ci.yml` - build+test on every push/PR (gofmt, vet, build, race+cover test,
   plus a cross-compile smoke check per cloud example's real target). `.github/workflows/
   deploy-<provider>-helloworld.yml` (one per cloud example) - each gated on that provider's
@@ -60,10 +69,14 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
 ## Conventions
 
 - Language: Go, see `go.mod` for the minimum version.
-- No third-party dependencies. The standard library has covered everything so far (generics for
-  type-safe registration with type-erased storage, `context.Context` for
-  cancellation/invocation-scoped values, `encoding/json` for the wire format). Ask before adding
-  one - a Go port with zero dependencies is itself a selling point over the .NET original.
+- No third-party dependencies in the root module or any package without one already. The
+  standard library covers everything there (generics for type-safe registration with
+  type-erased storage, `context.Context` for cancellation/invocation-scoped values,
+  `encoding/json` for the wire format) - zero dependencies is itself a selling point over the
+  .NET original. `awssqs` is the sole, deliberate exception (needs `aws-sdk-go-v2/service/sqs`
+  for signed SQS API calls) and lives in its own module specifically so that exception doesn't
+  spread. Ask before adding any other dependency; if one is approved, give it its own module
+  rather than adding it to the root's `go.mod` - see `RELEASING.md`.
 - Generics: used where they buy real type safety (`Handler[TReq, TRes]`, `Result[T]`,
   `GetService[T]`) but the `Registry` stores handlers behind a **type-erased** `erasedHandler`
   signature - Go generics can't hold heterogeneous `Result[T]` instantiations in one
@@ -102,11 +115,13 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
 ## Workflow expectations
 
 - Run `gofmt -w .` before every commit; CI fails on unformatted files.
-- Run `go vet ./... && go build ./... && go test ./... -race -cover` before considering a task
-  complete. Every non-test-only package should sit at 100% coverage, or just under it with the
-  gap being a documented, genuinely-unreachable defensive branch (not an untested real code
-  path) - if you can't tell which one a gap is, write the test that would prove it one way or
-  the other rather than assuming.
+- Run `go vet ./... ./awssqs/... ./examples/aws-sqs-helloworld/... && go build (same paths) &&
+  go test (same paths) -race -cover` before considering a task complete - `./...` from the root
+  does not cross a nested module boundary even with `go.work` present, so the nested modules
+  need their own explicit path. Every non-test-only package should sit at 100% coverage, or just
+  under it with the gap being a documented, genuinely-unreachable defensive branch (not an
+  untested real code path) - if you can't tell which one a gap is, write the test that would
+  prove it one way or the other rather than assuming.
 - Keep commits scoped to one logical change (one package, one fix), matching this repo's
   history so far.
 - New capability = new package + new tests + a README/doc-comment update in the same commit,
