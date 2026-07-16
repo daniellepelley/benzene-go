@@ -406,11 +406,16 @@ docs in one commit, 100%-or-documented coverage):
    gaps (topology edge derivation, staleness, the hand-maintained registry) are solved by
    adopting the promoted wire layer.
 
-   What remains is .NET-side and could not be honestly done from here: the authoring
-   environment has no .NET SDK and its network policy blocks obtaining one, so writing
-   untested C# was rejected in favor of scoping it precisely in the main repo's roadmap.
-   The Go half of the cross-language demo is ready today (`examples/mesh-helloworld` +
-   the fixtures pin exactly what C# must match).
+   The .NET side has since caught up: the main repo's `Benzene.Mesh.Wire` package
+   implements the service-side wire layer (descriptor + schemas + hash, reserved topic,
+   trace middleware with traceparent join and span propagation, lossy batching exporter)
+   and passes the same `mesh-descriptor-cases.json`/`mesh-trace-cases.json` fixtures this
+   port passes. The cross-language fleet demo ran for real against this repo's `meshd`: a
+   C# service registered, heartbeated, traced, and called the Go greeter with a propagated
+   traceparent - the collector derived the cross-language consumer edge from parentage
+   alone. The one remaining .NET item (optional per spec §7) is the aggregator adopting
+   the `mesh:register`/`mesh:heartbeat`/`mesh:traces` ingest topics to pass
+   `mesh-collector-cases.json`, tracked in the main repo's service-mesh roadmap.
 
 ## 9. Open questions
 
