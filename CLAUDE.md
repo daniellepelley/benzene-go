@@ -27,6 +27,12 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
 - `httpbinding/` - the HTTP transport binding (native + envelope-over-HTTP entry points).
 - `httpclient/` - the HTTP outbound client.
 - `healthcheck/` - reserved-topic health-check interception middleware.
+- `mesh/` - Phase 1 of `docs/design/mesh.md`: service `Descriptor` derived from the
+  `Registry`, reserved-`mesh`-topic descriptor middleware, and trace middleware + log
+  exporter. Every feed is independent and optional - degradation (nil registry, nil or
+  failing exporter, unprovisioned descriptor endpoint) must reduce the mesh, never break
+  the service. Later phases (schemas, push exporter, the `meshd` collector) need their
+  wire shapes promoted to the main repo's spec first.
 - `awslambda/` - AWS Lambda binding: a hand-rolled Lambda Runtime API bootstrap loop, plus
   HTTP (API Gateway v2 / Function URL) and envelope adapters.
 - `azurefunctions/` - Azure Functions custom-handler binding (the Data/Metadata JSON contract

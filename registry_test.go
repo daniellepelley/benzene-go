@@ -148,3 +148,43 @@ func TestConvertRequest_JSONRawMessage(t *testing.T) {
 		t.Errorf("convertRequest() = %+v, want Name=Raw", got)
 	}
 }
+
+func TestRegistry_Topics(t *testing.T) {
+	tests := []struct {
+		name   string
+		topics []Topic
+		want   []Topic
+	}{
+		{
+			name:   "empty registry",
+			topics: nil,
+			want:   []Topic{},
+		},
+		{
+			name:   "sorted by id then version",
+			topics: []Topic{NewTopic("b"), NewTopic("a").WithVersion("v2"), NewTopic("a"), NewTopic("a").WithVersion("v1")},
+			want:   []Topic{NewTopic("a"), NewTopic("a").WithVersion("v1"), NewTopic("a").WithVersion("v2"), NewTopic("b")},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := NewRegistry()
+			for _, topic := range tt.topics {
+				if err := Register(r, topic, Handler[helloRequest, helloResponse](helloHandler)); err != nil {
+					t.Fatalf("Register(%v) error = %v", topic, err)
+				}
+			}
+
+			got := r.Topics()
+			if len(got) != len(tt.want) {
+				t.Fatalf("Topics() = %v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("Topics()[%d] = %v, want %v", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 )
 
 // Handler is a function from a request to a result (core-concepts.md §3). The handler
@@ -99,4 +100,22 @@ func (r *Registry) resolve(topic Topic) (erasedHandler, bool) {
 func (r *Registry) Has(topic Topic) bool {
 	_, ok := r.handlers[topic]
 	return ok
+}
+
+// Topics returns every registered topic, sorted by ID then Version. This is the
+// enumeration behind service self-description (the mesh package's Descriptor): explicit
+// registration means the Registry is the complete, authoritative list of what this
+// service serves, so a catalog derived from it cannot drift from the running code.
+func (r *Registry) Topics() []Topic {
+	topics := make([]Topic, 0, len(r.handlers))
+	for topic := range r.handlers {
+		topics = append(topics, topic)
+	}
+	sort.Slice(topics, func(i, j int) bool {
+		if topics[i].ID != topics[j].ID {
+			return topics[i].ID < topics[j].ID
+		}
+		return topics[i].Version < topics[j].Version
+	})
+	return topics
 }

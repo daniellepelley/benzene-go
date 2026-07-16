@@ -1,9 +1,21 @@
 # Benzene Mesh — design
 
-**Status: DESIGN PROPOSAL.** Nothing in this document is implemented yet. Wire shapes
-proposed here would need to be promoted into the main repo's `docs/specification/`
-(which remains the source of truth) before any implementation lands, so that every
-language port meshes identically.
+**Status: PHASE 1 IMPLEMENTED** (the in-process `mesh/` package - descriptor, reserved-
+topic middleware, trace middleware + log exporter); everything else remains a design
+proposal. Cross-service wire shapes proposed here need to be promoted into the main
+repo's `docs/specification/` (which remains the source of truth) before the later
+phases land, so that every language port meshes identically.
+
+A degradation rule became explicit during Phase 1 implementation and binds every later
+phase: **every mesh feed is independent and optional, and an unavailable feed reduces
+the mesh, never the service - and never the other feeds.** A deployment whose descriptor
+endpoint is deliberately not provisioned (e.g. withheld pending a security review) still
+runs the trace feed; a nil registry yields a descriptor without topics (recorded in the
+descriptor's `degraded` list rather than passed off as "no topics"); a nil, failing, or
+panicking exporter never affects the invocation it observed. `meshd` (Phase 3) must
+accept partial fleets the same way: traces without a matching descriptor render as an
+anonymous-but-live service, descriptors without traces render as a catalog entry with
+no stats.
 
 ---
 
@@ -223,9 +235,16 @@ byte-compatible descriptors and trace events, and conformance fixtures
       "responseSchema": { "…derived JSON Schema…": true }
     }
   ],
-  "descriptorHash": "sha256:…"
+  "descriptorHash": "sha256:…",
+  "degraded": ["registry"]
 }
 ```
+
+`degraded` (usually absent) lists the feeds that were unavailable when the descriptor
+was built - e.g. `"registry"` when the topic-catalog feed wasn't wired up - so a reduced
+mesh is visible as reduced rather than mistaken for a service with no topics. Schemas
+and `descriptorHash` are Phase 2; the Phase 1 descriptor ships the shape above without
+them.
 
 ### 5.2 TraceEvent
 
@@ -340,9 +359,10 @@ The pitch, in the order a platform evaluator will hear it:
 Each phase is a shippable unit per this repo's workflow rules (package + tests +
 docs in one commit, 100%-or-documented coverage):
 
-1. **`mesh` package**: `Descriptor` from Registry, reserved-topic middleware,
-   `TraceMiddleware` + `LogExporter`. Immediately useful standalone (structured
-   invocation logs with zero setup).
+1. **`mesh` package** - ✅ implemented: `Descriptor` from Registry (via the new
+   `Registry.Topics()`), reserved-topic middleware, `TraceMiddleware` + `LogExporter`,
+   placement detection. Immediately useful standalone (structured invocation logs with
+   zero setup).
 2. **Schema derivation** (`reflect`-based, startup-only) + `descriptorHash`.
 3. **`PushExporter` + `meshd` MVP** (in-memory store, register/heartbeat/traces/query
    topics) + a `mesh-helloworld` example wiring two services and the collector.
