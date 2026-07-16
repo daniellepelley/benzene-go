@@ -74,6 +74,7 @@ check, and both HTTP entry points wired through the three-phase `App` lifecycle.
 | `examples/aws-lambda-helloworld` | - | The same service, deployable to AWS Lambda (Dockerfile + SAM template) |
 | `examples/azure-functions-helloworld` | - | The same service, deployable to Azure Functions (host.json/function.json) |
 | `examples/gcp-cloudrun-helloworld` | - | The same service, deployable to Google Cloud Run (Dockerfile, no new package needed) |
+| `examples/mesh-helloworld` | - | The whole mesh story in one process: a `meshd` collector + two meshed services with a cross-service traced call - open the Mesh View and watch the derived fleet |
 
 Every non-test-only package sits at 100% coverage, or just under it where the gap is a
 defensively-unreachable branch (documented at the call site - e.g. a `json.Marshal` failure on

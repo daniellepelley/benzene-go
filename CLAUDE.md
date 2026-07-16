@@ -49,7 +49,8 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
   the Functions host forwards HTTP-triggered invocations over - Azure has no native Go worker).
 - `conformance/` - the fixture runner; `testdata/*.json` are vendored copies from the main
   repo's `docs/specification/conformance/` (see `conformance/README.md` for how to re-sync).
-- `examples/` - runnable example services: `helloworld` (plain HTTP), and one
+- `examples/` - runnable example services: `helloworld` (plain HTTP),
+  `mesh-helloworld` (collector + two meshed services, the Phases 1-4 demo), and one
   `<provider>-helloworld` per cloud deployment target (`aws-lambda-helloworld`,
   `azure-functions-helloworld`, `gcp-cloudrun-helloworld`) - each with its own README stating
   the concrete deploy steps and exactly what was/wasn't verified without live cloud credentials.
