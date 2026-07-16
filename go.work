@@ -3,6 +3,7 @@ go 1.24.7
 use (
 	.
 	./awssqs
+	./awssns
 	./examples/aws-sqs-helloworld
 )
 
@@ -14,4 +15,5 @@ use (
 replace (
 	github.com/daniellepelley/benzene-go v0.1.0 => ./
 	github.com/daniellepelley/benzene-go/awssqs v0.1.0 => ./awssqs
+	github.com/daniellepelley/benzene-go/awssns v0.1.0 => ./awssns
 )
