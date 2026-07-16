@@ -385,17 +385,33 @@ docs in one commit, 100%-or-documented coverage):
 4. **Mesh View** - ✅ implemented: a single self-contained page embedded in `meshd`
    (no JS framework, per the zero-dependency stance), polling `mesh:query:fleet`
    through the envelope endpoint.
-5. **Spec promotion** - authored: the main repo's `claude/mesh-spec-promotion` branch
-   carries `docs/specification/mesh.md` (the promoted contract; the Go port is that
-   document's reference implementation) plus the three conformance fixture files -
-   `mesh-descriptor-cases.json` (schema derivation + hash properties),
-   `mesh-trace-cases.json` (traceparent join/reject + invocation→status mapping,
-   including the new `conformance:panic` canonical handler), and
+5. **Spec promotion** - ✅ complete to this repo's boundary. The main repo's
+   `claude/mesh-spec-promotion` branch carries `docs/specification/mesh.md` (the promoted
+   contract; the Go port is that document's reference implementation) plus the three
+   conformance fixture files - `mesh-descriptor-cases.json` (schema derivation + hash
+   properties), `mesh-trace-cases.json` (traceparent join/reject + invocation→status
+   mapping, including the new `conformance:panic` canonical handler), and
    `mesh-collector-cases.json` (ingest/derivation/degradation sequences). All three are
    vendored into this repo's `conformance/` with runners in
-   `conformance/mesh_conformance_test.go`, and pass. Remaining main-repo work: merge the
-   branch, bring the C# port up to the fixtures, and ship the cross-language fleet demo
-   (Go on Lambda + C# on Functions in one view) as *the* flagship demo.
+   `conformance/mesh_conformance_test.go`, and pass.
+
+   An important discovery during promotion: the .NET implementation already ships its own,
+   independently-designed mesh visibility feature (`Benzene.Mesh.*` - pull aggregator over
+   a hand-maintained registry, OpenAPI spec hashing, Tempo-derived topology, Mesh UI).
+   The promoted spec's §9 maps the two designs (nothing there is discarded - it's all
+   collector-side idiom), and the main repo's `work/service-mesh-roadmap-1.0.md` now
+   carries the concrete .NET convergence plan: descriptor + trace middleware to pass the
+   two required fixture files, optional aggregator ingest topics for the collector
+   fixtures, then the cross-language fleet demo. Notably, three of that roadmap's own open
+   gaps (topology edge derivation, staleness, the hand-maintained registry) are solved by
+   adopting the promoted wire layer.
+
+   What remains is .NET-side and could not be honestly done from here: the authoring
+   environment has no .NET SDK and its network policy blocks obtaining one, so writing
+   untested C# was rejected in favor of scoping it precisely. The Go half of the
+   cross-language demo is ready today (`examples/mesh-helloworld` + the fixtures pin
+   exactly what C# must match), and merging the promotion branch is the repo owner's
+   call.
 
 ## 9. Open questions
 
