@@ -48,6 +48,11 @@ delivery order - just the current honest picture, kept up to date as things land
   the Mesh View (one embedded self-contained page, no JS framework). The wire contract is
   promoted to the main repo's `docs/specification/mesh.md` and pinned by vendored
   `mesh-*.json` conformance fixtures.
+- `cloudevents` - CloudEvents 1.0 mapping (zero dependencies): the wire envelope to/from the
+  CNCF cross-cloud event format (`type` <-> topic, `data` <-> body, other attributes <->
+  "ce-"-prefixed headers), plus an inbound HTTP handler for both content modes - the bridge
+  that lets Event Grid, Knative, EventBridge, and anything else CloudEvents-shaped deliver
+  straight into a Benzene pipeline.
 - `gcppubsub` - Google Cloud Pub/Sub inbound binding (zero dependencies): an http.Handler
   for a push subscription's endpoint, with wire-contracts §2 topic resolution and ack/nack
   via the response status code. The outbound (publish) half needs the Pub/Sub SDK - see

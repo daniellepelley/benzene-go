@@ -59,6 +59,11 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
   with a third-party dependency (`aws-sdk-go-v2/service/sqs`, needed for the outbound publish
   client; the inbound Lambda-trigger `Handler` is zero-dependency, like `awslambda`). See
   `RELEASING.md` for the multi-module layout and why.
+- `cloudevents/` - CloudEvents 1.0 mapping, zero-dependency: wire envelope <-> CloudEvents
+  (`type` <-> topic, `data` <-> body, other attributes <-> `ce-`-prefixed headers - the
+  outbound direction only maps `ce-` headers back, documented lossiness), plus an inbound
+  HTTP `Handler` for both content modes (binary and structured) with the queue bindings'
+  ack/nack contract.
 - `gcppubsub/` - Google Cloud Pub/Sub inbound binding, zero-dependency in the root module: an
   `http.Handler` for a push subscription's endpoint (base64 data + attributes in, ack/nack via
   the response status code), wire-contracts §2 topic resolution like `awssqs`/`awssns`. The
