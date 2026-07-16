@@ -134,11 +134,13 @@ and live traffic stats, derived from running services rather than declared in a 
 designed in `docs/design/` ([mesh.md](docs/design/mesh.md), with a
 [static mockup](docs/design/mesh-view-mockup.html) of the Fleet Overview screen and the
 [research and positioning](docs/design/mesh-research.md) behind it). All phases of its
-delivery plan are complete on this repo's side: the `mesh` and `meshd` packages and the
-`examples/mesh-helloworld` demo above implement it, and the wire contracts are promoted and
-merged as the main repo's `docs/specification/mesh.md` - now the normative text, with this
-port as its reference implementation (the `mesh-*.json` fixtures in `conformance/` pin that,
-and pass).
+delivery plan are complete: the `mesh` and `meshd` packages and the `examples/mesh-helloworld`
+demo above implement it, and the wire contracts are promoted and merged as the main repo's
+`docs/specification/mesh.md` - now the normative text. The main repo's .NET implementation
+(`Benzene.Mesh.Wire` + `Benzene.Mesh.Collector`) is the primary implementation of that
+contract; this port is a fully conforming implementation - the contract was originally
+extracted from it, the vendored `mesh-*.json` fixtures in `conformance/` pin it and pass, and
+the two implementations have hosted each other's services in live cross-language fleets.
 
 ## Developing
 

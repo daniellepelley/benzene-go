@@ -5,12 +5,13 @@
 derivation + `descriptorHash`, span propagation), the `meshd/` collector with the Mesh
 View, and the `examples/mesh-helloworld` end-to-end demo are implemented in this repo.
 Phase 5's spec promotion is **merged to the main repo's `main`**: the mesh wire
-contracts are now normative as `docs/specification/mesh.md` there, with three
+contracts are normative as `docs/specification/mesh.md` there, with three
 `mesh-*-cases.json` conformance fixtures that are vendored into this repo's
-`conformance/` and passing - this port is that spec's reference implementation. C# parity
-(reconciling the main repo's pre-existing `Benzene.Mesh.*` visibility packages onto the
-promoted contracts) and the cross-language fleet demo are scoped as .NET-side work in
-the main repo's `work/service-mesh-roadmap-1.0.md`.
+`conformance/` and passing. The main repo's .NET implementation (`Benzene.Mesh.Wire` +
+`Benzene.Mesh.Collector`) now covers the full contract and is its primary
+implementation; this port - which the contract was originally extracted from - is a
+fully conforming implementation, and the two have hosted each other's services in live
+cross-language fleets, in both directions.
 [`mesh-spec-draft.md`](./mesh-spec-draft.md) is kept as the historical draft the
 promotion was authored from.
 
