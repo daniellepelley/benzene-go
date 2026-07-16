@@ -20,6 +20,9 @@ delivery order - just the current honest picture, kept up to date as things land
 - `azurefunctions` - Azure Functions custom-handler binding.
 - `client` - outbound-client decorators (`CorrelationDecorator`, `RetryDecorator`) over a
   transport-agnostic `Sender` interface; `httpclient.Client` satisfies it structurally.
+- `cors` - portable CORS middleware for HTTP-fronted services (origin/scheme/port matching,
+  header wildcard, preflight handling), a Go port of the main repo's own portable CORS
+  middleware.
 - `conformance` - runs this port against the main repo's vendored language-neutral fixtures.
 - Examples: `helloworld` (plain HTTP + DI + health check), `aws-lambda-helloworld`,
   `azure-functions-helloworld`, `gcp-cloudrun-helloworld` (no new package needed for GCP - see
@@ -34,10 +37,7 @@ documented, genuinely-unreachable defensive branch - see each package's own comm
 These extend existing capabilities using only the standard library, matching this repo's
 current zero-third-party-dependency posture:
 
-1. **CORS middleware.** A portable, stdlib-only `Middleware` for HTTP-fronted services -
-   origin/scheme/port matching, `Access-Control-Expose-Headers`, wildcard header support,
-   preflight handling - mirroring the main repo's own portable CORS middleware design.
-2. **`benzenetest` package - in-process test host.** A small fluent helper so an application's
+1. **`benzenetest` package - in-process test host.** A small fluent helper so an application's
    *own* tests can invoke a registered handler or a full pipeline directly (build a request,
    run it, assert on the `Result`) without spinning up real HTTP - mirroring `Benzene.Testing`/
    `BenzeneTestHost` in the main repo. This is about DX for *consumers* of this library, not
