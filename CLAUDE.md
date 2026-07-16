@@ -59,6 +59,11 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
   with a third-party dependency (`aws-sdk-go-v2/service/sqs`, needed for the outbound publish
   client; the inbound Lambda-trigger `Handler` is zero-dependency, like `awslambda`). See
   `RELEASING.md` for the multi-module layout and why.
+- `gcppubsub/` - Google Cloud Pub/Sub inbound binding, zero-dependency in the root module: an
+  `http.Handler` for a push subscription's endpoint (base64 data + attributes in, ack/nack via
+  the response status code), wire-contracts §2 topic resolution like `awssqs`/`awssns`. The
+  outbound publish half needs the Pub/Sub SDK - a pending dependency decision (`ROADMAP.md`);
+  if approved it gets its own module like `awssqs`/`awssns`.
 - `awssns/` - AWS SNS binding, in **its own Go module** (`awssns/go.mod`) - same shape and same
   reason as `awssqs` (`aws-sdk-go-v2/service/sns` for the outbound publish client; the inbound
   `Handler`, subscribed directly to an SNS topic, is zero-dependency). Unlike SQS, a direct
@@ -71,10 +76,11 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
   `mesh-helloworld` (collector + two meshed services, the Phases 1-4 demo), and one
   `<provider>-helloworld` per cloud deployment target (`aws-lambda-helloworld`,
   `azure-functions-helloworld`, `gcp-cloudrun-helloworld`, `aws-sqs-helloworld`,
-  `aws-sns-helloworld`) - each with its own README stating the concrete deploy steps and exactly
-  what was/wasn't verified without live cloud credentials. Google Cloud has no dedicated package
-  (see `gcp-cloudrun-helloworld/README.md` for why Cloud Run needs none) - don't add one without
-  a concrete reason `httpbinding` alone can't cover. `aws-sqs-helloworld` and
+  `aws-sns-helloworld`, `gcp-pubsub-helloworld`) - each with its own README stating the concrete
+  deploy steps and exactly what was/wasn't verified without live cloud credentials. Plain Cloud
+  Run needs no dedicated package (see `gcp-cloudrun-helloworld/README.md`); `gcppubsub` exists
+  because the Pub/Sub push envelope is a concrete shape `httpbinding` alone can't cover - keep
+  applying that bar to any new platform package. `aws-sqs-helloworld` and
   `aws-sns-helloworld` are each their own module (depends on both the root module and its
   respective binding - would be a cycle inside either).
 - `go.work` - ties the root module, `awssqs/`, `awssns/`, `examples/aws-sqs-helloworld/`, and

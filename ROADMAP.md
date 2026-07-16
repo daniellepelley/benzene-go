@@ -48,11 +48,16 @@ delivery order - just the current honest picture, kept up to date as things land
   the Mesh View (one embedded self-contained page, no JS framework). The wire contract is
   promoted to the main repo's `docs/specification/mesh.md` and pinned by vendored
   `mesh-*.json` conformance fixtures.
+- `gcppubsub` - Google Cloud Pub/Sub inbound binding (zero dependencies): an http.Handler
+  for a push subscription's endpoint, with wire-contracts §2 topic resolution and ack/nack
+  via the response status code. The outbound (publish) half needs the Pub/Sub SDK - see
+  "Later" below.
 - `conformance` - runs this port against the main repo's vendored language-neutral fixtures.
 - Examples: `helloworld` (plain HTTP + DI + health check), `aws-lambda-helloworld`,
   `azure-functions-helloworld`, `gcp-cloudrun-helloworld` (no new package needed for GCP - see
   its README), `aws-sqs-helloworld` (publisher + consumer Lambdas, its own module),
   `aws-sns-helloworld` (publisher + consumer Lambdas, its own module),
+  `gcp-pubsub-helloworld` (a Cloud Run service consuming a Pub/Sub push subscription),
   `mesh-helloworld` (collector + two meshed services, local-only) - each cloud example with a
   matching CI build/test path and a gated GitHub Actions deploy workflow
   (`.github/workflows/deploy-*.yml`).
@@ -91,6 +96,10 @@ unilateral add:
   `awssqs`, so this one's cheaper now); the inbound (Lambda event) side could plausibly be
   hand-rolled similarly to `awslambda`'s existing HTTP v2 adapter and `awssqs`'s own inbound
   handler, since it's "just" JSON event parsing, no signed API calls.
+- **Pub/Sub outbound (publish) client.** The inbound half is done with zero dependencies
+  (`gcppubsub` - a push subscription is just HTTPS in). Publishing needs OAuth-signed API
+  calls, i.e. `cloud.google.com/go/pubsub` - the same shape as `awssqs`/`awssns`'s outbound
+  clients, and like them it would live in its own module so the dependency doesn't spread.
 - **Google Cloud Functions Gen2 (buildpack) deploy**, as opposed to the Cloud Run path already
   documented in `examples/gcp-cloudrun-helloworld` - needs
   `github.com/GoogleCloudPlatform/functions-framework-go`, the one Google-specific dependency

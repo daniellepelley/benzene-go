@@ -56,6 +56,7 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/aws-lambda-helloworld ./examples/aws-lambda-helloworld
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/azure-functions-helloworld ./examples/azure-functions-helloworld
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/gcp-cloudrun-helloworld ./examples/gcp-cloudrun-helloworld
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/gcp-pubsub-helloworld ./examples/gcp-pubsub-helloworld
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/aws-sqs-consumer ./examples/aws-sqs-helloworld/consumer
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/aws-sqs-publisher ./examples/aws-sqs-helloworld/publisher
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/aws-sns-consumer ./examples/aws-sns-helloworld/consumer
