@@ -70,11 +70,26 @@ func Handler(builder *benzene.ApplicationBuilder, routes []Route) http.Handler {
 	})
 }
 
+// Well-known paths from the default service standard (the main repo's
+// docs/specification/design-principles.md §5): framework-provided HTTP surfaces mount under
+// the /benzene/ prefix, so a URL, a log line, or a gateway rule can tell framework
+// infrastructure from domain endpoints - and a single path rule can expose or protect all of
+// it at once. Like every Benzene steer, these are defaults, not requirements: mount the
+// handlers anywhere you like.
+const (
+	// EnvelopePath is the standard mount for EnvelopeHandler - the service-to-service
+	// (and mesh collector) wire-envelope surface.
+	EnvelopePath = "/benzene/invoke"
+	// HealthPath is the standard mount for a Route serving the reserved healthcheck topic.
+	HealthPath = "/benzene/health"
+)
+
 // EnvelopeHandler builds an HTTP entry point that speaks the wire-contracts.md §1 envelope
 // directly: the request body is a wire.Request (any method/path - the caller POSTs the
 // envelope), and the response body is a wire.Response. The outer HTTP status is always 200;
 // the real Benzene outcome travels inside the envelope's own statusCode field, matching how a
 // Lambda invoke or an internal function call carries the envelope with no HTTP layer at all.
+// The default service standard mounts it at EnvelopePath.
 func EnvelopeHandler(builder *benzene.ApplicationBuilder) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)

@@ -9,7 +9,10 @@ its own repo: an idiomatic `module` path, independent versioning/tagging, and a 
 surface that doesn't require a .NET toolchain.
 
 The main repo's `docs/specification/` is the source of truth for cross-language behavior -
-`core-concepts.md`, `wire-contracts.md`, `transport-bindings.md`, `porting-guide.md`. When this
+`design-principles.md` (the "opinionated but optional" strategy and the `/benzene/`-prefixed
+default service standard, which `httpbinding.EnvelopePath`/`HealthPath` and `meshd.ViewPath`
+implement here), `core-concepts.md`, `wire-contracts.md`, `transport-bindings.md`,
+`porting-guide.md`. When this
 port and the spec disagree, the spec wins; fix the Go code, not the spec, unless the
 disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
 

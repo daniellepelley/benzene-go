@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/httpbinding"
 	"github.com/daniellepelley/benzene-go/wire"
 )
 
@@ -60,7 +61,7 @@ func TestHealthEndpoint_ReturnsHealthy(t *testing.T) {
 	server := httptest.NewServer(newHandler(newApp()))
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/health")
+	resp, err := http.Get(server.URL + httpbinding.HealthPath)
 	if err != nil {
 		t.Fatalf("http.Get() error = %v", err)
 	}
@@ -94,7 +95,7 @@ func TestInvokeEndpoint_EnvelopeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalRequest() error = %v", err)
 	}
-	resp, err := http.Post(server.URL+"/invoke", "application/json", strings.NewReader(string(reqBody)))
+	resp, err := http.Post(server.URL+httpbinding.EnvelopePath, "application/json", strings.NewReader(string(reqBody)))
 	if err != nil {
 		t.Fatalf("http.Post() error = %v", err)
 	}

@@ -97,17 +97,21 @@ func newApp() *benzene.ApplicationBuilder {
 	return app.Run()
 }
 
-// newHandler builds the HTTP entry point: /greet and /health as native REST-style routes
-// (httpbinding.Handler), and /invoke as the raw wire-contracts.md envelope
-// (httpbinding.EnvelopeHandler) for service-to-service calls with no route table to agree on.
+// newHandler builds the HTTP entry point: /greet as a native REST-style route
+// (httpbinding.Handler), plus the default service standard's well-known surfaces
+// (docs/specification/design-principles.md §5 in the main repo) - health at
+// httpbinding.HealthPath and the raw wire-contracts.md envelope
+// (httpbinding.EnvelopeHandler) at httpbinding.EnvelopePath for service-to-service calls
+// with no route table to agree on. The /benzene/ prefix marks them as framework
+// infrastructure, not domain endpoints.
 func newHandler(builder *benzene.ApplicationBuilder) http.Handler {
 	routes := []httpbinding.Route{
 		{Method: http.MethodPost, Path: "/greet", Topic: benzene.NewTopic("greet")},
-		{Method: http.MethodGet, Path: "/health", Topic: benzene.NewTopic("healthcheck")},
+		{Method: http.MethodGet, Path: httpbinding.HealthPath, Topic: benzene.NewTopic("healthcheck")},
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/invoke", httpbinding.EnvelopeHandler(builder))
+	mux.Handle(httpbinding.EnvelopePath, httpbinding.EnvelopeHandler(builder))
 	mux.Handle("/", httpbinding.Handler(builder, routes))
 	return mux
 }

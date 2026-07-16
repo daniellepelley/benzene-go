@@ -22,11 +22,11 @@ curl -X POST localhost:8080/greet -d '{"name":""}'
 # 400 Bad Request
 
 # Health check (the reserved "healthcheck" topic)
-curl localhost:8080/health
+curl localhost:8080/benzene/health
 # {"isHealthy":true,"healthChecks":{"memory":{"status":"ok","type":"memory"}}}
 
 # The raw wire-contracts.md envelope, for service-to-service calls with no route table
-curl -X POST localhost:8080/invoke \
+curl -X POST localhost:8080/benzene/invoke \
   -d '{"topic":"greet","headers":{},"body":"{\"name\":\"Envelope\"}"}'
 # {"statusCode":"Ok","headers":{"content-type":"application/json"},"body":"{\"greeting\":\"Hello, Envelope!\",\"count\":2}"}
 ```
@@ -43,5 +43,10 @@ curl -X POST localhost:8080/invoke \
   reserved `healthcheck` topic before the router ever sees it.
 - **Both HTTP entry points**: `httpbinding.Handler` (an explicit route table, native HTTP status
   codes) and `httpbinding.EnvelopeHandler` (the wire envelope, always HTTP 200).
+- **The default service standard** (the main repo's `docs/specification/design-principles.md`
+  §5): the framework surfaces mount on the well-known `/benzene/`-prefixed paths -
+  `httpbinding.HealthPath` and `httpbinding.EnvelopePath` - so they read as infrastructure,
+  not domain endpoints, and a gateway can expose or protect them with one path rule. Like
+  every Benzene steer they're defaults: the mount paths are yours to change.
 
 See `main_test.go` for an end-to-end test of all of the above over `httptest.NewServer`.

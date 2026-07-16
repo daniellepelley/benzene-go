@@ -13,7 +13,7 @@ func TestViewHandler(t *testing.T) {
 		envelopePath string
 		wantPath     string
 	}{
-		{name: "default envelope path", envelopePath: "", wantPath: "/invoke"},
+		{name: "default envelope path", envelopePath: "", wantPath: "/benzene/invoke"},
 		{name: "custom envelope path", envelopePath: "/mesh/envelope", wantPath: "/mesh/envelope"},
 	}
 

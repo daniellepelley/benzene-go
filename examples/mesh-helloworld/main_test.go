@@ -22,7 +22,7 @@ import (
 func TestMeshHelloworldEndToEnd(t *testing.T) {
 	meshdServer := httptest.NewServer(newMeshd())
 	defer meshdServer.Close()
-	meshdEndpoint := meshdServer.URL + "/invoke"
+	meshdEndpoint := meshdServer.URL + httpbinding.EnvelopePath
 
 	greeter := newService("greeter", meshdEndpoint, true, func(registry *benzene.Registry) {
 		if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
@@ -33,7 +33,7 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 	defer greeterServer.Close()
 
 	frontdoor := newService("frontdoor", meshdEndpoint, true, func(registry *benzene.Registry) {
-		greeterClient := httpclient.NewClient(greeterServer.URL + "/invoke")
+		greeterClient := httpclient.NewClient(greeterServer.URL + httpbinding.EnvelopePath)
 		if err := benzene.Register(registry, benzene.NewTopic("welcome"), welcomeHandler(greeterClient)); err != nil {
 			t.Fatalf("register welcome: %v", err)
 		}
@@ -43,7 +43,7 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 
 	// legacy-portal: trace feed only - no descriptor endpoint, no announce, no heartbeat.
 	legacy := newService("legacy-portal", meshdEndpoint, false, func(registry *benzene.Registry) {
-		greeterClient := httpclient.NewClient(greeterServer.URL + "/invoke")
+		greeterClient := httpclient.NewClient(greeterServer.URL + httpbinding.EnvelopePath)
 		if err := benzene.Register(registry, benzene.NewTopic("legacy:relay"), welcomeHandler(greeterClient)); err != nil {
 			t.Fatalf("register legacy:relay: %v", err)
 		}
@@ -87,7 +87,7 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 	}
 
 	// The reserved mesh topic serves the descriptor - schemas and contract hash included.
-	descResult := httpclient.NewClient(greeterServer.URL+"/invoke").Send(ctx, benzene.NewTopic(mesh.TopicID), nil, nil)
+	descResult := httpclient.NewClient(greeterServer.URL+httpbinding.EnvelopePath).Send(ctx, benzene.NewTopic(mesh.TopicID), nil, nil)
 	descriptor, err := httpclient.Unmarshal[mesh.Descriptor](descResult)
 	if err != nil || descriptor.Payload == nil {
 		t.Fatalf("mesh topic: %v %v", descResult.Status, err)
@@ -208,7 +208,7 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 // reachable, no descriptor endpoint provisioned - the service must behave exactly as an
 // unmeshed one.
 func TestReducedMeshStillServes(t *testing.T) {
-	unreachable := "http://127.0.0.1:1/invoke" // nothing listens there
+	unreachable := "http://127.0.0.1:1" + httpbinding.EnvelopePath // nothing listens there
 	greeter := newService("greeter", unreachable, true, func(registry *benzene.Registry) {
 		if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
 			t.Fatalf("register greet: %v", err)

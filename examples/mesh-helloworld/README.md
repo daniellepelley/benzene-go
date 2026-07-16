@@ -11,7 +11,7 @@ go run .
 
 | Port | Service | Mesh feeds provisioned |
 |---|---|---|
-| `8090` | meshd | the Mesh View at `/`, the collector's envelope endpoint at `/invoke` |
+| `8090` | meshd | the Mesh View at `/benzene/fleet-ui` (`/` redirects there), the collector's envelope endpoint at `/benzene/invoke` |
 | `8080` | greeter (`greet`) | **all**: descriptor endpoint, registration, heartbeats, traces |
 | `8081` | frontdoor (`welcome`, calls greeter) | **all** |
 | `8082` | legacy-portal (`legacy:relay`, calls greeter) | **traces only** - no descriptor endpoint, no registration, no heartbeats |
@@ -33,7 +33,7 @@ Everything the view shows is **derived** from the running services, nothing is d
   directly from the reserved `mesh` topic:
 
   ```
-  curl -s -X POST localhost:8080/invoke -d '{"topic":"mesh","headers":{},"body":""}'
+  curl -s -X POST localhost:8080/benzene/invoke -d '{"topic":"mesh","headers":{},"body":""}'
   ```
 
 - **Health from heartbeats** (spec §5): greeter and frontdoor turn *healthy* on their
@@ -50,9 +50,9 @@ Everything the view shows is **derived** from the running services, nothing is d
 - **Drill-downs** - the same read models the view uses:
 
   ```
-  curl -s -X POST localhost:8090/invoke -d '{"topic":"mesh:query:service","headers":{},"body":"{\"service\":\"greeter\"}"}'
-  curl -s -X POST localhost:8090/invoke -d '{"topic":"mesh:query:topic","headers":{},"body":"{\"topic\":\"greet\"}"}'
-  curl -s -X POST localhost:8090/invoke -d '{"topic":"mesh:query:trace","headers":{},"body":"{\"traceId\":\"<id from the view>\"}"}'
+  curl -s -X POST localhost:8090/benzene/invoke -d '{"topic":"mesh:query:service","headers":{},"body":"{\"service\":\"greeter\"}"}'
+  curl -s -X POST localhost:8090/benzene/invoke -d '{"topic":"mesh:query:topic","headers":{},"body":"{\"topic\":\"greet\"}"}'
+  curl -s -X POST localhost:8090/benzene/invoke -d '{"topic":"mesh:query:trace","headers":{},"body":"{\"traceId\":\"<id from the view>\"}"}'
   ```
 
 ## What is and isn't verified
