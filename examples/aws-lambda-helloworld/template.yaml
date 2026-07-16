@@ -1,0 +1,27 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: benzene-go aws-lambda-helloworld example - a container-image Lambda fronted by a Function URL, no API Gateway needed.
+
+Globals:
+  Function:
+    Timeout: 5
+    MemorySize: 128
+
+Resources:
+  HelloWorldFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      Architectures:
+        - arm64
+      FunctionUrlConfig:
+        AuthType: NONE
+    Metadata:
+      DockerTag: aws-lambda-helloworld
+      DockerContext: ../..
+      Dockerfile: examples/aws-lambda-helloworld/Dockerfile
+
+Outputs:
+  FunctionUrl:
+    Description: The Function URL to curl
+    Value: !GetAtt HelloWorldFunctionUrl.FunctionUrl
