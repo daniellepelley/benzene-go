@@ -24,13 +24,15 @@ This is a multi-module repo (see `go.work`):
 |---|---|---|
 | `github.com/daniellepelley/benzene-go` | `.` (root) | The core library - zero third-party dependencies |
 | `github.com/daniellepelley/benzene-go/awssqs` | `awssqs/` | Needs `aws-sdk-go-v2/service/sqs` - the *only* reason a package gets split out |
-| `github.com/daniellepelley/benzene-go/examples/aws-sqs-helloworld` | `examples/aws-sqs-helloworld/` | Depends on *both* of the above; would be a dependency cycle inside either one |
+| `github.com/daniellepelley/benzene-go/awssns` | `awssns/` | Needs `aws-sdk-go-v2/service/sns` - same reason, same isolation pattern |
+| `github.com/daniellepelley/benzene-go/examples/aws-sqs-helloworld` | `examples/aws-sqs-helloworld/` | Depends on *both* the root and `awssqs`; would be a dependency cycle inside either one |
+| `github.com/daniellepelley/benzene-go/examples/aws-sns-helloworld` | `examples/aws-sns-helloworld/` | Depends on *both* the root and `awssns`; same reason |
 
 **Policy**: a package gets its own module only when it has a genuine third-party dependency the
 rest of the repo shouldn't carry (matching how OpenTelemetry-Go splits its exporters out from
 its core). Everything else - including `awslambda` and `azurefunctions`, which are zero-dependency
 today - stays in the root module. Don't split a package out speculatively; split it when a real
-dependency actually shows up, exactly as happened with `awssqs`.
+dependency actually shows up, exactly as happened with `awssqs` and `awssns`.
 
 ### Local development: `go.work`
 
@@ -43,12 +45,15 @@ go 1.24.7
 use (
 	.
 	./awssqs
+	./awssns
 	./examples/aws-sqs-helloworld
+	./examples/aws-sns-helloworld
 )
 
 replace (
 	github.com/daniellepelley/benzene-go v0.1.0 => ./
 	github.com/daniellepelley/benzene-go/awssqs v0.1.0 => ./awssqs
+	github.com/daniellepelley/benzene-go/awssns v0.1.0 => ./awssns
 )
 ```
 
@@ -77,9 +82,17 @@ git tag -a awssqs/v0.1.0 -m "awssqs v0.1.0"
 git push origin awssqs/v0.1.0
 ```
 
-Only tag `examples/aws-sqs-helloworld` if you actually want it independently `go get`-able,
-which nobody needs to do in practice - it's a reference deployment, not a library; the `use`/
-`replace` entries in `go.work` are enough for this repo's own CI and local development.
+The same applies to `awssns`:
+
+```
+git tag -a awssns/v0.1.0 -m "awssns v0.1.0"
+git push origin awssns/v0.1.0
+```
+
+Only tag `examples/aws-sqs-helloworld` or `examples/aws-sns-helloworld` if you actually want one
+independently `go get`-able, which nobody needs to do in practice - they're reference
+deployments, not libraries; the `use`/`replace` entries in `go.work` are enough for this repo's
+own CI and local development.
 
 ## Current status
 
@@ -91,6 +104,7 @@ ordinary branch pushes, which worked throughout. To actually publish the first r
 git push origin v0.1.0
 ```
 
-Once that's live, `awssqs`'s own `require github.com/daniellepelley/benzene-go v0.1.0` (and the
-example's requires on both) resolve for real over the network too - though, as above, this
-repo's own tooling doesn't depend on that happening, thanks to `go.work`.
+Once that's live, `awssqs`'s and `awssns`'s own `require github.com/daniellepelley/benzene-go
+v0.1.0` (and each example's requires on both its root and binding module) resolve for real over
+the network too - though, as above, this repo's own tooling doesn't depend on that happening,
+thanks to `go.work`.

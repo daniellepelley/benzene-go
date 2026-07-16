@@ -1,0 +1,58 @@
+# Builds and deploys examples/aws-sns-helloworld (publisher + consumer Lambdas + one SNS topic -
+# see its own README for the manual equivalent of every step here). Requires repo secrets
+# AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, and optionally repo variable AWS_REGION (defaults
+# to us-east-1); see examples/aws-sns-helloworld/README.md's "CI/CD" section. Until those
+# secrets are set, the job below is skipped (not failed) so this workflow merging doesn't break
+# CI on its own.
+
+name: Deploy AWS SNS helloworld
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'examples/aws-sns-helloworld/**'
+      - 'awssns/**'
+      - 'awslambda/**'
+      - 'client/**'
+      - 'envelope/**'
+      - 'httpbinding/**'
+      - 'httpstatus/**'
+      - 'wire/**'
+      - '*.go'
+      - '.github/workflows/deploy-aws-sns-helloworld.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    if: ${{ secrets.AWS_ACCESS_KEY_ID != '' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: examples/aws-sns-helloworld
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Setup SAM CLI
+        uses: aws-actions/setup-sam@v2
+
+      - name: sam build
+        run: sam build --use-container
+
+      - name: sam deploy
+        run: |
+          sam deploy \
+            --stack-name benzene-go-aws-sns-helloworld \
+            --resolve-image-repos \
+            --capabilities CAPABILITY_IAM \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --region "${{ vars.AWS_REGION || 'us-east-1' }}"

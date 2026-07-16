@@ -1,0 +1,55 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  benzene-go aws-sns-helloworld example - a publisher Lambda (Function URL) that forwards
+  requests to an SNS topic, and a consumer Lambda subscribed to that topic.
+
+Globals:
+  Function:
+    Timeout: 5
+    MemorySize: 128
+    Architectures:
+      - arm64
+
+Resources:
+  GreetTopic:
+    Type: AWS::SNS::Topic
+
+  PublisherFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      FunctionUrlConfig:
+        AuthType: NONE
+      Environment:
+        Variables:
+          TOPIC_ARN: !Ref GreetTopic
+      Policies:
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt GreetTopic.TopicName
+    Metadata:
+      DockerTag: aws-sns-helloworld-publisher
+      DockerContext: ../..
+      Dockerfile: examples/aws-sns-helloworld/Dockerfile.publisher
+
+  ConsumerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      Events:
+        GreetTopicEvent:
+          Type: SNS
+          Properties:
+            Topic: !Ref GreetTopic
+    Metadata:
+      DockerTag: aws-sns-helloworld-consumer
+      DockerContext: ../..
+      Dockerfile: examples/aws-sns-helloworld/Dockerfile.consumer
+
+Outputs:
+  PublisherFunctionUrl:
+    Description: The Function URL to POST /greet to
+    Value: !GetAtt PublisherFunctionUrl.FunctionUrl
+  TopicArn:
+    Description: The SNS topic ARN
+    Value: !Ref GreetTopic

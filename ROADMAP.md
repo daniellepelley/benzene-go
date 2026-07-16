@@ -30,11 +30,18 @@ delivery order - just the current honest picture, kept up to date as things land
   rolled JSON, like `awslambda`), and an outbound `Client` that publishes via `SendMessage`
   (needs `aws-sdk-go-v2/service/sqs` - this repo's first third-party dependency, isolated to
   just this module).
+- `awssns` - AWS SNS binding, in its **own Go module** (see `RELEASING.md`): an inbound
+  `Handler` for a Lambda subscribed directly to an SNS topic (zero dependencies), and an
+  outbound `Client` that publishes via `Publish` (needs `aws-sdk-go-v2/service/sns`, isolated to
+  just this module). Unlike SQS's event source mapping, a direct SNS-to-Lambda subscription has
+  no batch/partial-failure mechanism - `Handler` instead returns a Go error for a failed
+  notification, triggering AWS's own async-invoke retry.
 - `conformance` - runs this port against the main repo's vendored language-neutral fixtures.
 - Examples: `helloworld` (plain HTTP + DI + health check), `aws-lambda-helloworld`,
   `azure-functions-helloworld`, `gcp-cloudrun-helloworld` (no new package needed for GCP - see
-  its README), `aws-sqs-helloworld` (publisher + consumer Lambdas, its own module) - each with a
-  matching CI build/test path and a gated GitHub Actions deploy workflow
+  its README), `aws-sqs-helloworld` (publisher + consumer Lambdas, its own module),
+  `aws-sns-helloworld` (publisher + consumer Lambdas, its own module) - each with a matching CI
+  build/test path and a gated GitHub Actions deploy workflow
   (`.github/workflows/deploy-*.yml`).
 
 Every non-test-only package sits at 100% coverage or just under it with the gap being a
@@ -58,12 +65,11 @@ Per `CLAUDE.md`: no third-party dependency without asking first. These are real,
 extensions, but each needs an explicit yes on a specific dependency before starting, not a
 unilateral add:
 
-- **SNS / Kafka bindings.** SQS is now done (`awssqs`, its own module - see Done above). SNS
-  publish and a self-hosted Kafka consumer/producer are the same shape (signed API calls or a
-  broker protocol, not reasonably hand-rollable) and would each similarly need their own module:
-  SNS can likely reuse `aws-sdk-go-v2` (already a dependency, via `awssqs` or a new `awssns`);
-  Kafka needs a client library (e.g. `github.com/segmentio/kafka-go` or
-  `github.com/twmb/franz-go`), a dependency this repo has not taken a position on yet.
+- **Kafka bindings.** SQS and SNS are both now done (`awssqs`, `awssns`, each its own module -
+  see Done above). A self-hosted Kafka consumer/producer is the same shape (a broker protocol,
+  not reasonably hand-rollable) and would similarly need its own module - it needs a client
+  library (e.g. `github.com/segmentio/kafka-go` or `github.com/twmb/franz-go`), a dependency
+  this repo has not taken a position on yet.
 - **gRPC binding.** Go has no gRPC support in the standard library at all; this needs
   `google.golang.org/grpc` + protobuf codegen tooling, a materially bigger dependency and
   build-step footprint than anything else in this repo.
