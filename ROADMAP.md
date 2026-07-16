@@ -18,6 +18,8 @@ delivery order - just the current honest picture, kept up to date as things land
 - `awslambda` - AWS Lambda binding (hand-rolled Runtime API bootstrap, HTTP v2 + envelope
   adapters).
 - `azurefunctions` - Azure Functions custom-handler binding.
+- `client` - outbound-client decorators (`CorrelationDecorator`, `RetryDecorator`) over a
+  transport-agnostic `Sender` interface; `httpclient.Client` satisfies it structurally.
 - `conformance` - runs this port against the main repo's vendored language-neutral fixtures.
 - Examples: `helloworld` (plain HTTP + DI + health check), `aws-lambda-helloworld`,
   `azure-functions-helloworld`, `gcp-cloudrun-helloworld` (no new package needed for GCP - see
@@ -32,17 +34,10 @@ documented, genuinely-unreachable defensive branch - see each package's own comm
 These extend existing capabilities using only the standard library, matching this repo's
 current zero-third-party-dependency posture:
 
-1. **`client` package - outbound decorators.** transport-bindings.md §2: "Cross-cutting client
-   behaviors (correlation ID injection, trace context, retry) are decorators over the same
-   interface and therefore transport-agnostic." Introduces a `Sender` interface
-   (`httpclient.Client` already satisfies it structurally - no changes needed there) plus
-   `CorrelationDecorator` (writes `x-correlation-id` per wire-contracts.md §2 when the caller
-   hasn't already set one) and `RetryDecorator` (retries a `ServiceUnavailable` result -
-   wire-contracts.md §3's own "transient... retryable" status - with backoff).
-2. **CORS middleware.** A portable, stdlib-only `Middleware` for HTTP-fronted services -
+1. **CORS middleware.** A portable, stdlib-only `Middleware` for HTTP-fronted services -
    origin/scheme/port matching, `Access-Control-Expose-Headers`, wildcard header support,
    preflight handling - mirroring the main repo's own portable CORS middleware design.
-3. **`benzenetest` package - in-process test host.** A small fluent helper so an application's
+2. **`benzenetest` package - in-process test host.** A small fluent helper so an application's
    *own* tests can invoke a registered handler or a full pipeline directly (build a request,
    run it, assert on the `Result`) without spinning up real HTTP - mirroring `Benzene.Testing`/
    `BenzeneTestHost` in the main repo. This is about DX for *consumers* of this library, not
