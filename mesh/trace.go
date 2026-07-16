@@ -81,7 +81,10 @@ func TraceMiddleware(info ServiceInfo, exporter Exporter) benzene.Middleware {
 			CorrelationID: ic.Headers["x-correlation-id"],
 		}
 
-		err := next(ctx)
+		// The span rides on the context so a handler can propagate it onto outbound calls
+		// (SpanFromContext + Span.Traceparent) - the join that lets a collector derive
+		// consumer edges from parentage.
+		err := next(contextWithSpan(ctx, Span{TraceID: traceID, SpanID: event.SpanID}))
 
 		event.DurationMs = float64(time.Since(started)) / float64(time.Millisecond)
 		if ic.Result != nil {

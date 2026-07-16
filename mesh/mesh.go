@@ -4,8 +4,10 @@
 // registered handler types, and the contract hash that makes drift detectable
 // (schema.go) - a reserved-topic interception middleware that serves that descriptor,
 // and a trace middleware (trace.go) that turns every pipeline invocation into a semantic
-// TraceEvent handed to an Exporter. The push exporter and the meshd collector are later
-// phases.
+// TraceEvent handed to an Exporter - either the zero-setup LogExporter (exporter.go) or
+// the batching PushExporter (push.go) that feeds a collector over the mesh:* wire topics
+// (wire.go), with span propagation for cross-service trace joins (span.go). The meshd
+// package implements the collector side.
 //
 // Every feed this package provides is independent and optional, and unavailability
 // degrades the mesh rather than the service. A deployment that provisions only the trace
