@@ -90,10 +90,7 @@ type httpV1Response struct {
 // codes via httpstatus.ToHTTP, dispatched through envelope.Dispatch exactly like
 // httpbinding.Handler.
 func HTTPHandler(builder *benzene.ApplicationBuilder, routes []httpbinding.Route) HandlerFunc {
-	byKey := make(map[string]benzene.Topic, len(routes))
-	for _, route := range routes {
-		byKey[routeKey(route.Method, route.Path)] = route.Topic
-	}
+	table := httpbinding.NewRouteTable(routes)
 
 	return func(ctx context.Context, event json.RawMessage) (json.RawMessage, error) {
 		var req httpEvent
@@ -108,7 +105,7 @@ func HTTPHandler(builder *benzene.ApplicationBuilder, routes []httpbinding.Route
 			path = req.RawPath
 		}
 
-		topic, ok := byKey[routeKey(method, path)]
+		topic, params, ok := table.Match(method, path)
 		if !ok {
 			return marshalResponse(&req, http.StatusNotFound, nil, "not found")
 		}
@@ -122,9 +119,17 @@ func HTTPHandler(builder *benzene.ApplicationBuilder, routes []httpbinding.Route
 			body = string(decoded)
 		}
 
+		headers := requestHeaders(&req)
+		if headers == nil && len(params) > 0 {
+			headers = make(map[string]string, len(params))
+		}
+		for name, value := range params {
+			headers["route-"+name] = value
+		}
+
 		resp := envelope.Dispatch(ctx, builder.Pipeline, builder.Container, wire.Request{
 			Topic:   topic.String(),
-			Headers: requestHeaders(&req),
+			Headers: headers,
 			Body:    body,
 		})
 
@@ -173,8 +178,4 @@ func marshalResponse(req *httpEvent, status int, headers map[string]string, body
 		}
 	}
 	return json.Marshal(resp)
-}
-
-func routeKey(method, path string) string {
-	return strings.ToUpper(method) + " " + path
 }

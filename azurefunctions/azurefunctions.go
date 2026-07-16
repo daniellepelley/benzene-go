@@ -21,7 +21,6 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"strings"
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/envelope"
@@ -64,10 +63,7 @@ type httpOutputBinding struct {
 // which is independent of any public "route" property that function.json declares; Route.Path
 // here is about the internal host<->handler contract, not the public URL.
 func Handler(builder *benzene.ApplicationBuilder, routes []httpbinding.Route) http.Handler {
-	byKey := make(map[string]benzene.Topic, len(routes))
-	for _, route := range routes {
-		byKey[routeKey(route.Method, route.Path)] = route.Topic
-	}
+	table := httpbinding.NewRouteTable(routes)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -90,15 +86,23 @@ func Handler(builder *benzene.ApplicationBuilder, routes []httpbinding.Route) ht
 			}
 		}
 
-		topic, ok := byKey[routeKey(trigger.Method, r.URL.Path)]
+		topic, params, ok := table.Match(trigger.Method, r.URL.Path)
 		if !ok {
 			writeInvocationResponse(w, http.StatusNotFound, "not found", nil)
 			return
 		}
 
+		headers := trigger.Headers
+		if headers == nil && len(params) > 0 {
+			headers = make(map[string]string, len(params))
+		}
+		for name, value := range params {
+			headers["route-"+name] = value
+		}
+
 		resp := envelope.Dispatch(r.Context(), builder.Pipeline, builder.Container, wire.Request{
 			Topic:   topic.String(),
-			Headers: trigger.Headers,
+			Headers: headers,
 			Body:    trigger.Body,
 		})
 
@@ -124,8 +128,4 @@ func writeInvocationResponse(w http.ResponseWriter, statusCode int, body string,
 	w.Header().Set("content-type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(data)
-}
-
-func routeKey(method, path string) string {
-	return strings.ToUpper(method) + " " + path
 }

@@ -24,32 +24,45 @@ import (
 )
 
 // Route maps one (method, path) pair to a topic - the routing rule transport-bindings.md §1.2
-// calls for. Path matching is an exact string match against r.URL.Path; this MVP has no
-// path-parameter templating (see README's scope note).
+// calls for. A Path is matched segment-wise against r.URL.Path: a literal segment must match
+// exactly, and a "{name}" segment captures that (non-empty) path segment as a route
+// parameter, delivered to the pipeline as the wire header "route-<name>" (lower-cased). A
+// route with no "{name}" segments is an exact string match, and exact routes always win over
+// templated ones; templated routes are tried in registration order. There are no multi-
+// segment wildcards - a parameter matches exactly one segment.
+//
+// The "route-" prefix is written after the inbound HTTP headers are flattened, so a client
+// sending a literal "route-id" header can never spoof a path parameter.
 type Route struct {
 	Method string
 	Path   string
 	Topic  benzene.Topic
 }
 
-// Handler builds a native HTTP entry point: an incoming request is matched against routes,
-// dispatched through builder's pipeline (via envelope.Dispatch), and the result mapped back to
-// a real HTTP status code (httpstatus.ToHTTP) and JSON body.
+// templateRoute is a pre-split Route whose Path contains "{name}" segments.
+type templateRoute struct {
+	method   string
+	segments []string
+	topic    benzene.Topic
+}
+
+// Handler builds a native HTTP entry point: an incoming request is matched against routes
+// (see Route for the matching rules), dispatched through builder's pipeline (via
+// envelope.Dispatch), and the result mapped back to a real HTTP status code
+// (httpstatus.ToHTTP) and JSON body.
 //
 // Scope: one DI scope per request (transport-bindings.md §1.6). Cancellation: the request's
 // own context (its Done channel fires on client disconnect or server shutdown) - core-concepts
 // §4's "no cancellation parameter on the pipeline signature, it rides on ctx" rule.
 //
-// Response headers: not yet supported beyond content-type - InvocationContext carries no
-// outbound header slot in this MVP (see README's scope note).
+// Response headers: headers set during the invocation - by middleware on
+// InvocationContext.ResponseHeaders, or by a handler via benzene.SetResponseHeader - come
+// back on the wire.Response and are written as real HTTP response headers here.
 func Handler(builder *benzene.ApplicationBuilder, routes []Route) http.Handler {
-	byKey := make(map[string]benzene.Topic, len(routes))
-	for _, route := range routes {
-		byKey[routeKey(route.Method, route.Path)] = route.Topic
-	}
+	table := NewRouteTable(routes)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		topic, ok := byKey[routeKey(r.Method, r.URL.Path)]
+		topic, params, ok := table.Match(r.Method, r.URL.Path)
 		if !ok {
 			http.NotFound(w, r)
 			return
@@ -61,13 +74,91 @@ func Handler(builder *benzene.ApplicationBuilder, routes []Route) http.Handler {
 			return
 		}
 
+		headers := headersFrom(r.Header)
+		for name, value := range params {
+			headers["route-"+name] = value
+		}
+
 		resp := envelope.Dispatch(r.Context(), builder.Pipeline, builder.Container, wire.Request{
 			Topic:   topic.String(),
-			Headers: headersFrom(r.Header),
+			Headers: headers,
 			Body:    string(body),
 		})
 		writeNativeResponse(w, resp)
 	})
+}
+
+// RouteTable is a compiled set of Routes. It exists as an exported type so every binding
+// that routes (method, path) pairs shares one matching implementation - httpbinding itself,
+// awslambda.HTTPHandler, and azurefunctions.Handler all accept []Route and must agree on
+// what a Route means.
+type RouteTable struct {
+	exact     map[string]benzene.Topic
+	templated []templateRoute
+}
+
+// NewRouteTable compiles routes: paths without "{" into the exact-match table, the rest into
+// the templated list (in registration order).
+func NewRouteTable(routes []Route) *RouteTable {
+	table := &RouteTable{exact: make(map[string]benzene.Topic, len(routes))}
+	for _, route := range routes {
+		if strings.Contains(route.Path, "{") {
+			table.templated = append(table.templated, templateRoute{
+				method:   strings.ToUpper(route.Method),
+				segments: strings.Split(route.Path, "/"),
+				topic:    route.Topic,
+			})
+			continue
+		}
+		table.exact[routeKey(route.Method, route.Path)] = route.Topic
+	}
+	return table
+}
+
+// Match resolves (method, path) per Route's rules: the exact table first, then the templated
+// routes in registration order. params holds any captured "{name}" segments (nil when the
+// match was exact or captured nothing) - the caller writes them as "route-<name>" wire
+// headers after flattening the inbound transport headers, so they can't be spoofed.
+func (t *RouteTable) Match(method, path string) (benzene.Topic, map[string]string, bool) {
+	if topic, ok := t.exact[routeKey(method, path)]; ok {
+		return topic, nil, true
+	}
+	for _, route := range t.templated {
+		if params, ok := matchTemplate(route, method, path); ok {
+			return route.topic, params, true
+		}
+	}
+	return benzene.Topic{}, nil, false
+}
+
+// matchTemplate matches path against one templated route. A "{name}" segment captures its
+// (non-empty) path segment; a malformed or empty template segment ("{}", "{x") is treated as
+// a literal. Parameter names are lower-cased for the "route-<name>" header.
+func matchTemplate(route templateRoute, method, path string) (map[string]string, bool) {
+	if route.method != strings.ToUpper(method) {
+		return nil, false
+	}
+	segments := strings.Split(path, "/")
+	if len(segments) != len(route.segments) {
+		return nil, false
+	}
+	var params map[string]string
+	for i, pattern := range route.segments {
+		if len(pattern) > 2 && strings.HasPrefix(pattern, "{") && strings.HasSuffix(pattern, "}") {
+			if segments[i] == "" {
+				return nil, false
+			}
+			if params == nil {
+				params = map[string]string{}
+			}
+			params[strings.ToLower(pattern[1:len(pattern)-1])] = segments[i]
+			continue
+		}
+		if pattern != segments[i] {
+			return nil, false
+		}
+	}
+	return params, true
 }
 
 // Well-known paths from the default service standard (the main repo's
