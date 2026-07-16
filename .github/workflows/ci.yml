@@ -1,8 +1,11 @@
-# Builds, vets, and tests every package in this module: a gofmt check, go vet, go build ./...,
+# Builds, vets, and tests every module in this repo: a gofmt check, go vet, go build ./...,
 # go test ./... -race -cover, and a cross-compile smoke check for each cloud example's actual
 # deployment target (Lambda: linux/arm64, Azure/Cloud Run: linux/amd64) so a change that breaks
 # cross-compilation for a target this runner's own GOOS/GOARCH can't build natively is still
-# caught. See README.md for the local equivalent of each step.
+# caught. This is a multi-module repo (go.work) - the root module plus awssqs/ (its own module,
+# since it's the one package with a third-party dependency); vet/build/test steps run against
+# both explicitly, since `./...` from the root does not cross a nested module boundary even in
+# workspace mode. See README.md for the local equivalent of each step.
 
 name: CI
 
@@ -36,13 +39,13 @@ jobs:
           fi
 
       - name: go vet
-        run: go vet ./...
+        run: go vet ./... ./awssqs/...
 
       - name: go build
-        run: go build ./...
+        run: go build ./... ./awssqs/...
 
       - name: go test
-        run: go test ./... -race -cover
+        run: go test ./... ./awssqs/... -race -cover
 
       - name: cross-compile cloud examples
         run: |
