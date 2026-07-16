@@ -3,11 +3,15 @@ go 1.24.7
 use (
 	.
 	./awssqs
+	./examples/aws-sqs-helloworld
 )
 
 // Scoped to this workspace only - never affects real external consumers of either module
 // (a `replace` in an individual go.mod would; one in go.work does not). Needed because once a
-// build also touches a genuinely external module (aws-sdk-go-v2, in awssqs's case), Go's module
-// graph reconciliation wants the root module's real go.mod, which isn't resolvable purely from
-// the `use` directives above until v0.1.0 is actually pushed.
-replace github.com/daniellepelley/benzene-go v0.1.0 => ./
+// build also touches a genuinely external module (aws-sdk-go-v2), Go's module graph
+// reconciliation wants these modules' real go.mod, which isn't resolvable purely from the `use`
+// directives above until they're actually tagged and pushed.
+replace (
+	github.com/daniellepelley/benzene-go v0.1.0 => ./
+	github.com/daniellepelley/benzene-go/awssqs v0.1.0 => ./awssqs
+)

@@ -1,0 +1,61 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  benzene-go aws-sqs-helloworld example - a publisher Lambda (Function URL) that forwards
+  requests to an SQS queue, and a consumer Lambda triggered by that queue.
+
+Globals:
+  Function:
+    Timeout: 5
+    MemorySize: 128
+    Architectures:
+      - arm64
+
+Resources:
+  GreetQueue:
+    Type: AWS::SQS::Queue
+
+  PublisherFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      FunctionUrlConfig:
+        AuthType: NONE
+      Environment:
+        Variables:
+          QUEUE_URL: !Ref GreetQueue
+      Policies:
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt GreetQueue.QueueName
+    Metadata:
+      DockerTag: aws-sqs-helloworld-publisher
+      DockerContext: ../..
+      Dockerfile: examples/aws-sqs-helloworld/Dockerfile.publisher
+
+  ConsumerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      Policies:
+        - SQSPollerPolicy:
+            QueueName: !GetAtt GreetQueue.QueueName
+      Events:
+        GreetQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt GreetQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+    Metadata:
+      DockerTag: aws-sqs-helloworld-consumer
+      DockerContext: ../..
+      Dockerfile: examples/aws-sqs-helloworld/Dockerfile.consumer
+
+Outputs:
+  PublisherFunctionUrl:
+    Description: The Function URL to POST /greet to
+    Value: !GetAtt PublisherFunctionUrl.FunctionUrl
+  QueueUrl:
+    Description: The SQS queue URL
+    Value: !Ref GreetQueue

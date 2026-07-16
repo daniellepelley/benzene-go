@@ -2,10 +2,12 @@
 # go test ./... -race -cover, and a cross-compile smoke check for each cloud example's actual
 # deployment target (Lambda: linux/arm64, Azure/Cloud Run: linux/amd64) so a change that breaks
 # cross-compilation for a target this runner's own GOOS/GOARCH can't build natively is still
-# caught. This is a multi-module repo (go.work) - the root module plus awssqs/ (its own module,
-# since it's the one package with a third-party dependency); vet/build/test steps run against
-# both explicitly, since `./...` from the root does not cross a nested module boundary even in
-# workspace mode. See README.md for the local equivalent of each step.
+# caught. This is a multi-module repo (go.work) - the root module, awssqs/ (its own module,
+# since it's the one package with a third-party dependency), and
+# examples/aws-sqs-helloworld/ (its own module, since it depends on both of the above - putting
+# it in either would create a cycle); vet/build/test steps run against all three explicitly,
+# since `./...` from the root does not cross a nested module boundary even in workspace mode.
+# See README.md for the local equivalent of each step.
 
 name: CI
 
@@ -39,13 +41,13 @@ jobs:
           fi
 
       - name: go vet
-        run: go vet ./... ./awssqs/...
+        run: go vet ./... ./awssqs/... ./examples/aws-sqs-helloworld/...
 
       - name: go build
-        run: go build ./... ./awssqs/...
+        run: go build ./... ./awssqs/... ./examples/aws-sqs-helloworld/...
 
       - name: go test
-        run: go test ./... ./awssqs/... -race -cover
+        run: go test ./... ./awssqs/... ./examples/aws-sqs-helloworld/... -race -cover
 
       - name: cross-compile cloud examples
         run: |
@@ -53,3 +55,5 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/aws-lambda-helloworld ./examples/aws-lambda-helloworld
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/azure-functions-helloworld ./examples/azure-functions-helloworld
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/gcp-cloudrun-helloworld ./examples/gcp-cloudrun-helloworld
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/aws-sqs-consumer ./examples/aws-sqs-helloworld/consumer
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/aws-sqs-publisher ./examples/aws-sqs-helloworld/publisher
