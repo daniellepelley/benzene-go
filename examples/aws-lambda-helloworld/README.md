@@ -19,6 +19,18 @@ sam deploy --guided
 Function URL with public (`AuthType: NONE`) access - see `template.yaml`. The output includes
 the Function URL to curl.
 
+## CI/CD
+
+`.github/workflows/deploy-aws-lambda-helloworld.yml` runs the same `sam build && sam deploy` on
+every push to `main` that touches this example (or a package it depends on). It's gated on
+`secrets.AWS_ACCESS_KEY_ID` being set - the job is **skipped** (not failed) until you configure:
+
+| Name | Kind | Value |
+|---|---|---|
+| `AWS_ACCESS_KEY_ID` | secret | An IAM access key with permission to deploy the stack (Lambda, ECR, IAM role creation, CloudFormation) |
+| `AWS_SECRET_ACCESS_KEY` | secret | The matching secret key |
+| `AWS_REGION` | variable (optional) | Deploy region; defaults to `us-east-1` |
+
 ## Try it
 
 ```
@@ -54,4 +66,6 @@ actually deployed or `docker build`-ed end to end. What *was* verified locally:
 
 Deploying for real additionally needs: the container image to actually push/pull (this
 sandbox's network policy blocks the public ECR/Docker Hub registries this Dockerfile pulls
-from), and a real AWS account for `sam deploy` to target.
+from), and a real AWS account for `sam deploy` to target. The deploy workflow's YAML was
+syntax-checked but has never actually run - it will start running for real the first time you
+push to `main` after adding the secrets above.

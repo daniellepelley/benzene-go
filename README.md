@@ -86,9 +86,13 @@ a type that can't actually fail to marshal). Run `go test ./... -cover` to see c
 | Google Cloud | Cloud Run | None - Cloud Run's contract is "listen on `$PORT`", which `httpbinding` + `net/http` already satisfies |
 
 Each `examples/*-helloworld` directory's README documents the concrete deploy steps and states
-what was and wasn't verified in this repo's own CI sandbox (none of the three have live cloud
-credentials, so deployment itself isn't automated here - only the code, cross-compilation, and
-unit tests are).
+what was and wasn't verified in this repo's own CI sandbox. Each also has a matching GitHub
+Actions workflow (`deploy-aws-lambda-helloworld.yml`, `deploy-azure-functions-helloworld.yml`,
+`deploy-gcp-cloudrun-helloworld.yml`) that runs that same deploy on every push to `main`
+touching it - each is gated on its provider's credential secret being set, so the job shows as
+**skipped** (not failed) until you add the secrets/variables listed in that example's own
+README. None of the three have been run for real from this repo (no live cloud credentials in
+this sandbox) - only the code, cross-compilation, and unit tests have been verified here.
 
 ## Scope
 

@@ -1,0 +1,59 @@
+# Builds and deploys examples/azure-functions-helloworld as an Azure Functions custom handler
+# (zip deploy - see its own README for the manual equivalent and why this doesn't use a
+# container). Requires repo secret AZURE_CREDENTIALS (a service principal JSON, e.g. from
+# `az ad sp create-for-rbac --sdk-auth`) and repo variables AZURE_FUNCTIONAPP_NAME and
+# AZURE_RESOURCE_GROUP; see examples/azure-functions-helloworld/README.md's "CI/CD" section.
+# Until those are set, the job below is skipped (not failed) so this workflow merging doesn't
+# break CI on its own.
+
+name: Deploy Azure Functions helloworld
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'examples/azure-functions-helloworld/**'
+      - 'azurefunctions/**'
+      - 'envelope/**'
+      - 'httpbinding/**'
+      - 'httpstatus/**'
+      - 'wire/**'
+      - '*.go'
+      - '.github/workflows/deploy-azure-functions-helloworld.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    if: ${{ secrets.AZURE_CREDENTIALS != '' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: examples/azure-functions-helloworld
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build custom handler binary
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o handler .
+          chmod +x handler
+
+      - name: Package deployment zip
+        run: zip -r ../../deploy.zip host.json Greet handler
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy zip to Function App
+        run: |
+          az functionapp deployment source config-zip \
+            --name "${{ vars.AZURE_FUNCTIONAPP_NAME }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --src ../../deploy.zip

@@ -1,0 +1,60 @@
+# Builds and deploys examples/gcp-cloudrun-helloworld to Google Cloud Run (see its own README
+# for the manual equivalent of every step here, and why Cloud Run over Cloud Functions Gen2).
+# Requires repo secret GCP_SA_KEY (a service account JSON key with Artifact Registry Writer and
+# Cloud Run Admin roles) and repo variables GCP_PROJECT_ID, GCP_REGION, and GCP_ARTIFACT_REPO
+# (an existing Artifact Registry Docker repository); see
+# examples/gcp-cloudrun-helloworld/README.md's "CI/CD" section. Until those are set, the job
+# below is skipped (not failed) so this workflow merging doesn't break CI on its own.
+
+name: Deploy GCP Cloud Run helloworld
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'examples/gcp-cloudrun-helloworld/**'
+      - 'envelope/**'
+      - 'httpbinding/**'
+      - 'httpstatus/**'
+      - 'wire/**'
+      - '*.go'
+      - '.github/workflows/deploy-gcp-cloudrun-helloworld.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    if: ${{ secrets.GCP_SA_KEY != '' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${{ vars.GCP_REGION }}-docker.pkg.dev" --quiet
+
+      - name: Build image
+        # Build context is the repo root - this example imports sibling packages in the module.
+        run: |
+          docker build \
+            -f examples/gcp-cloudrun-helloworld/Dockerfile \
+            -t "${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REPO }}/gcp-cloudrun-helloworld:${{ github.sha }}" \
+            .
+
+      - name: Push image
+        run: docker push "${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REPO }}/gcp-cloudrun-helloworld:${{ github.sha }}"
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy gcp-cloudrun-helloworld \
+            --image "${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REPO }}/gcp-cloudrun-helloworld:${{ github.sha }}" \
+            --region "${{ vars.GCP_REGION }}" \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --allow-unauthenticated

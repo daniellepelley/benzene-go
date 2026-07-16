@@ -33,6 +33,20 @@ func azure functionapp publish <your-function-app-name> --custom
 `func ... --custom` zip-deploys this directory (host.json, local.settings.json is excluded,
 `Greet/`, and the `handler` binary) as-is - no container required for this path.
 
+## CI/CD
+
+`.github/workflows/deploy-azure-functions-helloworld.yml` builds the handler binary and zip-
+deploys it (via `az functionapp deployment source config-zip`, the CLI equivalent of `func
+azure functionapp publish --custom`) on every push to `main` that touches this example or a
+package it depends on. It's gated on `secrets.AZURE_CREDENTIALS` being set - the job is
+**skipped** (not failed) until you configure:
+
+| Name | Kind | Value |
+|---|---|---|
+| `AZURE_CREDENTIALS` | secret | A service principal JSON, e.g. from `az ad sp create-for-rbac --sdk-auth --role contributor --scopes /subscriptions/<id>/resourceGroups/<rg>` |
+| `AZURE_FUNCTIONAPP_NAME` | variable | The target Function App's name |
+| `AZURE_RESOURCE_GROUP` | variable | The resource group it lives in |
+
 ### Container deployment
 
 Azure Functions also supports [deploying as a Linux
@@ -79,3 +93,6 @@ What *was* verified locally:
   full custom-handler contract - matched/unmatched routes, malformed payloads, a missing `req`
   trigger - all asserting the outer HTTP 200 / `Outputs.res.statusCode` split the real Functions
   host relies on.
+
+The deploy workflow's YAML was syntax-checked but has never actually run - it will start
+running for real the first time you push to `main` after adding the secrets above.

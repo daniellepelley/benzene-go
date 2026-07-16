@@ -39,6 +39,13 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
   the concrete deploy steps and exactly what was/wasn't verified without live cloud credentials.
   Google Cloud has no dedicated package (see `gcp-cloudrun-helloworld/README.md` for why Cloud
   Run needs none) - don't add one without a concrete reason `httpbinding` alone can't cover.
+- `.github/workflows/ci.yml` - build+test on every push/PR (gofmt, vet, build, race+cover test,
+  plus a cross-compile smoke check per cloud example's real target). `.github/workflows/
+  deploy-<provider>-helloworld.yml` (one per cloud example) - each gated on that provider's
+  credential secret being set (`if: secrets.X != ''` at the job level) so it shows as skipped,
+  not failed, until the repo owner configures deployment credentials. When adding a new cloud
+  example, add its matching deploy workflow (with the same secret-gate pattern) in the same
+  commit, and document the required secrets/variables in that example's own README.
 
 ## Before making changes
 

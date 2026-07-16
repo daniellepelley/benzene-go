@@ -39,6 +39,19 @@ directory both as the Docker build context *and* where it looks for a Dockerfile
 example's Dockerfile needs the whole module as context, the explicit build/push/deploy above is
 what actually works here.)
 
+## CI/CD
+
+`.github/workflows/deploy-gcp-cloudrun-helloworld.yml` runs the same build/push/deploy on every
+push to `main` that touches this example. It's gated on `secrets.GCP_SA_KEY` being set - the
+job is **skipped** (not failed) until you configure:
+
+| Name | Kind | Value |
+|---|---|---|
+| `GCP_SA_KEY` | secret | A service account JSON key with the Artifact Registry Writer and Cloud Run Admin roles |
+| `GCP_PROJECT_ID` | variable | The target GCP project ID |
+| `GCP_REGION` | variable | e.g. `us-central1` |
+| `GCP_ARTIFACT_REPO` | variable | An existing Artifact Registry Docker repository in that project/region |
+
 ## Try it
 
 ```
@@ -59,3 +72,6 @@ actually deployed. What *was* verified locally:
   behavior (see `main_test.go`).
 - `CGO_ENABLED=0 GOOS=linux go build -o server ./examples/gcp-cloudrun-helloworld` - the exact
   command the Dockerfile's build stage runs - compiles cleanly.
+
+The deploy workflow's YAML was syntax-checked but has never actually run - it will start
+running for real the first time you push to `main` after adding the secrets above.
