@@ -72,10 +72,10 @@ nothing added to your dependency graph and nothing new to operate.
 
 Kept current in `ROADMAP.md`; the headline ones for a multi-cloud evaluation:
 
-- **Broker breadth.** SQS, SNS, Pub/Sub, and Kafka are covered (plus anything
-  CloudEvents-shaped via the `cloudevents` package - Event Grid, Knative, EventBridge);
-  gRPC still needs a dependency decision, and Watermill or Dapr cover more brokers
-  (RabbitMQ, NATS, Redis Streams) today.
+- **Broker breadth.** SQS, SNS, EventBridge, Pub/Sub, Kafka, and unary gRPC are all covered
+  (plus anything CloudEvents-shaped via the `cloudevents` package - Event Grid, Knative,
+  EventBridge); Watermill or Dapr still cover more brokers (RabbitMQ, NATS, Redis Streams)
+  today, and `grpcbinding` is unary-only - gRPC's streaming shapes remain a documented gap.
 - **The deploy workflows are real but unexercised** - each cloud example documents exactly
   what was and wasn't verified without live credentials. Nothing here claims a deploy that
   didn't happen.

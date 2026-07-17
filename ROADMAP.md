@@ -10,6 +10,8 @@ delivery order - just the current honest picture, kept up to date as things land
   handler-level resolution), the three-phase `App` lifecycle.
 - `wire` - the transport-neutral envelope.
 - `httpstatus` - the Benzene<->HTTP status mapping tables (conformance-verified).
+- `grpcstatus` - the Benzene<->gRPC status mapping tables (conformance-verified), in raw
+  numeric gRPC status codes so it stays zero-dependency like `httpstatus`.
 - `envelope` - `wire.Request` -> `Pipeline` -> `wire.Response` dispatch, shared by every
   HTTP-shaped binding below.
 - `httpbinding` - native REST-style HTTP binding + envelope-over-HTTP.
@@ -93,6 +95,21 @@ delivery order - just the current honest picture, kept up to date as things land
   `github.com/segmentio/kafka-go` (chosen over `franz-go` for its narrow Reader/Writer
   surface, which this repo's fake-behind-an-interface test style wraps cleanly) - a broker
   wire protocol is not reasonably hand-rollable, hence the module split.
+- `grpcbinding` - gRPC binding, in its **own Go module** (see `RELEASING.md`), matching the
+  main repo's `Benzene.Grpc` (+ `.AspNet`)/`Benzene.Grpc.Client` and
+  `transport-bindings.md`'s gRPC entry: **unary RPCs only** - streaming (client/server/duplex)
+  is a documented gap, not an oversight, left for a later addition (see the package doc for
+  why). `UnaryServerInterceptor` wraps an ordinary `*grpc.Server` exactly like any other
+  interceptor and claims only the methods named in its `Route` table (full method path,
+  case-insensitive) - unmatched methods fall through to the real generated service untouched,
+  matching "the binding claims routes, it doesn't own the server" precisely; the app still
+  writes and registers real protoc-generated service code (no reflection/attribute-scanning
+  codegen, consistent with this repo's explicit-registration stance). Body is proto3-JSON
+  bridged both directions; the `benzene-status` trailer is set unconditionally (several
+  Benzene statuses collapse onto one gRPC code); an outbound `Client` satisfying
+  `client.Sender` recovers the precise status from that trailer, falling back to
+  `grpcstatus.FromGRPC` when a peer doesn't set one. Needs `google.golang.org/grpc` (no gRPC
+  in the Go standard library) and `google.golang.org/protobuf` (proto3-JSON).
 - `conformance` - runs this port against the main repo's vendored language-neutral fixtures.
 - Examples: `helloworld` (plain HTTP + DI + health check), `aws-lambda-helloworld`,
   `azure-functions-helloworld`, `gcp-cloudrun-helloworld` (no new package needed for GCP - see
@@ -117,9 +134,6 @@ Per `CLAUDE.md`: no third-party dependency without asking first. These are real,
 extensions, but each needs an explicit yes on a specific dependency before starting, not a
 unilateral add:
 
-- **gRPC binding.** Go has no gRPC support in the standard library at all; this needs
-  `google.golang.org/grpc` + protobuf codegen tooling, a materially bigger dependency and
-  build-step footprint than anything else in this repo.
 - **DynamoDB Streams binding.** EventBridge is now done (`awseventbridge`, see Done above);
   a Streams-triggered Lambda is the same shape as `awssqs`'s inbound handler (a Records
   batch with `batchItemFailures` support) - the inbound side is hand-rollable, and there is

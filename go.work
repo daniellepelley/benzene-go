@@ -8,6 +8,7 @@ use (
 	./diagnostics
 	./examples/aws-sns-helloworld
 	./examples/aws-sqs-helloworld
+	./grpcbinding
 	./kafka
 )
 
@@ -22,6 +23,7 @@ replace (
 	github.com/daniellepelley/benzene-go/awssns v0.1.0 => ./awssns
 	github.com/daniellepelley/benzene-go/awssqs v0.1.0 => ./awssqs
 	github.com/daniellepelley/benzene-go/diagnostics v0.1.0 => ./diagnostics
+	github.com/daniellepelley/benzene-go/grpcbinding v0.1.0 => ./grpcbinding
 	github.com/daniellepelley/benzene-go/kafka v0.1.0 => ./kafka
 )
 

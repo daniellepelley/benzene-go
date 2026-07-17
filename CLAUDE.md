@@ -25,6 +25,10 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
   rest of this module** - keep it that way (see the package doc comment).
 - `httpstatus/` - the Benzene<->HTTP status mapping tables, cross-checked against
   `docs/specification/conformance/http-status-mapping.json` in the main repo.
+- `grpcstatus/` - the Benzene<->gRPC status mapping tables, cross-checked against
+  `docs/specification/conformance/grpc-status-mapping.json` in the main repo. Raw numeric
+  gRPC status codes (not `google.golang.org/grpc/codes.Code`), so it stays zero-dependency
+  like `httpstatus`; `grpcbinding` wraps the result as `codes.Code(...)`.
 - `envelope/` - dispatches a `wire.Request` through a `Pipeline`, shared by `httpbinding`,
   `httpclient`, and `conformance`.
 - `httpbinding/` - the HTTP transport binding (native + envelope-over-HTTP entry points).
@@ -98,6 +102,19 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
   `client.Sender` (writes to the Kafka topic named after the Benzene topic, per message).
   Both halves depend on narrow interfaces (`MessageSource`, `MessageWriter`) so tests run
   against fakes, no live broker.
+- `grpcbinding/` - gRPC binding, in **its own Go module** (`grpcbinding/go.mod`, needs
+  `google.golang.org/grpc` + `google.golang.org/protobuf`) - **unary RPCs only**, a documented
+  scope decision (see the package doc), not client/server/duplex streaming. Matches
+  `Benzene.Grpc`(`.AspNet`)/`Benzene.Grpc.Client` exactly: `UnaryServerInterceptor` wraps an
+  ordinary `*grpc.Server` and claims only the methods in its `Route` table (full method path,
+  case-insensitive) - unclaimed methods fall through to the real generated service untouched
+  ("the binding claims routes, it doesn't own the server"). Body is proto3-JSON bridged both
+  directions via `protojson`; the `benzene-status` trailer is always set (several Benzene
+  statuses collapse onto one gRPC code); `Client` satisfies `client.Sender` and recovers the
+  precise status from that trailer, falling back to `grpcstatus.FromGRPC` otherwise. No
+  reflection anywhere on the dispatch path - `Route.NewResponse`/`ClientRoute.NewRequest` are
+  explicit factories (Go has no runtime type parameter to construct an arbitrary registered
+  message from, unlike .NET generics).
 - `conformance/` - the fixture runner; `testdata/*.json` are vendored copies from the main
   repo's `docs/specification/conformance/` (see `conformance/README.md` for how to re-sync).
 - `examples/` - runnable example services: `helloworld` (plain HTTP),
@@ -112,9 +129,9 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
   `aws-sns-helloworld` are each their own module (depends on both the root module and its
   respective binding - would be a cycle inside either).
 - `go.work` - ties the root module, `awssqs/`, `awssns/`, `awseventbridge/`, `kafka/`,
-  `diagnostics/`, `examples/aws-sqs-helloworld/`, and `examples/aws-sns-helloworld/` together
-  for local development (see `RELEASING.md`). Its `replace` lines are workspace-scoped only
-  and never affect real external consumers.
+  `diagnostics/`, `grpcbinding/`, `examples/aws-sqs-helloworld/`, and
+  `examples/aws-sns-helloworld/` together for local development (see `RELEASING.md`). Its
+  `replace` lines are workspace-scoped only and never affect real external consumers.
 - `.github/workflows/ci.yml` - build+test on every push/PR (gofmt, vet, build, race+cover test,
   plus a cross-compile smoke check per cloud example's real target). `.github/workflows/
   deploy-<provider>-helloworld.yml` (one per cloud example) - each gated on that provider's
@@ -140,11 +157,12 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
   standard library covers everything there (generics for type-safe registration with
   type-erased storage, `context.Context` for cancellation/invocation-scoped values,
   `encoding/json` for the wire format) - zero dependencies is itself a selling point over the
-  .NET original. `awssqs`, `awssns`, `awseventbridge`, `kafka`, and `diagnostics` are the
-  deliberate exceptions (needing `aws-sdk-go-v2` service clients for signed API calls,
-  `segmentio/kafka-go` for the broker wire protocol, and `go.opentelemetry.io/otel` for the
-  OTel API) and each lives in its own module specifically so that exception doesn't spread.
-  Ask before
+  .NET original. `awssqs`, `awssns`, `awseventbridge`, `kafka`, `diagnostics`, and
+  `grpcbinding` are the deliberate exceptions (needing `aws-sdk-go-v2` service clients for
+  signed API calls, `segmentio/kafka-go` for the broker wire protocol,
+  `go.opentelemetry.io/otel` for the OTel API, and `google.golang.org/grpc` +
+  `google.golang.org/protobuf` for gRPC, which has no standard-library support at all) and
+  each lives in its own module specifically so that exception doesn't spread. Ask before
   adding any other dependency; if one is approved, give it its own module rather than adding it
   to the root's `go.mod` - see `RELEASING.md`.
 - Generics: used where they buy real type safety (`Handler[TReq, TRes]`, `Result[T]`,
@@ -186,8 +204,9 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
 
 - Run `gofmt -w .` before every commit; CI fails on unformatted files.
 - Run `go vet ./... ./awssqs/... ./awssns/... ./awseventbridge/... ./kafka/...
-  ./diagnostics/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/... &&
-  go build (same paths) && go test (same paths) -race -cover` before considering a task
+  ./diagnostics/... ./grpcbinding/... ./examples/aws-sqs-helloworld/...
+  ./examples/aws-sns-helloworld/... && go build (same paths) && go test (same paths) -race
+  -cover` before considering a task
   complete - `./...` from the root does not cross a nested
   module boundary even with `go.work` present, so the nested modules need their own explicit
   path. Every non-test-only package should sit at 100% coverage, or just under it with the gap
