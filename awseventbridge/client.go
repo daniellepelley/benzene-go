@@ -10,7 +10,6 @@ import (
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/client"
-	"github.com/daniellepelley/benzene-go/wire"
 )
 
 // PutEventsAPI is the single EventBridge SDK method Client depends on. Depending on this
@@ -41,27 +40,19 @@ func NewClient(api PutEventsAPI, source string) *Client {
 	return &Client{API: api, Source: source}
 }
 
-// Send publishes one entry: detail-type carries the topic (so rules can pattern-match per
-// Benzene topic) and detail carries the full wire envelope - the only channel wire headers
-// can travel on, unwrapped by Handler on the consuming side (see the package doc). A
-// successful publish maps to StatusAccepted; a transport-level failure - a Go error or a
-// non-zero FailedEntryCount, which PutEvents reports per entry without an error - maps to
-// ServiceUnavailable, matching every other Sender in this repo.
+// Send publishes one entry: DetailType is the topic, verbatim (matching Handler's inbound
+// mapping, so rules can pattern-match per Benzene topic), and Detail is message with any
+// headers embedded under EmbeddedHeadersKey (see embedDetailHeaders) - EventBridge has no
+// native per-message attributes, so that's the only channel wire headers can travel on;
+// Handler lifts them back out on the consuming side. A successful publish maps to
+// StatusAccepted; a transport-level failure - a Go error or a non-zero FailedEntryCount,
+// which PutEvents reports per entry without an error - maps to ServiceUnavailable, matching
+// every other Sender in this repo.
 func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[string]string, message []byte) benzene.Result[json.RawMessage] {
-	if headers == nil {
-		headers = map[string]string{}
-	}
-	detail, err := json.Marshal(wire.Request{Topic: topic.String(), Headers: headers, Body: string(message)})
-	if err != nil {
-		// wire.Request is plain strings and a string map - Marshal cannot fail on it in
-		// practice, but degrade to a failed send rather than panic if it somehow ever does.
-		return benzene.ServiceUnavailable[json.RawMessage]("awseventbridge: marshal failed: " + err.Error())
-	}
-
 	entry := types.PutEventsRequestEntry{
 		Source:     aws.String(c.Source),
 		DetailType: aws.String(topic.String()),
-		Detail:     aws.String(string(detail)),
+		Detail:     aws.String(embedDetailHeaders(message, headers)),
 	}
 	if c.EventBusName != "" {
 		entry.EventBusName = aws.String(c.EventBusName)
@@ -79,6 +70,45 @@ func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[stri
 		return benzene.ServiceUnavailable[json.RawMessage]("awseventbridge: put failed: " + detail)
 	}
 	return benzene.Result[json.RawMessage]{Status: benzene.StatusAccepted}
+}
+
+// embedDetailHeaders embeds headers into message under EmbeddedHeadersKey, matching the main
+// repo's EventBridgeContextConverter.BuildDetail exactly: embedding only happens when there
+// are headers to send and message parses as a JSON object (an extra field is benign for
+// non-Benzene consumers, but there is nowhere for a header object to live inside a JSON
+// array/scalar). Otherwise message is returned verbatim - dropping headers on a non-object
+// payload is deliberate, matching the reference implementation's behavior, not this port's
+// invention.
+func embedDetailHeaders(message []byte, headers map[string]string) string {
+	if len(headers) == 0 {
+		return string(message)
+	}
+
+	var detail map[string]json.RawMessage
+	if err := json.Unmarshal(message, &detail); err != nil {
+		return string(message)
+	}
+
+	embedded := make(map[string]string, len(headers))
+	for k, v := range headers {
+		embedded[k] = v
+	}
+	encodedHeaders, err := json.Marshal(embedded)
+	if err != nil {
+		// embedded is a plain string map - Marshal cannot fail on it in practice, but degrade
+		// to the unmodified message rather than panic if it somehow ever does.
+		return string(message)
+	}
+	detail[EmbeddedHeadersKey] = encodedHeaders
+
+	encodedDetail, err := json.Marshal(detail)
+	if err != nil {
+		// detail's values are either the original message's own already-valid json.RawMessage
+		// fields or encodedHeaders (just marshaled successfully above) - Marshal cannot fail
+		// here in practice, but degrade rather than panic if it somehow ever does.
+		return string(message)
+	}
+	return string(encodedDetail)
 }
 
 var _ client.Sender = (*Client)(nil)

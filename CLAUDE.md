@@ -82,11 +82,13 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
   Benzene status) as the mesh trace feed; the two compose over the same inbound traceparent.
 - `awseventbridge/` - AWS EventBridge binding, in **its own Go module**
   (`awseventbridge/go.mod`, needs `aws-sdk-go-v2/service/eventbridge` for the outbound
-  `PutEvents` client; the inbound rule-invoked `Handler` is zero-dependency). EventBridge has
-  no per-message attribute map, so `detail-type` carries the topic and `detail` carries the
-  full wire envelope (unwrapped inbound; plain details from non-Benzene producers dispatch
-  with `detail-type` as topic). Failure returns a Go error - async-invoke retry, like
-  `awssns`.
+  `PutEvents` client; the inbound rule-invoked `Handler` is zero-dependency), matching the
+  main repo's spec exactly: topic is `detail-type` verbatim, body is the raw `detail` JSON,
+  headers are `eventbridge-`-prefixed envelope metadata plus any wire headers embedded under
+  the reserved `_benzeneHeaders` key inside `detail` (EventBridge has no native per-message
+  attributes, so that's the only channel headers can travel on - embedded headers win on
+  collision). `Client` embeds `_benzeneHeaders` only when the payload is a JSON object.
+  Failure returns a Go error - async-invoke retry, like `awssns`.
 - `kafka/` - Kafka binding, in **its own Go module** (`kafka/go.mod`, needs
   `segmentio/kafka-go` - a broker wire protocol isn't hand-rollable): `Consumer` loop (one
   scope per record, explicit commits; no broker-side redelivery/DLQ exists, so failures go to

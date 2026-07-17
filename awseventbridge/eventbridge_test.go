@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	benzene "github.com/daniellepelley/benzene-go"
-	"github.com/daniellepelley/benzene-go/wire"
 )
 
 type greetRequest struct {
@@ -38,17 +37,25 @@ func newTestBuilder(t *testing.T) *benzene.ApplicationBuilder {
 	}
 }
 
-func TestHandler_EnvelopeDetailDispatches(t *testing.T) {
+func TestHandler_DetailTypeTopicDispatches(t *testing.T) {
+	// Topic is detail-type verbatim, per spec - no bolted-on "topic" attribute.
 	handler := Handler(newTestBuilder(t))
 
-	detail, err := json.Marshal(wire.Request{Topic: "greet", Headers: map[string]string{}, Body: `{"name":"Bus"}`})
-	if err != nil {
-		t.Fatalf("json.Marshal() error = %v", err)
-	}
-	event := `{"id":"evt-1","detail-type":"greet","source":"com.example.orders","detail":` + string(detail) + `}`
-
+	event := `{"id":"evt-1","detail-type":"greet","source":"com.example.orders","detail":{"name":"Bus"}}`
 	if _, err := handler(context.Background(), json.RawMessage(event)); err != nil {
 		t.Errorf("handler() error = %v, want nil for a successful dispatch", err)
+	}
+}
+
+func TestHandler_EmbeddedHeadersDontBreakRequestMapping(t *testing.T) {
+	// The reserved _benzeneHeaders key, when present, is an extra field a request mapper's
+	// deserialization simply ignores (per spec) - it must not stop the handler's own
+	// request type from binding.
+	handler := Handler(newTestBuilder(t))
+
+	event := `{"id":"evt-2","detail-type":"greet","source":"com.example.orders","detail":{"name":"Bus","_benzeneHeaders":{"x-correlation-id":"abc"}}}`
+	if _, err := handler(context.Background(), json.RawMessage(event)); err != nil {
+		t.Errorf("handler() error = %v, want nil", err)
 	}
 }
 
@@ -56,7 +63,7 @@ func TestHandler_DetailTypeTopicDispatchesRawDetail(t *testing.T) {
 	// A non-Benzene producer: detail is a plain domain object, topic from detail-type.
 	handler := Handler(newTestBuilder(t))
 
-	event := `{"id":"evt-2","detail-type":"greet","source":"aws.partner","detail":{"name":"Partner"}}`
+	event := `{"id":"evt-3","detail-type":"greet","source":"aws.partner","detail":{"name":"Partner"}}`
 	if _, err := handler(context.Background(), json.RawMessage(event)); err != nil {
 		t.Errorf("handler() error = %v, want nil", err)
 	}
@@ -67,8 +74,8 @@ func TestHandler_FailuresReturnGoError(t *testing.T) {
 		name  string
 		event string
 	}{
-		{name: "handler failure status", event: `{"id":"evt-3","detail-type":"greet","source":"s","detail":{"name":""}}`},
-		{name: "no topic resolvable", event: `{"id":"evt-4","source":"s","detail":{"name":"x"}}`},
+		{name: "handler failure status", event: `{"id":"evt-4","detail-type":"greet","source":"s","detail":{"name":""}}`},
+		{name: "no topic resolvable", event: `{"id":"evt-5","source":"s","detail":{"name":"x"}}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -87,16 +94,17 @@ func TestHandler_MalformedEventIsError(t *testing.T) {
 	}
 }
 
-func TestResolveRequest(t *testing.T) {
-	envelopeDetail, err := json.Marshal(wire.Request{
-		Topic:   "greet",
-		Headers: map[string]string{"x-correlation-id": "abc", "source": "from-envelope"},
-		Body:    `{}`,
-	})
-	if err != nil {
-		t.Fatalf("json.Marshal() error = %v", err)
-	}
+func TestHandler_FailureErrorNamesTheEvent(t *testing.T) {
+	handler := Handler(newTestBuilder(t))
 
+	event := `{"id":"evt-9","detail-type":"greet","source":"s","detail":{"name":""}}`
+	_, err := handler(context.Background(), json.RawMessage(event))
+	if err == nil || !strings.Contains(err.Error(), "evt-9") {
+		t.Errorf("handler() error = %v, want it to name event evt-9", err)
+	}
+}
+
+func TestResolveRequest(t *testing.T) {
 	tests := []struct {
 		name        string
 		rule        ruleEvent
@@ -105,27 +113,54 @@ func TestResolveRequest(t *testing.T) {
 		wantHeaders map[string]string
 	}{
 		{
-			name: "envelope detail wins - headers merge, envelope's same-name header beats the event field",
-			rule: ruleEvent{ID: "evt-1", DetailType: "other", Source: "com.example", Detail: envelopeDetail},
-			// The envelope's topic wins over detail-type: the envelope is the Benzene-native
-			// channel and carries strictly more information.
-			wantTopic:   "greet",
-			wantBody:    `{}`,
-			wantHeaders: map[string]string{"id": "evt-1", "source": "from-envelope", "x-correlation-id": "abc"},
+			name: "full envelope metadata becomes eventbridge- prefixed headers",
+			rule: ruleEvent{
+				ID: "evt-1", DetailType: "greet", Source: "com.example",
+				Account: "123456789012", Region: "us-east-1", Time: "2026-01-01T00:00:00Z",
+				Detail: json.RawMessage(`{"name":"x"}`),
+			},
+			wantTopic: "greet",
+			wantBody:  `{"name":"x"}`,
+			wantHeaders: map[string]string{
+				"eventbridge-id": "evt-1", "eventbridge-source": "com.example",
+				"eventbridge-account": "123456789012", "eventbridge-region": "us-east-1",
+				"eventbridge-time": "2026-01-01T00:00:00Z", "eventbridge-detail-type": "greet",
+			},
 		},
 		{
-			name:        "plain detail uses detail-type and verbatim body",
-			rule:        ruleEvent{ID: "evt-2", DetailType: "greet", Source: "aws.partner", Detail: json.RawMessage(`{"name":"x"}`)},
+			name:        "embedded _benzeneHeaders lifted out, body stays the raw detail",
+			rule:        ruleEvent{ID: "evt-2", DetailType: "greet", Detail: json.RawMessage(`{"name":"x","_benzeneHeaders":{"x-correlation-id":"abc","traceparent":"00-1-2-01"}}`)},
 			wantTopic:   "greet",
-			wantBody:    `{"name":"x"}`,
-			wantHeaders: map[string]string{"id": "evt-2", "source": "aws.partner"},
+			wantBody:    `{"name":"x","_benzeneHeaders":{"x-correlation-id":"abc","traceparent":"00-1-2-01"}}`,
+			wantHeaders: map[string]string{"eventbridge-id": "evt-2", "eventbridge-detail-type": "greet", "x-correlation-id": "abc", "traceparent": "00-1-2-01"},
 		},
 		{
-			name:        "nothing resolvable yields empty topic",
-			rule:        ruleEvent{Detail: json.RawMessage(`"plain"`)},
-			wantTopic:   "",
+			name:        "embedded header wins over eventbridge- prefixed key on collision",
+			rule:        ruleEvent{ID: "evt-3", Source: "original-source", DetailType: "greet", Detail: json.RawMessage(`{"eventbridge-source":"ignored","_benzeneHeaders":{"eventbridge-source":"embedded-wins"}}`)},
+			wantTopic:   "greet",
+			wantBody:    `{"eventbridge-source":"ignored","_benzeneHeaders":{"eventbridge-source":"embedded-wins"}}`,
+			wantHeaders: map[string]string{"eventbridge-id": "evt-3", "eventbridge-source": "embedded-wins", "eventbridge-detail-type": "greet"},
+		},
+		{
+			name:        "non-string embedded values are skipped",
+			rule:        ruleEvent{ID: "evt-4", DetailType: "greet", Detail: json.RawMessage(`{"_benzeneHeaders":{"good":"kept","bad":3,"worse":{"x":1}}}`)},
+			wantTopic:   "greet",
+			wantBody:    `{"_benzeneHeaders":{"good":"kept","bad":3,"worse":{"x":1}}}`,
+			wantHeaders: map[string]string{"eventbridge-id": "evt-4", "eventbridge-detail-type": "greet", "good": "kept"},
+		},
+		{
+			name:        "non-object detail has no embedded headers to lift",
+			rule:        ruleEvent{ID: "evt-5", DetailType: "greet", Detail: json.RawMessage(`"plain"`)},
+			wantTopic:   "greet",
 			wantBody:    `"plain"`,
-			wantHeaders: map[string]string{},
+			wantHeaders: map[string]string{"eventbridge-id": "evt-5", "eventbridge-detail-type": "greet"},
+		},
+		{
+			name:        "no detail-type yields empty topic",
+			rule:        ruleEvent{ID: "evt-6", Detail: json.RawMessage(`{"name":"x"}`)},
+			wantTopic:   "",
+			wantBody:    `{"name":"x"}`,
+			wantHeaders: map[string]string{"eventbridge-id": "evt-6"},
 		},
 	}
 	for _, tt := range tests {
@@ -149,12 +184,23 @@ func TestResolveRequest(t *testing.T) {
 	}
 }
 
-func TestHandler_FailureErrorNamesTheEvent(t *testing.T) {
-	handler := Handler(newTestBuilder(t))
-
-	event := `{"id":"evt-9","detail-type":"greet","source":"s","detail":{"name":""}}`
-	_, err := handler(context.Background(), json.RawMessage(event))
-	if err == nil || !strings.Contains(err.Error(), "evt-9") {
-		t.Errorf("handler() error = %v, want it to name event evt-9", err)
+func TestEmbeddedHeaders(t *testing.T) {
+	tests := []struct {
+		name   string
+		detail string
+		want   map[string]string
+	}{
+		{name: "no detail at all", detail: `not json`, want: nil},
+		{name: "detail is a JSON array, not an object", detail: `[1,2,3]`, want: nil},
+		{name: "object with no embedded key", detail: `{"name":"x"}`, want: nil},
+		{name: "embedded key present but not an object", detail: `{"_benzeneHeaders":"not an object"}`, want: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := embeddedHeaders(json.RawMessage(tt.detail))
+			if len(got) != len(tt.want) {
+				t.Errorf("embeddedHeaders() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

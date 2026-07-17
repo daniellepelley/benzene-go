@@ -1,24 +1,30 @@
-// Package awseventbridge is the AWS EventBridge binding: a Lambda function invoked by an
-// EventBridge rule (inbound, zero new dependency - AWS delivers the event as plain JSON to
-// the invocation, the same shape as awslambda's and awssns's hand-rolled adapters) plus an
-// outbound publish client (needs aws-sdk-go-v2/service/eventbridge - see client.go), which
-// is why this package lives in its own Go module (see RELEASING.md).
+// Package awseventbridge is the AWS EventBridge binding
+// (docs/specification/transport-bindings.md's EventBridge entry in the main repo): a Lambda
+// function invoked by an EventBridge rule (inbound, zero new dependency - AWS delivers the
+// event as plain JSON to the invocation, the same shape as awslambda's and awssns's
+// hand-rolled adapters) plus an outbound publish client (needs
+// aws-sdk-go-v2/service/eventbridge - see client.go), which is why this package lives in its
+// own Go module (see RELEASING.md).
 //
-// EventBridge events have no per-message attribute map, so the SQS/SNS "topic attribute"
-// convention has nowhere to live. Instead the mapping leans on the two channels an event
-// does have (mirroring how the cloudevents package maps `type`):
+// The spec's mapping, applied here exactly:
 //
-//   - detail-type carries the Benzene topic - it is EventBridge's own semantic "what kind of
-//     event" field and what rules pattern-match on, so a rule can route per Benzene topic.
-//   - detail carries the payload. Client always writes it as a full wire envelope
-//     (topic/headers/body) so wire headers survive the trip; Handler unwraps an
-//     envelope-shaped detail and otherwise treats detail verbatim as the body with the topic
-//     from detail-type - so events from non-Benzene producers (a rule matching AWS service
-//     events, a partner event source) dispatch too.
+//   - Topic: the event's detail-type, verbatim - EventBridge's own native routing key, so
+//     this binding needs no bolted-on "topic" attribute. source is metadata, not part of the
+//     topic.
+//   - Body: the raw JSON of detail (the domain payload) - EmbeddedHeadersKey, when present,
+//     is an extra field a request mapper's deserialization simply ignores, exactly as the
+//     spec notes.
+//   - Headers: envelope metadata under "eventbridge-"-prefixed keys (id/source/account/
+//     region/time/detail-type), plus Benzene wire headers lifted from the reserved
+//     EmbeddedHeadersKey object inside detail (wire-contracts.md §2) - EventBridge has no
+//     native per-message attributes, so the outbound Client embeds them there. Embedded
+//     headers win over the eventbridge- prefixed ones on key collision.
 //
-// Like a direct SNS subscription, a rule-invoked Lambda is an asynchronous invocation with
-// no batch or partial-failure concept: a failed event is reported by returning a Go error -
-// triggering AWS's own async-invoke retry and, if configured, its dead-letter queue.
+// One event per invocation (EventBridge does not batch Lambda targets) - one pipeline
+// invocation, one DI scope; fire-and-forget (no response channel). Like a direct SNS
+// subscription, a rule-invoked Lambda is an asynchronous invocation with no partial-failure
+// concept: a failed event is reported by returning a Go error - triggering AWS's own
+// async-invoke retry and, if configured, its dead-letter queue.
 package awseventbridge
 
 import (
@@ -32,6 +38,12 @@ import (
 	"github.com/daniellepelley/benzene-go/wire"
 )
 
+// EmbeddedHeadersKey is the reserved key inside detail that carries embedded Benzene wire
+// headers - must match the main repo's
+// Benzene.Aws.Lambda.EventBridge.EventBridgeMessageHeadersGetter.EmbeddedHeadersKey /
+// Benzene.Clients.Aws.EventBridge.EventBridgeContextConverter.EmbeddedHeadersKey.
+const EmbeddedHeadersKey = "_benzeneHeaders"
+
 // ruleEvent mirrors the fields this adapter needs from the event an EventBridge rule
 // delivers to Lambda - see
 // https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-events-structure.html.
@@ -39,6 +51,9 @@ type ruleEvent struct {
 	ID         string          `json:"id"`
 	DetailType string          `json:"detail-type"`
 	Source     string          `json:"source"`
+	Account    string          `json:"account"`
+	Region     string          `json:"region"`
+	Time       string          `json:"time"`
 	Detail     json.RawMessage `json:"detail"`
 }
 
@@ -62,29 +77,56 @@ func Handler(builder *benzene.ApplicationBuilder) awslambda.HandlerFunc {
 	}
 }
 
-// resolveRequest resolves the event per the package doc's mapping: an envelope-shaped detail
-// is unwrapped (its topic and headers win - it is the only channel wire headers can travel
-// on, and Client always writes it); otherwise the topic is detail-type with detail verbatim
-// as the body. The event's own id and source are always available as the "id" and "source"
-// headers (envelope headers of the same name win). An event yielding no topic at all carries
-// an empty topic, which RouterMiddleware maps to ValidationError - surfaced as a Go error
-// (see Handler), never a silently dropped event.
+// resolveRequest resolves the event per the package doc's mapping: topic is detail-type
+// verbatim, body is the raw detail JSON, and headers are the eventbridge-prefixed envelope
+// metadata with any _benzeneHeaders object inside detail lifted on top (embedded wins on key
+// collision, matching the main repo's EventBridgeMessageHeadersGetter).
 func resolveRequest(rule ruleEvent) wire.Request {
 	headers := map[string]string{}
-	if rule.ID != "" {
-		headers["id"] = rule.ID
-	}
-	if rule.Source != "" {
-		headers["source"] = rule.Source
-	}
+	addIfPresent(headers, "eventbridge-id", rule.ID)
+	addIfPresent(headers, "eventbridge-source", rule.Source)
+	addIfPresent(headers, "eventbridge-account", rule.Account)
+	addIfPresent(headers, "eventbridge-region", rule.Region)
+	addIfPresent(headers, "eventbridge-time", rule.Time)
+	addIfPresent(headers, "eventbridge-detail-type", rule.DetailType)
 
-	var envelopeReq wire.Request
-	if err := json.Unmarshal(rule.Detail, &envelopeReq); err == nil && envelopeReq.Topic != "" {
-		for k, v := range envelopeReq.Headers {
-			headers[k] = v
-		}
-		return wire.Request{Topic: envelopeReq.Topic, Headers: headers, Body: envelopeReq.Body}
+	for k, v := range embeddedHeaders(rule.Detail) {
+		headers[k] = v
 	}
 
 	return wire.Request{Topic: rule.DetailType, Headers: headers, Body: string(rule.Detail)}
+}
+
+// embeddedHeaders lifts the string-valued members of the EmbeddedHeadersKey object out of
+// detail, when detail is a JSON object carrying one. A non-string value for a key is skipped
+// (only string values are legal wire headers) rather than failing the whole event. Parsed
+// generically (not via a struct tag - Go struct tags can't reference the EmbeddedHeadersKey
+// constant) so the key lives in exactly one place.
+func embeddedHeaders(detail json.RawMessage) map[string]string {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(detail, &object); err != nil {
+		return nil
+	}
+	rawEmbedded, ok := object[EmbeddedHeadersKey]
+	if !ok {
+		return nil
+	}
+	var embedded map[string]json.RawMessage
+	if err := json.Unmarshal(rawEmbedded, &embedded); err != nil {
+		return nil
+	}
+	headers := make(map[string]string, len(embedded))
+	for k, raw := range embedded {
+		var value string
+		if err := json.Unmarshal(raw, &value); err == nil {
+			headers[k] = value
+		}
+	}
+	return headers
+}
+
+func addIfPresent(headers map[string]string, key, value string) {
+	if value != "" {
+		headers[key] = value
+	}
 }

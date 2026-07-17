@@ -60,12 +60,17 @@ delivery order - just the current honest picture, kept up to date as things land
   for a push subscription's endpoint, with wire-contracts §2 topic resolution and ack/nack
   via the response status code. The outbound (publish) half needs the Pub/Sub SDK - see
   "Later" below.
-- `awseventbridge` - AWS EventBridge binding, in its **own Go module** (see `RELEASING.md`):
-  an inbound `Handler` for a Lambda invoked by an EventBridge rule (zero dependencies;
-  `detail-type` carries the topic so rules pattern-match per Benzene topic, an
-  envelope-shaped `detail` is unwrapped so wire headers travel, and a failed event returns a
+- `awseventbridge` - AWS EventBridge binding, in its **own Go module** (see `RELEASING.md`),
+  matching the main repo's `transport-bindings.md` EventBridge entry exactly: an inbound
+  `Handler` for a Lambda invoked by an EventBridge rule (zero dependencies; topic is
+  `detail-type` verbatim - EventBridge's own native routing key, no bolted-on `topic`
+  attribute - body is the raw `detail` JSON, and headers are `eventbridge-`-prefixed envelope
+  metadata plus any wire headers embedded under the reserved `_benzeneHeaders` key inside
+  `detail`, since EventBridge has no native per-message attributes; a failed event returns a
   Go error triggering AWS's async-invoke retry - the same posture as `awssns`), and an
-  outbound `Client` publishing via `PutEvents` (needs `aws-sdk-go-v2/service/eventbridge`).
+  outbound `Client` publishing via `PutEvents` (embeds headers under `_benzeneHeaders` when
+  the payload is a JSON object, mirroring `Benzene.Clients.Aws.EventBridge`; needs
+  `aws-sdk-go-v2/service/eventbridge`).
 - `diagnostics` - OpenTelemetry-based diagnostics middleware, in its **own Go module** (see
   `RELEASING.md`) - the Go equivalent of the main repo's `Benzene.Diagnostics`: one server
   span per invocation (topic-named, W3C traceparent join, `benzene.topic`/`benzene.status`
