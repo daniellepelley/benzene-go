@@ -16,6 +16,7 @@ import (
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/envelope"
+	"github.com/daniellepelley/benzene-go/grpcstatus"
 	"github.com/daniellepelley/benzene-go/httpstatus"
 	"github.com/daniellepelley/benzene-go/wire"
 )
@@ -85,6 +86,56 @@ func TestConformance_HTTPStatusMapping(t *testing.T) {
 				}
 				if got := httpstatus.FromHTTP(code); got != benzene.Status(row.To) {
 					t.Errorf("FromHTTP(%d) = %q, want %q", code, got, row.To)
+				}
+			})
+		}
+	})
+}
+
+// --- grpc-status-mapping.json ---
+
+// grpcCodeByName is the name<->number table for the gRPC status codes the fixture's
+// "from"/"to" fields name as strings (https://github.com/grpc/grpc/blob/master/doc/statuscodes.md) -
+// grpcstatus itself works in raw numeric codes (see its own package doc for why), so this
+// table exists only to translate the fixture into calls this test can make.
+var grpcCodeByName = map[string]int{
+	"OK": 0, "Cancelled": 1, "Unknown": 2, "InvalidArgument": 3, "DeadlineExceeded": 4,
+	"NotFound": 5, "AlreadyExists": 6, "PermissionDenied": 7, "ResourceExhausted": 8,
+	"FailedPrecondition": 9, "Aborted": 10, "OutOfRange": 11, "Unimplemented": 12,
+	"Internal": 13, "Unavailable": 14, "DataLoss": 15, "Unauthenticated": 16,
+}
+
+func TestConformance_GRPCStatusMapping(t *testing.T) {
+	var fixture mappingFixture
+	loadFixture(t, "grpc-status-mapping.json", &fixture)
+
+	t.Run("forward", func(t *testing.T) {
+		for _, row := range fixture.Forward {
+			t.Run(row.From, func(t *testing.T) {
+				status := benzene.Status(row.From)
+				if row.From == "<unknown>" {
+					status = benzene.Status("some-status-this-mapper-has-never-seen")
+				}
+				want, ok := grpcCodeByName[row.To]
+				if !ok {
+					t.Fatalf("fixture row %q has unrecognized gRPC code name %q", row.From, row.To)
+				}
+				if got := grpcstatus.ToGRPC(status); got != want {
+					t.Errorf("ToGRPC(%q) = %d, want %d (%s)", row.From, got, want, row.To)
+				}
+			})
+		}
+	})
+
+	t.Run("reverse", func(t *testing.T) {
+		for _, row := range fixture.Reverse {
+			t.Run(row.From, func(t *testing.T) {
+				code, ok := grpcCodeByName[row.From]
+				if !ok {
+					t.Fatalf("fixture row has unrecognized gRPC code name %q", row.From)
+				}
+				if got := grpcstatus.FromGRPC(code); got != benzene.Status(row.To) {
+					t.Errorf("FromGRPC(%d) = %q, want %q (from %s)", code, got, row.To, row.From)
 				}
 			})
 		}

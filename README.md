@@ -61,6 +61,7 @@ check, and both HTTP entry points wired through the three-phase `App` lifecycle.
 | `benzene` (root) | 100% | Topic, Status, Result[T], Registry, Middleware/Pipeline, RouterMiddleware, the DI-lite Container/Scope, the three-phase App lifecycle |
 | `wire` | 100% | The transport-neutral message envelope (Request/Response/ErrorPayload) - no dependency on the rest of this module |
 | `httpstatus` | 100% | The Benzene<->HTTP status mapping tables |
+| `grpcstatus` | 100% | The Benzene<->gRPC status mapping tables (wire-contracts §4.2) - raw numeric gRPC status codes, so this stays zero-dependency like `httpstatus`; a gRPC binding wraps the result as `codes.Code(...)` |
 | `envelope` | 96%+ | Dispatches a `wire.Request` through a `Pipeline` and produces a `wire.Response` (merging any invocation-set response headers - see `benzene.SetResponseHeader`) - shared by `httpbinding`, `httpclient`, and `conformance` |
 | `httpbinding` | 97%+ | The HTTP transport binding: a native REST-style `Handler` (real HTTP status codes, explicit route table with `{param}` path templating - captured segments arrive as `route-<name>` wire headers) and an `EnvelopeHandler` (the wire envelope over HTTP); handler-set response headers come back as real HTTP headers |
 | `httpclient` | 97%+ | The HTTP outbound client - one `Send(topic, headers, message)` method, mapping transport failures to `ServiceUnavailable` |
