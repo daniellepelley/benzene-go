@@ -4,6 +4,7 @@ use (
 	.
 	./awssns
 	./awssqs
+	./diagnostics
 	./examples/aws-sns-helloworld
 	./examples/aws-sqs-helloworld
 	./kafka
@@ -18,6 +19,7 @@ replace (
 	github.com/daniellepelley/benzene-go v0.1.0 => ./
 	github.com/daniellepelley/benzene-go/awssns v0.1.0 => ./awssns
 	github.com/daniellepelley/benzene-go/awssqs v0.1.0 => ./awssqs
+	github.com/daniellepelley/benzene-go/diagnostics v0.1.0 => ./diagnostics
 	github.com/daniellepelley/benzene-go/kafka v0.1.0 => ./kafka
 )
 

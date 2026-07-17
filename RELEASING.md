@@ -26,6 +26,7 @@ This is a multi-module repo (see `go.work`):
 | `github.com/daniellepelley/benzene-go/awssqs` | `awssqs/` | Needs `aws-sdk-go-v2/service/sqs` - the *only* reason a package gets split out |
 | `github.com/daniellepelley/benzene-go/awssns` | `awssns/` | Needs `aws-sdk-go-v2/service/sns` - same reason, same isolation pattern |
 | `github.com/daniellepelley/benzene-go/kafka` | `kafka/` | Needs `segmentio/kafka-go` (a broker wire protocol isn't hand-rollable) - same isolation pattern |
+| `github.com/daniellepelley/benzene-go/diagnostics` | `diagnostics/` | Needs `go.opentelemetry.io/otel` (the OTel API - the SDK stays the application's) - same isolation pattern |
 | `github.com/daniellepelley/benzene-go/examples/aws-sqs-helloworld` | `examples/aws-sqs-helloworld/` | Depends on *both* the root and `awssqs`; would be a dependency cycle inside either one |
 | `github.com/daniellepelley/benzene-go/examples/aws-sns-helloworld` | `examples/aws-sns-helloworld/` | Depends on *both* the root and `awssns`; same reason |
 

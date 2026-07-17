@@ -42,13 +42,13 @@ jobs:
           fi
 
       - name: go vet
-        run: go vet ./... ./awssqs/... ./awssns/... ./kafka/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/...
+        run: go vet ./... ./awssqs/... ./awssns/... ./kafka/... ./diagnostics/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/...
 
       - name: go build
-        run: go build ./... ./awssqs/... ./awssns/... ./kafka/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/...
+        run: go build ./... ./awssqs/... ./awssns/... ./kafka/... ./diagnostics/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/...
 
       - name: go test
-        run: go test ./... ./awssqs/... ./awssns/... ./kafka/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/... -race -cover
+        run: go test ./... ./awssqs/... ./awssns/... ./kafka/... ./diagnostics/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/... -race -cover
 
       - name: cross-compile cloud examples
         run: |

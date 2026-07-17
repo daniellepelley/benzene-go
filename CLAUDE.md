@@ -75,6 +75,11 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
   SNS-to-Lambda subscription has no batch/partial-failure concept, so `Handler` reports a failed
   notification by returning a Go error - triggering AWS's own async-invoke retry - rather than a
   `batchItemFailures` response body.
+- `diagnostics/` - OpenTelemetry diagnostics middleware, in **its own Go module**
+  (`diagnostics/go.mod`, needs `go.opentelemetry.io/otel` - API only, never the SDK; the
+  application owns exporter/sampler setup, and without an SDK the no-op defaults apply). One
+  server span per invocation + invocation metrics, same semantic identity (topic/version/
+  Benzene status) as the mesh trace feed; the two compose over the same inbound traceparent.
 - `kafka/` - Kafka binding, in **its own Go module** (`kafka/go.mod`, needs
   `segmentio/kafka-go` - a broker wire protocol isn't hand-rollable): `Consumer` loop (one
   scope per record, explicit commits; no broker-side redelivery/DLQ exists, so failures go to
@@ -94,7 +99,7 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
   applying that bar to any new platform package. `aws-sqs-helloworld` and
   `aws-sns-helloworld` are each their own module (depends on both the root module and its
   respective binding - would be a cycle inside either).
-- `go.work` - ties the root module, `awssqs/`, `awssns/`, `kafka/`,
+- `go.work` - ties the root module, `awssqs/`, `awssns/`, `kafka/`, `diagnostics/`,
   `examples/aws-sqs-helloworld/`, and `examples/aws-sns-helloworld/` together for local
   development (see `RELEASING.md`). Its `replace` lines are workspace-scoped only and never
   affect real external consumers.
@@ -123,10 +128,11 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
   standard library covers everything there (generics for type-safe registration with
   type-erased storage, `context.Context` for cancellation/invocation-scoped values,
   `encoding/json` for the wire format) - zero dependencies is itself a selling point over the
-  .NET original. `awssqs`, `awssns`, and `kafka` are the deliberate exceptions (needing
-  `aws-sdk-go-v2/service/sqs` and `aws-sdk-go-v2/service/sns` for signed API calls, and
-  `segmentio/kafka-go` for the broker wire protocol)
-  and each lives in its own module specifically so that exception doesn't spread. Ask before
+  .NET original. `awssqs`, `awssns`, `kafka`, and `diagnostics` are the deliberate exceptions
+  (needing `aws-sdk-go-v2/service/sqs` and `aws-sdk-go-v2/service/sns` for signed API calls,
+  `segmentio/kafka-go` for the broker wire protocol, and `go.opentelemetry.io/otel` for the
+  OTel API) and each lives in its own module specifically so that exception doesn't spread.
+  Ask before
   adding any other dependency; if one is approved, give it its own module rather than adding it
   to the root's `go.mod` - see `RELEASING.md`.
 - Generics: used where they buy real type safety (`Handler[TReq, TRes]`, `Result[T]`,
@@ -167,9 +173,9 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
 ## Workflow expectations
 
 - Run `gofmt -w .` before every commit; CI fails on unformatted files.
-- Run `go vet ./... ./awssqs/... ./awssns/... ./kafka/... ./examples/aws-sqs-helloworld/...
-  ./examples/aws-sns-helloworld/... && go build (same paths) && go test (same paths) -race
-  -cover` before considering a task complete - `./...` from the root does not cross a nested
+- Run `go vet ./... ./awssqs/... ./awssns/... ./kafka/... ./diagnostics/...
+  ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/... && go build (same paths)
+  && go test (same paths) -race -cover` before considering a task complete - `./...` from the root does not cross a nested
   module boundary even with `go.work` present, so the nested modules need their own explicit
   path. Every non-test-only package should sit at 100% coverage, or just under it with the gap
   being a documented, genuinely-unreachable defensive branch (not an untested real code path) -

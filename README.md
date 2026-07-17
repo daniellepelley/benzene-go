@@ -75,6 +75,7 @@ check, and both HTTP entry points wired through the three-phase `App` lifecycle.
 | `cloudevents` | 99%+ | CloudEvents 1.0 mapping (zero deps): `type` ↔ topic, `data` ↔ body, other attributes ↔ `ce-`-prefixed wire headers; `Handler` accepts CloudEvents over HTTP in both content modes (binary `ce-*` headers and structured `application/cloudevents+json`) from Event Grid subscriptions, Knative triggers, EventBridge API destinations, etc.; `FromRequest`/`MarshalJSON` emit events for the outbound direction |
 | `gcppubsub` | 100% | Google Cloud Pub/Sub inbound binding (zero deps): an `http.Handler` for a push subscription's endpoint - decodes the push envelope, resolves the topic per wire-contracts §2 (`topic` attribute or envelope-in-body), acks with 204 / nacks with 500 so Pub/Sub's own redelivery/dead-letter machinery handles failures. Outbound publishing needs the Pub/Sub SDK - a pending dependency decision (see `ROADMAP.md`) |
 | `awssqs` ([own module](RELEASING.md)) | 100% | AWS SQS binding: inbound `Handler` for a Lambda triggered by an SQS event source mapping (zero deps), outbound `Client` publishing via `SendMessage` (needs `aws-sdk-go-v2/service/sqs` - this repo's first third-party dependency) |
+| `diagnostics` ([own module](RELEASING.md)) | 100% | OpenTelemetry diagnostics middleware - one server span per invocation (named by topic, joined to the caller's W3C `traceparent`, `benzene.topic`/`benzene.status` attributes) plus `benzene.invocations`/`benzene.invocation.duration` metrics. Depends on the OTel *API* only; your app owns the SDK/exporter, and with no SDK installed the no-op defaults make it free |
 | `kafka` ([own module](RELEASING.md)) | 100% | Kafka binding: a `Consumer` loop over a consumer group (one pipeline invocation + DI scope per record, explicit commits, an `OnFailure` hook since Kafka has no broker-side redelivery/DLQ to hand a failed message to) and an outbound `Client` satisfying `client.Sender` (needs `segmentio/kafka-go` - a broker wire protocol isn't hand-rollable) |
 | `awssns` ([own module](RELEASING.md)) | 100% | AWS SNS binding: inbound `Handler` for a Lambda subscribed directly to an SNS topic (zero deps; a failed notification returns a Go error, triggering AWS's own async-invoke retry, since SNS has no batch/partial-failure mechanism), outbound `Client` publishing via `Publish` (needs `aws-sdk-go-v2/service/sns`) |
 | `conformance` | n/a (test-only) | Runs this port against the fixtures vendored from the main repo's `docs/specification/conformance/` |
@@ -115,9 +116,10 @@ sandbox) - only the code, cross-compilation, and unit tests have been verified h
 This is a multi-module repo - see `RELEASING.md` for the full explanation (and for how Go's
 decentralized module distribution works at all, if you're coming from an ecosystem with a
 central package registry like NuGet). Short version: everything is one module except `awssqs`,
-`awssns`, `kafka`, `examples/aws-sqs-helloworld`, and `examples/aws-sns-helloworld`, which have
-their own `go.mod` because they need real third-party dependencies the rest of the repo
-shouldn't carry. `go.work` ties them together for local development.
+`awssns`, `kafka`, `diagnostics`, `examples/aws-sqs-helloworld`, and
+`examples/aws-sns-helloworld`, which have their own `go.mod` because they need real third-party
+dependencies the rest of the repo shouldn't carry. `go.work` ties them together for local
+development.
 
 ## Scope
 

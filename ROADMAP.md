@@ -57,6 +57,13 @@ delivery order - just the current honest picture, kept up to date as things land
   for a push subscription's endpoint, with wire-contracts §2 topic resolution and ack/nack
   via the response status code. The outbound (publish) half needs the Pub/Sub SDK - see
   "Later" below.
+- `diagnostics` - OpenTelemetry-based diagnostics middleware, in its **own Go module** (see
+  `RELEASING.md`) - the Go equivalent of the main repo's `Benzene.Diagnostics`: one server
+  span per invocation (topic-named, W3C traceparent join, `benzene.topic`/`benzene.status`
+  attributes) plus invocation count/duration metrics. Depends on the OpenTelemetry *API*
+  only (`go.opentelemetry.io/otel`); the application owns the SDK and exporter, and standard
+  OTLP export covers Datadog/Zipkin/etc. without vendor-specific packages (as promised
+  below).
 - `kafka` - Kafka binding, in its **own Go module** (see `RELEASING.md`): a `Consumer` loop
   over a consumer group (one pipeline invocation + DI scope per record, explicit commits;
   Kafka has no broker-side redelivery/DLQ, so a failed message goes to the `OnFailure` hook -
@@ -85,10 +92,9 @@ candidate remains, not yet started:
 
 1. **Basic request logging/timing middleware.** A `benzene.Middleware` using only `log/slog`
    (standard library since Go 1.21) - per-invocation duration and outcome, no tracing/metrics
-   export. This is deliberately *not* the OpenTelemetry-based diagnostics the main repo's
-   `Benzene.Diagnostics` provides (that needs `go.opentelemetry.io/otel`, a dependency decision -
-   see below); it's a smaller, dependency-free stopgap for anyone who wants basic visibility
-   before reaching for full tracing.
+   export. This is deliberately *not* the OpenTelemetry-based diagnostics the `diagnostics`
+   module now provides (see Done above); it's a smaller, dependency-free option for anyone
+   who wants basic visibility without adding the OTel module.
 
 ## Later - needs a dependency decision first
 
@@ -112,10 +118,6 @@ unilateral add:
   documented in `examples/gcp-cloudrun-helloworld` - needs
   `github.com/GoogleCloudPlatform/functions-framework-go`, the one Google-specific dependency
   this port has avoided by targeting Cloud Run instead.
-- **OpenTelemetry-based diagnostics** (tracing/metrics export), the Go equivalent of the main
-  repo's `Benzene.Diagnostics` - needs `go.opentelemetry.io/otel` plus an exporter. The basic
-  `log/slog`-only stopgap above covers "some visibility" without this dependency in the
-  meantime.
 
 ## Deliberately out of scope (not a "later" - a "no, and here's why")
 

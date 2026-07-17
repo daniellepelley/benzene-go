@@ -72,12 +72,10 @@ nothing added to your dependency graph and nothing new to operate.
 
 Kept current in `ROADMAP.md`; the headline ones for a multi-cloud evaluation:
 
-- **Broker breadth.** Kafka and gRPC need a dependency decision first; Watermill or Dapr
-  cover far more brokers today.
-- **Standards bridges.** The envelope maps to CloudEvents (the `cloudevents` package -
-  Event Grid, Knative, and EventBridge can deliver straight into a pipeline), but
-  OpenTelemetry *export* (as opposed to `traceparent` propagation, which already
-  interoperates) awaits the OTel dependency decision.
+- **Broker breadth.** SQS, SNS, Pub/Sub, and Kafka are covered (plus anything
+  CloudEvents-shaped via the `cloudevents` package - Event Grid, Knative, EventBridge);
+  gRPC still needs a dependency decision, and Watermill or Dapr cover more brokers
+  (RabbitMQ, NATS, Redis Streams) today.
 - **The deploy workflows are real but unexercised** - each cloud example documents exactly
   what was and wasn't verified without live credentials. Nothing here claims a deploy that
   didn't happen.
