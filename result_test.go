@@ -63,6 +63,8 @@ func TestFailureConstructors(t *testing.T) {
 		{"Forbidden", Forbidden[greeting](), StatusForbidden},
 		{"NotFound", NotFound[greeting]("missing"), StatusNotFound},
 		{"Conflict", Conflict[greeting](), StatusConflict},
+		{"TooManyRequests", TooManyRequests[greeting]("slow down"), StatusTooManyRequests},
+		{"Timeout", Timeout[greeting]("deadline exceeded"), StatusTimeout},
 		{"NotImplemented", NotImplemented[greeting](), StatusNotImplemented},
 		{"ServiceUnavailable", ServiceUnavailable[greeting]("down"), StatusServiceUnavailable},
 		{"UnexpectedError", UnexpectedError[greeting]("boom"), StatusUnexpectedError},

@@ -19,6 +19,8 @@ func TestStatus_IsSuccess(t *testing.T) {
 		{StatusForbidden, false},
 		{StatusNotFound, false},
 		{StatusConflict, false},
+		{StatusTooManyRequests, false},
+		{StatusTimeout, false},
 		{StatusNotImplemented, false},
 		{StatusServiceUnavailable, false},
 		{StatusUnexpectedError, false},

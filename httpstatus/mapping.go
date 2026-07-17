@@ -29,10 +29,14 @@ func ToHTTP(status benzene.Status) int {
 		return 409
 	case benzene.StatusValidationError:
 		return 422
+	case benzene.StatusTooManyRequests:
+		return 429
 	case benzene.StatusNotImplemented:
 		return 501
 	case benzene.StatusServiceUnavailable:
 		return 503
+	case benzene.StatusTimeout:
+		return 504
 	default: // StatusUnexpectedError, an application-defined status, or empty
 		return 500
 	}
@@ -58,8 +62,20 @@ func FromHTTP(code int) benzene.Status {
 		return benzene.StatusForbidden
 	case 404:
 		return benzene.StatusNotFound
+	case 408:
+		return benzene.StatusTimeout
 	case 409:
 		return benzene.StatusConflict
+	case 422:
+		return benzene.StatusValidationError
+	case 429:
+		return benzene.StatusTooManyRequests
+	case 501:
+		return benzene.StatusNotImplemented
+	case 502, 503:
+		return benzene.StatusServiceUnavailable
+	case 504:
+		return benzene.StatusTimeout
 	default:
 		return benzene.StatusUnexpectedError
 	}

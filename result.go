@@ -92,6 +92,18 @@ func NotFound[T any](errors ...string) Result[T] { return Fail[T](StatusNotFound
 // Conflict returns a failed Result with StatusConflict.
 func Conflict[T any](errors ...string) Result[T] { return Fail[T](StatusConflict, errors...) }
 
+// TooManyRequests returns a failed Result with StatusTooManyRequests - throttled/rate
+// limited; transient, safe to retry after backing off.
+func TooManyRequests[T any](errors ...string) Result[T] {
+	return Fail[T](StatusTooManyRequests, errors...)
+}
+
+// Timeout returns a failed Result with StatusTimeout - a downstream deadline elapsed;
+// transient, but whether the operation was applied is unknown, so blind retries are only
+// safe for idempotent operations (unlike StatusServiceUnavailable, RetryDecorator does not
+// retry this status by default).
+func Timeout[T any](errors ...string) Result[T] { return Fail[T](StatusTimeout, errors...) }
+
 // NotImplemented returns a failed Result with StatusNotImplemented.
 func NotImplemented[T any](errors ...string) Result[T] {
 	return Fail[T](StatusNotImplemented, errors...)
