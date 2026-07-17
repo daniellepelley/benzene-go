@@ -15,6 +15,9 @@ delivery order - just the current honest picture, kept up to date as things land
 - `httpbinding` - native REST-style HTTP binding + envelope-over-HTTP.
 - `httpclient` - the HTTP outbound client (one `Send` method).
 - `healthcheck` - reserved-topic health-check interception middleware.
+- `logging` - basic request logging/timing middleware using only `log/slog`: one structured
+  line per invocation (topic/version, Benzene status, duration; Info/Warn/Error by outcome).
+  The dependency-free visibility option alongside the `diagnostics` module's full OTel feed.
 - `awslambda` - AWS Lambda binding (hand-rolled Runtime API bootstrap, HTTP + envelope
   adapters; the HTTP adapter handles Function URL / API Gateway v2.0, API Gateway
   REST/v1.0, and ALB target-group event shapes, detected per invocation).
@@ -87,14 +90,8 @@ documented, genuinely-unreachable defensive branch - see each package's own comm
 
 ## Next (zero new dependencies)
 
-The three items previously listed here (`client`, `cors`, `benzenetest`) have all landed. One
-candidate remains, not yet started:
-
-1. **Basic request logging/timing middleware.** A `benzene.Middleware` using only `log/slog`
-   (standard library since Go 1.21) - per-invocation duration and outcome, no tracing/metrics
-   export. This is deliberately *not* the OpenTelemetry-based diagnostics the `diagnostics`
-   module now provides (see Done above); it's a smaller, dependency-free option for anyone
-   who wants basic visibility without adding the OTel module.
+Everything previously listed here (`client`, `cors`, `benzenetest`, and the `logging`
+middleware) has landed - see Done above. No zero-dependency candidate is currently queued.
 
 ## Later - needs a dependency decision first
 
