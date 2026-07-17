@@ -2,7 +2,6 @@ package kafka
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 
@@ -90,8 +89,8 @@ func runUntilDrained(t *testing.T, consumer *Consumer, source *fakeSource) error
 
 func topicMessage(name string) kafkago.Message {
 	return kafkago.Message{
-		Headers: []kafkago.Header{{Key: "topic", Value: []byte("greet")}},
-		Value:   []byte(`{"name":"` + name + `"}`),
+		Topic: "greet",
+		Value: []byte(`{"name":"` + name + `"}`),
 	}
 }
 
@@ -115,7 +114,7 @@ func TestConsumer_FailureInvokesOnFailureThenCommits(t *testing.T) {
 	}{
 		{name: "handler failure status", message: topicMessage(""), wantStatus: benzene.StatusBadRequest},
 		{
-			name:       "no topic resolvable",
+			name:       "empty Kafka topic yields no route",
 			message:    kafkago.Message{Value: []byte("just some text")},
 			wantStatus: benzene.StatusValidationError,
 		},
@@ -211,11 +210,6 @@ func TestConsumer_Validate(t *testing.T) {
 }
 
 func TestResolveRequest(t *testing.T) {
-	envelopeBody, err := json.Marshal(wire.Request{Topic: "greet", Headers: map[string]string{"from-envelope": "e"}, Body: `{}`})
-	if err != nil {
-		t.Fatalf("json.Marshal() error = %v", err)
-	}
-
 	tests := []struct {
 		name        string
 		message     kafkago.Message
@@ -224,23 +218,24 @@ func TestResolveRequest(t *testing.T) {
 		wantHeaders map[string]string
 	}{
 		{
-			name: "topic header wins, case-insensitively, others become headers",
+			name: "Kafka topic becomes the Benzene topic, headers pass through verbatim",
 			message: kafkago.Message{
+				Topic: "greet",
 				Headers: []kafkago.Header{
-					{Key: "Topic", Value: []byte("greet")},
 					{Key: "x-correlation-id", Value: []byte("abc")},
+					{Key: "traceparent", Value: []byte("00-1-2-01")},
 				},
 				Value: []byte(`{"name":"World"}`),
 			},
 			wantTopic:   "greet",
 			wantBody:    `{"name":"World"}`,
-			wantHeaders: map[string]string{"x-correlation-id": "abc"},
+			wantHeaders: map[string]string{"x-correlation-id": "abc", "traceparent": "00-1-2-01"},
 		},
 		{
 			name: "duplicate header keys - last value wins",
 			message: kafkago.Message{
+				Topic: "greet",
 				Headers: []kafkago.Header{
-					{Key: "topic", Value: []byte("greet")},
 					{Key: "x-tag", Value: []byte("first")},
 					{Key: "x-tag", Value: []byte("last")},
 				},
@@ -250,17 +245,17 @@ func TestResolveRequest(t *testing.T) {
 			wantHeaders: map[string]string{"x-tag": "last"},
 		},
 		{
-			name:        "envelope in value merges headers",
-			message:     kafkago.Message{Value: envelopeBody},
-			wantTopic:   "greet",
-			wantBody:    `{}`,
-			wantHeaders: map[string]string{"from-envelope": "e"},
-		},
-		{
-			name:        "nothing resolvable yields empty topic and raw value",
+			name:        "empty Kafka topic yields an empty Benzene topic",
 			message:     kafkago.Message{Value: []byte("plain text")},
 			wantTopic:   "",
 			wantBody:    "plain text",
+			wantHeaders: map[string]string{},
+		},
+		{
+			name:        "no headers is not confused with nil",
+			message:     kafkago.Message{Topic: "greet"},
+			wantTopic:   "greet",
+			wantBody:    "",
 			wantHeaders: map[string]string{},
 		},
 	}

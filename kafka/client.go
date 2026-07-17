@@ -11,16 +11,16 @@ import (
 
 // MessageWriter is the single kafka-go method Client depends on. Depending on this narrow
 // interface, rather than the concrete *kafka.Writer, makes Client testable with a fake - no
-// live broker needed. A *kafka.Writer (configured with its target Kafka topic) satisfies it
-// as-is.
+// live broker needed. A *kafka.Writer satisfies it as-is, but MUST be constructed with its
+// own Topic field left empty: Client sets Topic per message (see Send), and kafka-go's
+// *Writer.WriteMessages rejects a message that sets Topic when the Writer already has one
+// configured ("Topic must not be specified for both Writer and Message").
 type MessageWriter interface {
 	WriteMessages(ctx context.Context, msgs ...kafkago.Message) error
 }
 
-// Client publishes outbound Benzene messages to a Kafka topic (the stream is the writer's
-// configuration; the Benzene topic travels as a message header - see the package doc). It
-// satisfies client.Sender, so it can be wrapped in client.CorrelationDecorator/RetryDecorator
-// like any other Sender.
+// Client publishes outbound Benzene messages to Kafka. It satisfies client.Sender, so it can
+// be wrapped in client.CorrelationDecorator/RetryDecorator like any other Sender.
 type Client struct {
 	Writer MessageWriter
 
@@ -31,23 +31,25 @@ type Client struct {
 }
 
 // NewClient returns a Client publishing via writer (typically a *kafka.Writer constructed
-// with your brokers and target Kafka topic).
+// with your brokers, and no fixed Topic - see MessageWriter).
 func NewClient(writer MessageWriter) *Client {
 	return &Client{Writer: writer}
 }
 
-// Send publishes message, with topic written as a "topic" message header per
-// wire-contracts.md §2 and headers written as additional message headers. A successful
+// Send publishes message to the Kafka topic named after topic (per the package doc, one
+// Kafka topic per Benzene topic - matching the main repo's
+// Benzene.Kafka.Core.Kafka.KafkaClientMiddleware, which produces to
+// context.Topic == the Benzene request's Topic verbatim), with headers written as Kafka
+// message headers verbatim - no reserved header name, no envelope wrapping. A successful
 // publish maps to StatusAccepted ("accepted for asynchronous processing"); a transport-level
 // failure maps to ServiceUnavailable, matching every other Sender in this repo.
 func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[string]string, message []byte) benzene.Result[json.RawMessage] {
-	kafkaHeaders := make([]kafkago.Header, 0, len(headers)+1)
-	kafkaHeaders = append(kafkaHeaders, kafkago.Header{Key: "topic", Value: []byte(topic.String())})
+	kafkaHeaders := make([]kafkago.Header, 0, len(headers))
 	for k, v := range headers {
 		kafkaHeaders = append(kafkaHeaders, kafkago.Header{Key: k, Value: []byte(v)})
 	}
 
-	msg := kafkago.Message{Value: message, Headers: kafkaHeaders}
+	msg := kafkago.Message{Topic: topic.String(), Value: message, Headers: kafkaHeaders}
 	if c.Key != nil {
 		msg.Key = c.Key(topic, message)
 	}

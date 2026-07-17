@@ -78,14 +78,21 @@ delivery order - just the current honest picture, kept up to date as things land
   only (`go.opentelemetry.io/otel`); the application owns the SDK and exporter, and standard
   OTLP export covers Datadog/Zipkin/etc. without vendor-specific packages (as promised
   below).
-- `kafka` - Kafka binding, in its **own Go module** (see `RELEASING.md`): a `Consumer` loop
-  over a consumer group (one pipeline invocation + DI scope per record, explicit commits;
-  Kafka has no broker-side redelivery/DLQ, so a failed message goes to the `OnFailure` hook -
-  dead-letter publish, log - and is then committed past, keeping the partition moving) and an
-  outbound `Client` satisfying `client.Sender`. Needs `github.com/segmentio/kafka-go` (chosen
-  over `franz-go` for its narrow Reader/Writer surface, which this repo's
-  fake-behind-an-interface test style wraps cleanly) - a broker wire protocol is not
-  reasonably hand-rollable, hence the module split.
+- `kafka` - Kafka binding, in its **own Go module** (see `RELEASING.md`), matching the main
+  repo's `Benzene.Kafka.Core` / `transport-bindings.md` "Kafka" entry exactly: one Kafka
+  topic maps to exactly one (unversioned) Benzene topic - unlike the SQS/SNS/EventBridge
+  bindings, which multiplex several Benzene topics over one physical queue/bus via a header
+  or `detail-type`, Kafka's own topic already is that routing key - headers pass through
+  verbatim in both directions, and the message value is the body verbatim, no envelope
+  wrapping. A `Consumer` loop over a consumer group (one pipeline invocation + DI scope per
+  record, explicit commits; Kafka has no broker-side redelivery/DLQ, so a failed message goes
+  to the `OnFailure` hook - dead-letter publish, log - and is then committed past, keeping
+  the partition moving) and an outbound `Client` satisfying `client.Sender` (writes to the
+  Kafka topic named after the Benzene topic, per message - mirroring
+  `KafkaClientMiddleware.HandleAsync`'s `ProduceAsync(context.Topic, ...)`). Needs
+  `github.com/segmentio/kafka-go` (chosen over `franz-go` for its narrow Reader/Writer
+  surface, which this repo's fake-behind-an-interface test style wraps cleanly) - a broker
+  wire protocol is not reasonably hand-rollable, hence the module split.
 - `conformance` - runs this port against the main repo's vendored language-neutral fixtures.
 - Examples: `helloworld` (plain HTTP + DI + health check), `aws-lambda-helloworld`,
   `azure-functions-helloworld`, `gcp-cloudrun-helloworld` (no new package needed for GCP - see

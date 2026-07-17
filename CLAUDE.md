@@ -90,9 +90,12 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
   collision). `Client` embeds `_benzeneHeaders` only when the payload is a JSON object.
   Failure returns a Go error - async-invoke retry, like `awssns`.
 - `kafka/` - Kafka binding, in **its own Go module** (`kafka/go.mod`, needs
-  `segmentio/kafka-go` - a broker wire protocol isn't hand-rollable): `Consumer` loop (one
-  scope per record, explicit commits; no broker-side redelivery/DLQ exists, so failures go to
-  the `OnFailure` hook and are committed past) + outbound `Client` satisfying `client.Sender`.
+  `segmentio/kafka-go` - a broker wire protocol isn't hand-rollable), matching
+  `Benzene.Kafka.Core` exactly: one Kafka topic = one Benzene topic (verbatim, not a header
+  or envelope), headers pass through verbatim both directions, body verbatim. `Consumer` loop
+  (one scope per record, explicit commits; no broker-side redelivery/DLQ exists, so failures
+  go to the `OnFailure` hook and are committed past) + outbound `Client` satisfying
+  `client.Sender` (writes to the Kafka topic named after the Benzene topic, per message).
   Both halves depend on narrow interfaces (`MessageSource`, `MessageWriter`) so tests run
   against fakes, no live broker.
 - `conformance/` - the fixture runner; `testdata/*.json` are vendored copies from the main

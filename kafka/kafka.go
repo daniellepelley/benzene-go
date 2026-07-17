@@ -1,8 +1,23 @@
-// Package kafka is the Kafka binding: a consumer loop that dispatches each record through a
-// Benzene pipeline, and an outbound client that publishes wire messages. It is
-// transport-bindings.md's "SQS / SNS / Kafka batches (topic from the topic message attribute
-// or envelope; one scope per record)" catalog entry, applied to a self-hosted (or managed -
-// MSK, Confluent, Event Hubs' Kafka surface) broker.
+// Package kafka is the Kafka binding, matching the main repo's `Benzene.Kafka.Core` /
+// transport-bindings.md "Kafka (self-hosted consumer)" entry exactly: a consumer loop that
+// dispatches each record through a Benzene pipeline, and an outbound client that publishes
+// wire messages, applied to a self-hosted (or managed - MSK, Confluent, Event Hubs' Kafka
+// surface) broker.
+//
+// The mapping is a deliberately thin pass-through, unlike the cloud queue bindings
+// (awssqs/awssns/gcppubsub), which invent a "topic" attribute/header convention because their
+// transports have no native concept of topic at all:
+//
+//   - Topic: the Kafka topic itself, verbatim (kafkago.Message.Topic on read; Client writes
+//     to a Kafka topic named after the Benzene topic). One Kafka topic maps to exactly one
+//     Benzene (unversioned) topic - this binding does not multiplex several Benzene topics
+//     over one Kafka topic the way SQS/SNS/EventBridge do, because Kafka's own topic already
+//     is that routing key (`Benzene.Kafka.Core.KafkaMessage.KafkaMessageTopicGetter` /
+//     `KafkaSendMessageTopicGetter` both do exactly `new Topic(topic)` - no header, no
+//     envelope).
+//   - Headers: every Kafka header, verbatim, both directions (UTF-8 decoded on read) - no
+//     reserved header name, no fallback parsing.
+//   - Body: the raw message value, verbatim, both directions - no envelope wrapping.
 //
 // This module depends on github.com/segmentio/kafka-go - a broker wire protocol is not
 // reasonably hand-rollable, unlike the cloud bindings' HTTP/JSON contracts - which is why it
@@ -11,29 +26,23 @@
 // *kafka.Reader and *kafka.Writer satisfy as-is, so this package's own tests run against
 // fakes, no live broker needed.
 //
-// Terminology note: a *Kafka* topic is the stream a Reader/Writer is configured with; the
-// *Benzene* topic is the per-message routing key, travelling as a message header named
-// "topic" (wire-contracts.md §2), exactly as it travels as a message attribute on SQS/SNS.
-// One Kafka topic can therefore carry many Benzene topics.
-//
-// Failure semantics: Kafka has no broker-side per-message redelivery or dead-letter queue -
-// unlike SQS (batchItemFailures), SNS (async-invoke retry), or Pub/Sub (nack) there is no
-// platform machinery to hand a failed message to; there is only the consumer group's offset.
-// Consumer therefore commits every dispatched message - success or not - and reports each
-// non-success dispatch to the OnFailure hook first, where the application decides what a
-// failure means (publish to its own dead-letter Kafka topic via Client, log and move on).
-// Not committing would be the only alternative, and that replays the same poison message
-// forever, stalling the partition. Transport-level failures (fetch, commit) are different:
-// they return from Run, offsets uncommitted, so a restarted consumer resumes with
-// at-least-once delivery.
+// Failure semantics: the spec describes "no response channel — result mapping is
+// acknowledge/log only", and Kafka has no broker-side per-message redelivery or dead-letter
+// queue - unlike SQS (batchItemFailures), SNS (async-invoke retry), or Pub/Sub (nack) there
+// is no platform machinery to hand a failed message to; there is only the consumer group's
+// offset. Consumer therefore commits every dispatched message - success or not - and reports
+// each non-success dispatch to the OnFailure hook first (this port's log/dead-letter
+// extension point, playing the reference implementation's ILogger role explicitly rather
+// than folding it into the framework). Not committing would be the only alternative, and
+// that replays the same poison message forever, stalling the partition. Transport-level
+// failures (fetch, commit) are different: they return from Run, offsets uncommitted, so a
+// restarted consumer resumes with at-least-once delivery.
 package kafka
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/envelope"
@@ -108,33 +117,16 @@ func (c *Consumer) Validate() error {
 	return nil
 }
 
-// resolveRequest resolves a message's topic and headers per wire-contracts.md §2, the same
-// order as awssqs/awssns/gcppubsub: the "topic" message header (remaining headers become wire
-// headers; on duplicates the last value wins), else the message value parsed as a full
-// wire.Request envelope, else an empty topic, which RouterMiddleware maps to ValidationError -
-// the message is reported to OnFailure, never silently dropped.
+// resolveRequest maps a fetched record onto a wire.Request per the package doc: the Kafka
+// topic becomes the Benzene topic verbatim, every Kafka header becomes a wire header verbatim
+// (UTF-8 decoded; on duplicate keys, matching wire-contracts.md §2, the last value wins - the
+// natural effect of this map assignment loop), and the message value becomes the body
+// verbatim. No reserved header name, no envelope-in-value fallback - Kafka's own topic
+// already is the routing key, so there is nothing to lift out of the payload.
 func resolveRequest(msg kafkago.Message) wire.Request {
 	headers := make(map[string]string, len(msg.Headers))
-	var topic string
 	for _, header := range msg.Headers {
-		if strings.EqualFold(header.Key, "topic") {
-			topic = string(header.Value)
-			continue
-		}
 		headers[header.Key] = string(header.Value)
 	}
-
-	if topic != "" {
-		return wire.Request{Topic: topic, Headers: headers, Body: string(msg.Value)}
-	}
-
-	var envelopeReq wire.Request
-	if err := json.Unmarshal(msg.Value, &envelopeReq); err == nil && envelopeReq.Topic != "" {
-		for k, v := range envelopeReq.Headers {
-			headers[k] = v
-		}
-		return wire.Request{Topic: envelopeReq.Topic, Headers: headers, Body: envelopeReq.Body}
-	}
-
-	return wire.Request{Topic: "", Headers: headers, Body: string(msg.Value)}
+	return wire.Request{Topic: msg.Topic, Headers: headers, Body: string(msg.Value)}
 }

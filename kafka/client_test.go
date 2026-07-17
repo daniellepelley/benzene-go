@@ -33,7 +33,7 @@ func headerValue(t *testing.T, msg kafkago.Message, key string) string {
 	return ""
 }
 
-func TestClient_SendWritesTopicHeaderAndBody(t *testing.T) {
+func TestClient_SendWritesToTopicWithHeadersAndBody(t *testing.T) {
 	writer := &fakeWriter{}
 	client := NewClient(writer)
 
@@ -47,14 +47,17 @@ func TestClient_SendWritesTopicHeaderAndBody(t *testing.T) {
 		t.Fatalf("wrote %d messages, want 1", len(writer.written))
 	}
 	msg := writer.written[0]
-	if got := headerValue(t, msg, "topic"); got != "greet" {
-		t.Errorf(`header "topic" = %q, want %q`, got, "greet")
+	if msg.Topic != "greet" {
+		t.Errorf("Topic = %q, want %q (the message's own Topic field, not a header)", msg.Topic, "greet")
 	}
 	if got := headerValue(t, msg, "x-correlation-id"); got != "abc" {
 		t.Errorf(`header "x-correlation-id" = %q, want %q`, got, "abc")
 	}
+	if len(msg.Headers) != 1 {
+		t.Errorf("Headers = %v, want exactly the one caller-supplied header (no topic header embedded)", msg.Headers)
+	}
 	if string(msg.Value) != `{"name":"World"}` {
-		t.Errorf("Value = %q, want the message body", msg.Value)
+		t.Errorf("Value = %q, want the message body verbatim, not wrapped in an envelope", msg.Value)
 	}
 	if msg.Key != nil {
 		t.Errorf("Key = %q, want nil when no Key func is configured", msg.Key)
