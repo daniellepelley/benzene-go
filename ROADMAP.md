@@ -60,6 +60,12 @@ delivery order - just the current honest picture, kept up to date as things land
   for a push subscription's endpoint, with wire-contracts §2 topic resolution and ack/nack
   via the response status code. The outbound (publish) half needs the Pub/Sub SDK - see
   "Later" below.
+- `awseventbridge` - AWS EventBridge binding, in its **own Go module** (see `RELEASING.md`):
+  an inbound `Handler` for a Lambda invoked by an EventBridge rule (zero dependencies;
+  `detail-type` carries the topic so rules pattern-match per Benzene topic, an
+  envelope-shaped `detail` is unwrapped so wire headers travel, and a failed event returns a
+  Go error triggering AWS's async-invoke retry - the same posture as `awssns`), and an
+  outbound `Client` publishing via `PutEvents` (needs `aws-sdk-go-v2/service/eventbridge`).
 - `diagnostics` - OpenTelemetry-based diagnostics middleware, in its **own Go module** (see
   `RELEASING.md`) - the Go equivalent of the main repo's `Benzene.Diagnostics`: one server
   span per invocation (topic-named, W3C traceparent join, `benzene.topic`/`benzene.status`
@@ -102,11 +108,10 @@ unilateral add:
 - **gRPC binding.** Go has no gRPC support in the standard library at all; this needs
   `google.golang.org/grpc` + protobuf codegen tooling, a materially bigger dependency and
   build-step footprint than anything else in this repo.
-- **EventBridge / DynamoDB Streams bindings.** Same shape as SQS - needs
-  `aws-sdk-go-v2` for the outbound (`PutEvents`) side at minimum (already a dependency via
-  `awssqs`, so this one's cheaper now); the inbound (Lambda event) side could plausibly be
-  hand-rolled similarly to `awslambda`'s existing HTTP v2 adapter and `awssqs`'s own inbound
-  handler, since it's "just" JSON event parsing, no signed API calls.
+- **DynamoDB Streams binding.** EventBridge is now done (`awseventbridge`, see Done above);
+  a Streams-triggered Lambda is the same shape as `awssqs`'s inbound handler (a Records
+  batch with `batchItemFailures` support) - the inbound side is hand-rollable, and there is
+  no outbound side to need an SDK, so this could even be zero-dependency in the root module.
 - **Pub/Sub outbound (publish) client.** The inbound half is done with zero dependencies
   (`gcppubsub` - a push subscription is just HTTPS in). Publishing needs OAuth-signed API
   calls, i.e. `cloud.google.com/go/pubsub` - the same shape as `awssqs`/`awssns`'s outbound

@@ -80,6 +80,13 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
   application owns exporter/sampler setup, and without an SDK the no-op defaults apply). One
   server span per invocation + invocation metrics, same semantic identity (topic/version/
   Benzene status) as the mesh trace feed; the two compose over the same inbound traceparent.
+- `awseventbridge/` - AWS EventBridge binding, in **its own Go module**
+  (`awseventbridge/go.mod`, needs `aws-sdk-go-v2/service/eventbridge` for the outbound
+  `PutEvents` client; the inbound rule-invoked `Handler` is zero-dependency). EventBridge has
+  no per-message attribute map, so `detail-type` carries the topic and `detail` carries the
+  full wire envelope (unwrapped inbound; plain details from non-Benzene producers dispatch
+  with `detail-type` as topic). Failure returns a Go error - async-invoke retry, like
+  `awssns`.
 - `kafka/` - Kafka binding, in **its own Go module** (`kafka/go.mod`, needs
   `segmentio/kafka-go` - a broker wire protocol isn't hand-rollable): `Consumer` loop (one
   scope per record, explicit commits; no broker-side redelivery/DLQ exists, so failures go to
@@ -99,10 +106,10 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
   applying that bar to any new platform package. `aws-sqs-helloworld` and
   `aws-sns-helloworld` are each their own module (depends on both the root module and its
   respective binding - would be a cycle inside either).
-- `go.work` - ties the root module, `awssqs/`, `awssns/`, `kafka/`, `diagnostics/`,
-  `examples/aws-sqs-helloworld/`, and `examples/aws-sns-helloworld/` together for local
-  development (see `RELEASING.md`). Its `replace` lines are workspace-scoped only and never
-  affect real external consumers.
+- `go.work` - ties the root module, `awssqs/`, `awssns/`, `awseventbridge/`, `kafka/`,
+  `diagnostics/`, `examples/aws-sqs-helloworld/`, and `examples/aws-sns-helloworld/` together
+  for local development (see `RELEASING.md`). Its `replace` lines are workspace-scoped only
+  and never affect real external consumers.
 - `.github/workflows/ci.yml` - build+test on every push/PR (gofmt, vet, build, race+cover test,
   plus a cross-compile smoke check per cloud example's real target). `.github/workflows/
   deploy-<provider>-helloworld.yml` (one per cloud example) - each gated on that provider's
@@ -128,8 +135,8 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
   standard library covers everything there (generics for type-safe registration with
   type-erased storage, `context.Context` for cancellation/invocation-scoped values,
   `encoding/json` for the wire format) - zero dependencies is itself a selling point over the
-  .NET original. `awssqs`, `awssns`, `kafka`, and `diagnostics` are the deliberate exceptions
-  (needing `aws-sdk-go-v2/service/sqs` and `aws-sdk-go-v2/service/sns` for signed API calls,
+  .NET original. `awssqs`, `awssns`, `awseventbridge`, `kafka`, and `diagnostics` are the
+  deliberate exceptions (needing `aws-sdk-go-v2` service clients for signed API calls,
   `segmentio/kafka-go` for the broker wire protocol, and `go.opentelemetry.io/otel` for the
   OTel API) and each lives in its own module specifically so that exception doesn't spread.
   Ask before
@@ -173,9 +180,10 @@ disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
 ## Workflow expectations
 
 - Run `gofmt -w .` before every commit; CI fails on unformatted files.
-- Run `go vet ./... ./awssqs/... ./awssns/... ./kafka/... ./diagnostics/...
-  ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/... && go build (same paths)
-  && go test (same paths) -race -cover` before considering a task complete - `./...` from the root does not cross a nested
+- Run `go vet ./... ./awssqs/... ./awssns/... ./awseventbridge/... ./kafka/...
+  ./diagnostics/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/... &&
+  go build (same paths) && go test (same paths) -race -cover` before considering a task
+  complete - `./...` from the root does not cross a nested
   module boundary even with `go.work` present, so the nested modules need their own explicit
   path. Every non-test-only package should sit at 100% coverage, or just under it with the gap
   being a documented, genuinely-unreachable defensive branch (not an untested real code path) -
