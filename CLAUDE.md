@@ -16,6 +16,21 @@ implement here), `core-concepts.md`, `wire-contracts.md`, `transport-bindings.md
 port and the spec disagree, the spec wins; fix the Go code, not the spec, unless the
 disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
 
+## Documentation
+
+Documentation written **in this repo is for the Go community**: idiomatic Go, the real module path
+(`github.com/daniellepelley/benzene-go`), `net/http` and the `httpbinding` entry points, `go test`
+— the concrete "how to build, host, test, and operate a Benzene service in Go". Write it the way a
+Go developer expects to read it.
+
+Do **not** restate the language-neutral material here. The concepts, wire contracts, status
+vocabulary, mesh shapes, and the Cloud Service Profile are defined once, for every language, in the
+cross-language [benzene](https://github.com/daniellepelley/Benzene/tree/main/docs/specification)
+repo. **Link to the spec; don't duplicate it.** If you're writing something that is true for every
+port rather than a Go idiom, it's a spec/guide change in the benzene repo — raise it there, not as
+Go docs here. The website lets a reader pick their language and get the Go docs from this repo,
+alongside the shared spec.
+
 ## Structure
 
 - Root package (`benzene`) - Topic, Status, Result[T], Registry, Middleware/Pipeline, the
