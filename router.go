@@ -30,9 +30,9 @@ func RouterMiddleware(registry *Registry) Middleware {
 			return next(ctx)
 		}
 
-		handlerCtx := ctx
+		handlerCtx := contextWithInvocation(ctx, ic)
 		if ic.Scope != nil {
-			handlerCtx = ContextWithScope(ctx, ic.Scope)
+			handlerCtx = ContextWithScope(handlerCtx, ic.Scope)
 		}
 		ic.Result = dispatch(handlerCtx, handler, ic.Request)
 		return next(ctx)

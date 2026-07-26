@@ -26,12 +26,29 @@ func Dispatch(ctx context.Context, pipeline *benzene.Pipeline, container *benzen
 	ic := benzene.NewInvocationContext(benzene.NewTopic(req.Topic), req.Headers, json.RawMessage(req.Body), scope)
 
 	if err := pipeline.Run(ctx, ic); err != nil {
-		return errorResponse(benzene.ServiceUnavailable[any](err.Error()))
+		return withResponseHeaders(errorResponse(benzene.ServiceUnavailable[any](err.Error())), ic)
 	}
 	if ic.Result == nil {
-		return errorResponse(benzene.UnexpectedError[any]("pipeline completed without producing a result"))
+		return withResponseHeaders(errorResponse(benzene.UnexpectedError[any]("pipeline completed without producing a result")), ic)
 	}
-	return toResponse(ic.Result)
+	return withResponseHeaders(toResponse(ic.Result), ic)
+}
+
+// withResponseHeaders merges headers set during the invocation (by middleware, or by a
+// handler via benzene.SetResponseHeader) onto the response envelope - after the defaults, so
+// an invocation-set header wins over the default content-type, matching the "opinionated but
+// optional" steer everywhere else.
+func withResponseHeaders(resp wire.Response, ic *benzene.InvocationContext) wire.Response {
+	if len(ic.ResponseHeaders) == 0 {
+		return resp
+	}
+	if resp.Headers == nil {
+		resp.Headers = make(map[string]string, len(ic.ResponseHeaders))
+	}
+	for name, value := range ic.ResponseHeaders {
+		resp.Headers[name] = value
+	}
+	return resp
 }
 
 func toResponse(result benzene.ResultInfo) wire.Response {

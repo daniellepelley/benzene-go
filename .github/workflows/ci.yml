@@ -42,13 +42,13 @@ jobs:
           fi
 
       - name: go vet
-        run: go vet ./... ./awssqs/... ./awssns/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/...
+        run: go vet ./... ./awssqs/... ./awssns/... ./awseventbridge/... ./kafka/... ./diagnostics/... ./grpcbinding/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/...
 
       - name: go build
-        run: go build ./... ./awssqs/... ./awssns/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/...
+        run: go build ./... ./awssqs/... ./awssns/... ./awseventbridge/... ./kafka/... ./diagnostics/... ./grpcbinding/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/...
 
       - name: go test
-        run: go test ./... ./awssqs/... ./awssns/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/... -race -cover
+        run: go test ./... ./awssqs/... ./awssns/... ./awseventbridge/... ./kafka/... ./diagnostics/... ./grpcbinding/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/... -race -cover
 
       - name: cross-compile cloud examples
         run: |
@@ -56,6 +56,7 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/aws-lambda-helloworld ./examples/aws-lambda-helloworld
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/azure-functions-helloworld ./examples/azure-functions-helloworld
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/gcp-cloudrun-helloworld ./examples/gcp-cloudrun-helloworld
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/gcp-pubsub-helloworld ./examples/gcp-pubsub-helloworld
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/aws-sqs-consumer ./examples/aws-sqs-helloworld/consumer
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/aws-sqs-publisher ./examples/aws-sqs-helloworld/publisher
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/aws-sns-consumer ./examples/aws-sns-helloworld/consumer

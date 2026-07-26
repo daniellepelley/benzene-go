@@ -1,0 +1,82 @@
+# Builds and deploys examples/gcp-pubsub-helloworld to Google Cloud Run and wires up its
+# Pub/Sub topic + push subscription (see its own README for the manual equivalent of every
+# step here). Requires repo secret GCP_SA_KEY (a service account JSON key with Artifact
+# Registry Writer, Cloud Run Admin, and Pub/Sub Admin roles) and repo variables
+# GCP_PROJECT_ID, GCP_REGION, and GCP_ARTIFACT_REPO (an existing Artifact Registry Docker
+# repository); see examples/gcp-pubsub-helloworld/README.md's "CI/CD" section. Until those are
+# set, the job below is skipped (not failed) so this workflow merging doesn't break CI on its
+# own.
+
+name: Deploy GCP Pub/Sub helloworld
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'examples/gcp-pubsub-helloworld/**'
+      - 'gcppubsub/**'
+      - 'envelope/**'
+      - 'httpstatus/**'
+      - 'wire/**'
+      - '*.go'
+      - '.github/workflows/deploy-gcp-pubsub-helloworld.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    if: ${{ secrets.GCP_SA_KEY != '' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${{ vars.GCP_REGION }}-docker.pkg.dev" --quiet
+
+      - name: Build image
+        # Build context is the repo root - this example imports sibling packages in the module.
+        run: |
+          docker build \
+            -f examples/gcp-pubsub-helloworld/Dockerfile \
+            -t "${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REPO }}/gcp-pubsub-helloworld:${{ github.sha }}" \
+            .
+
+      - name: Push image
+        run: docker push "${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REPO }}/gcp-pubsub-helloworld:${{ github.sha }}"
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy gcp-pubsub-helloworld \
+            --image "${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REPO }}/gcp-pubsub-helloworld:${{ github.sha }}" \
+            --region "${{ vars.GCP_REGION }}" \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --allow-unauthenticated
+
+      - name: Ensure Pub/Sub topic
+        run: |
+          gcloud pubsub topics describe greet-helloworld --project "${{ vars.GCP_PROJECT_ID }}" \
+            || gcloud pubsub topics create greet-helloworld --project "${{ vars.GCP_PROJECT_ID }}"
+
+      - name: Ensure push subscription points at the service
+        run: |
+          SERVICE_URL=$(gcloud run services describe gcp-pubsub-helloworld \
+            --region "${{ vars.GCP_REGION }}" --project "${{ vars.GCP_PROJECT_ID }}" \
+            --format 'value(status.url)')
+          if gcloud pubsub subscriptions describe greet-helloworld-push --project "${{ vars.GCP_PROJECT_ID }}"; then
+            gcloud pubsub subscriptions update greet-helloworld-push \
+              --project "${{ vars.GCP_PROJECT_ID }}" \
+              --push-endpoint "$SERVICE_URL/pubsub"
+          else
+            gcloud pubsub subscriptions create greet-helloworld-push \
+              --project "${{ vars.GCP_PROJECT_ID }}" \
+              --topic greet-helloworld \
+              --push-endpoint "$SERVICE_URL/pubsub"
+          fi

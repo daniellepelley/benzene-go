@@ -40,6 +40,10 @@ alongside the shared spec.
   rest of this module** - keep it that way (see the package doc comment).
 - `httpstatus/` - the Benzene<->HTTP status mapping tables, cross-checked against
   `docs/specification/conformance/http-status-mapping.json` in the main repo.
+- `grpcstatus/` - the Benzene<->gRPC status mapping tables, cross-checked against
+  `docs/specification/conformance/grpc-status-mapping.json` in the main repo. Raw numeric
+  gRPC status codes (not `google.golang.org/grpc/codes.Code`), so it stays zero-dependency
+  like `httpstatus`; `grpcbinding` wraps the result as `codes.Code(...)`.
 - `envelope/` - dispatches a `wire.Request` through a `Pipeline`, shared by `httpbinding`,
   `httpclient`, and `conformance`.
 - `httpbinding/` - the HTTP transport binding (native + envelope-over-HTTP entry points).
@@ -66,30 +70,81 @@ alongside the shared spec.
 - `awslambda/` - AWS Lambda binding: a hand-rolled Lambda Runtime API bootstrap loop, plus
   HTTP (API Gateway v2 / Function URL) and envelope adapters.
 - `azurefunctions/` - Azure Functions custom-handler binding (the Data/Metadata JSON contract
-  the Functions host forwards HTTP-triggered invocations over - Azure has no native Go worker).
+  the Functions host forwards invocations over - Azure has no native Go worker): `Handler` for
+  HTTP-triggered functions, `QueueHandler` for queue-shaped triggers (Storage Queue, Service
+  Bus - failure is a non-2xx outer status, handing the message to the platform's own
+  redelivery/poison-queue machinery).
 - `awssqs/` - AWS SQS binding, in **its own Go module** (`awssqs/go.mod`) - one of the packages
   with a third-party dependency (`aws-sdk-go-v2/service/sqs`, needed for the outbound publish
   client; the inbound Lambda-trigger `Handler` is zero-dependency, like `awslambda`). See
   `RELEASING.md` for the multi-module layout and why.
+- `cloudevents/` - CloudEvents 1.0 mapping, zero-dependency: wire envelope <-> CloudEvents
+  (`type` <-> topic, `data` <-> body, other attributes <-> `ce-`-prefixed headers - the
+  outbound direction only maps `ce-` headers back, documented lossiness), plus an inbound
+  HTTP `Handler` for both content modes (binary and structured) with the queue bindings'
+  ack/nack contract.
+- `gcppubsub/` - Google Cloud Pub/Sub inbound binding, zero-dependency in the root module: an
+  `http.Handler` for a push subscription's endpoint (base64 data + attributes in, ack/nack via
+  the response status code), wire-contracts §2 topic resolution like `awssqs`/`awssns`. The
+  outbound publish half needs the Pub/Sub SDK - a pending dependency decision (`ROADMAP.md`);
+  if approved it gets its own module like `awssqs`/`awssns`.
 - `awssns/` - AWS SNS binding, in **its own Go module** (`awssns/go.mod`) - same shape and same
   reason as `awssqs` (`aws-sdk-go-v2/service/sns` for the outbound publish client; the inbound
   `Handler`, subscribed directly to an SNS topic, is zero-dependency). Unlike SQS, a direct
   SNS-to-Lambda subscription has no batch/partial-failure concept, so `Handler` reports a failed
   notification by returning a Go error - triggering AWS's own async-invoke retry - rather than a
   `batchItemFailures` response body.
+- `diagnostics/` - OpenTelemetry diagnostics middleware, in **its own Go module**
+  (`diagnostics/go.mod`, needs `go.opentelemetry.io/otel` - API only, never the SDK; the
+  application owns exporter/sampler setup, and without an SDK the no-op defaults apply). One
+  server span per invocation + invocation metrics, same semantic identity (topic/version/
+  Benzene status) as the mesh trace feed; the two compose over the same inbound traceparent.
+- `awseventbridge/` - AWS EventBridge binding, in **its own Go module**
+  (`awseventbridge/go.mod`, needs `aws-sdk-go-v2/service/eventbridge` for the outbound
+  `PutEvents` client; the inbound rule-invoked `Handler` is zero-dependency), matching the
+  main repo's spec exactly: topic is `detail-type` verbatim, body is the raw `detail` JSON,
+  headers are `eventbridge-`-prefixed envelope metadata plus any wire headers embedded under
+  the reserved `_benzeneHeaders` key inside `detail` (EventBridge has no native per-message
+  attributes, so that's the only channel headers can travel on - embedded headers win on
+  collision). `Client` embeds `_benzeneHeaders` only when the payload is a JSON object.
+  Failure returns a Go error - async-invoke retry, like `awssns`.
+- `kafka/` - Kafka binding, in **its own Go module** (`kafka/go.mod`, needs
+  `segmentio/kafka-go` - a broker wire protocol isn't hand-rollable), matching
+  `Benzene.Kafka.Core` exactly: one Kafka topic = one Benzene topic (verbatim, not a header
+  or envelope), headers pass through verbatim both directions, body verbatim. `Consumer` loop
+  (one scope per record, explicit commits; no broker-side redelivery/DLQ exists, so failures
+  go to the `OnFailure` hook and are committed past) + outbound `Client` satisfying
+  `client.Sender` (writes to the Kafka topic named after the Benzene topic, per message).
+  Both halves depend on narrow interfaces (`MessageSource`, `MessageWriter`) so tests run
+  against fakes, no live broker.
+- `grpcbinding/` - gRPC binding, in **its own Go module** (`grpcbinding/go.mod`, needs
+  `google.golang.org/grpc` + `google.golang.org/protobuf`) - **unary RPCs only**, a documented
+  scope decision (see the package doc), not client/server/duplex streaming. Matches
+  `Benzene.Grpc`(`.AspNet`)/`Benzene.Grpc.Client` exactly: `UnaryServerInterceptor` wraps an
+  ordinary `*grpc.Server` and claims only the methods in its `Route` table (full method path,
+  case-insensitive) - unclaimed methods fall through to the real generated service untouched
+  ("the binding claims routes, it doesn't own the server"). Body is proto3-JSON bridged both
+  directions via `protojson`; the `benzene-status` trailer is always set (several Benzene
+  statuses collapse onto one gRPC code); `Client` satisfies `client.Sender` and recovers the
+  precise status from that trailer, falling back to `grpcstatus.FromGRPC` otherwise. No
+  reflection anywhere on the dispatch path - `Route.NewResponse`/`ClientRoute.NewRequest` are
+  explicit factories (Go has no runtime type parameter to construct an arbitrary registered
+  message from, unlike .NET generics).
 - `conformance/` - the fixture runner; `testdata/*.json` are vendored copies from the main
   repo's `docs/specification/conformance/` (see `conformance/README.md` for how to re-sync).
 - `examples/` - runnable example services: `helloworld` (plain HTTP),
   `mesh-helloworld` (collector + two meshed services, the Phases 1-4 demo), and one
   `<provider>-helloworld` per cloud deployment target (`aws-lambda-helloworld`,
   `azure-functions-helloworld`, `gcp-cloudrun-helloworld`, `aws-sqs-helloworld`,
-  `aws-sns-helloworld`) - each with its own README stating the concrete deploy steps and exactly
-  what was/wasn't verified without live cloud credentials. Google Cloud has no dedicated package
-  (see `gcp-cloudrun-helloworld/README.md` for why Cloud Run needs none) - don't add one without
-  a concrete reason `httpbinding` alone can't cover. `aws-sqs-helloworld` and
+  `aws-sns-helloworld`, `gcp-pubsub-helloworld`) - each with its own README stating the concrete
+  deploy steps and exactly what was/wasn't verified without live cloud credentials. Plain Cloud
+  Run needs no dedicated package (see `gcp-cloudrun-helloworld/README.md`); `gcppubsub` exists
+  because the Pub/Sub push envelope is a concrete shape `httpbinding` alone can't cover - keep
+  applying that bar to any new platform package. `aws-sqs-helloworld` and
   `aws-sns-helloworld` are each their own module (depends on both the root module and its
   respective binding - would be a cycle inside either).
-- `go.work` - ties the root module, `awssqs/`, `awssns/`, `examples/aws-sqs-helloworld/`, and
+- `go.work` - ties the root module, `awssqs/`, `awssns/`, `awseventbridge/`, `kafka/`,
+  `diagnostics/`, `grpcbinding/`, `examples/aws-sqs-helloworld/`, and
   `examples/aws-sns-helloworld/` together for local development (see `RELEASING.md`). Its
   `replace` lines are workspace-scoped only and never affect real external consumers.
 - `.github/workflows/ci.yml` - build+test on every push/PR (gofmt, vet, build, race+cover test,
@@ -117,9 +172,12 @@ alongside the shared spec.
   standard library covers everything there (generics for type-safe registration with
   type-erased storage, `context.Context` for cancellation/invocation-scoped values,
   `encoding/json` for the wire format) - zero dependencies is itself a selling point over the
-  .NET original. `awssqs` and `awssns` are the deliberate exceptions (needing
-  `aws-sdk-go-v2/service/sqs` and `aws-sdk-go-v2/service/sns` respectively for signed API calls)
-  and each lives in its own module specifically so that exception doesn't spread. Ask before
+  .NET original. `awssqs`, `awssns`, `awseventbridge`, `kafka`, `diagnostics`, and
+  `grpcbinding` are the deliberate exceptions (needing `aws-sdk-go-v2` service clients for
+  signed API calls, `segmentio/kafka-go` for the broker wire protocol,
+  `go.opentelemetry.io/otel` for the OTel API, and `google.golang.org/grpc` +
+  `google.golang.org/protobuf` for gRPC, which has no standard-library support at all) and
+  each lives in its own module specifically so that exception doesn't spread. Ask before
   adding any other dependency; if one is approved, give it its own module rather than adding it
   to the root's `go.mod` - see `RELEASING.md`.
 - Generics: used where they buy real type safety (`Handler[TReq, TRes]`, `Result[T]`,
@@ -160,9 +218,11 @@ alongside the shared spec.
 ## Workflow expectations
 
 - Run `gofmt -w .` before every commit; CI fails on unformatted files.
-- Run `go vet ./... ./awssqs/... ./awssns/... ./examples/aws-sqs-helloworld/...
+- Run `go vet ./... ./awssqs/... ./awssns/... ./awseventbridge/... ./kafka/...
+  ./diagnostics/... ./grpcbinding/... ./examples/aws-sqs-helloworld/...
   ./examples/aws-sns-helloworld/... && go build (same paths) && go test (same paths) -race
-  -cover` before considering a task complete - `./...` from the root does not cross a nested
+  -cover` before considering a task
+  complete - `./...` from the root does not cross a nested
   module boundary even with `go.work` present, so the nested modules need their own explicit
   path. Every non-test-only package should sit at 100% coverage, or just under it with the gap
   being a documented, genuinely-unreachable defensive branch (not an untested real code path) -

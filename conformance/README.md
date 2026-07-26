@@ -14,15 +14,12 @@ changes there:
 ```
 cp path/to/Benzene/docs/specification/conformance/status-vocabulary.json testdata/
 cp path/to/Benzene/docs/specification/conformance/http-status-mapping.json testdata/
+cp path/to/Benzene/docs/specification/conformance/grpc-status-mapping.json testdata/
 cp path/to/Benzene/docs/specification/conformance/envelope-cases.json testdata/
 cp path/to/Benzene/docs/specification/conformance/mesh-descriptor-cases.json testdata/
 cp path/to/Benzene/docs/specification/conformance/mesh-trace-cases.json testdata/
 cp path/to/Benzene/docs/specification/conformance/mesh-collector-cases.json testdata/
 ```
-
-`grpc-status-mapping.json` is intentionally **not** vendored - this port has no gRPC binding
-yet, so there is nothing in this repo to run it against. Vendor and add a runner for it once a
-`grpc` binding package exists.
 
 ## Canonical handlers
 

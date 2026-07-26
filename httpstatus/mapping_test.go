@@ -29,9 +29,11 @@ func TestToHTTP_ForwardTable(t *testing.T) {
 		{benzene.StatusNotFound, 404},
 		{benzene.StatusConflict, 409},
 		{benzene.StatusValidationError, 422},
+		{benzene.StatusTooManyRequests, 429},
 		{benzene.StatusUnexpectedError, 500},
 		{benzene.StatusNotImplemented, 501},
 		{benzene.StatusServiceUnavailable, 503},
+		{benzene.StatusTimeout, 504},
 		{benzene.Status("<unknown>"), 500},
 		{benzene.Status(""), 500},
 	}
@@ -57,8 +59,15 @@ func TestFromHTTP_ReverseTable(t *testing.T) {
 		{401, benzene.StatusUnauthorized},
 		{403, benzene.StatusForbidden},
 		{404, benzene.StatusNotFound},
+		{408, benzene.StatusTimeout},
 		{409, benzene.StatusConflict},
+		{422, benzene.StatusValidationError},
+		{429, benzene.StatusTooManyRequests},
 		{500, benzene.StatusUnexpectedError},
+		{501, benzene.StatusNotImplemented},
+		{502, benzene.StatusServiceUnavailable},
+		{503, benzene.StatusServiceUnavailable},
+		{504, benzene.StatusTimeout},
 		{418, benzene.StatusUnexpectedError}, // "anything else" fixture case
 	}
 	for _, tt := range tests {

@@ -22,6 +22,8 @@ const (
 	StatusForbidden          Status = "Forbidden"
 	StatusNotFound           Status = "NotFound"
 	StatusConflict           Status = "Conflict"
+	StatusTooManyRequests    Status = "TooManyRequests"
+	StatusTimeout            Status = "Timeout"
 	StatusNotImplemented     Status = "NotImplemented"
 	StatusServiceUnavailable Status = "ServiceUnavailable"
 	StatusUnexpectedError    Status = "UnexpectedError"

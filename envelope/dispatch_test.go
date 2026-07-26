@@ -191,3 +191,61 @@ func TestDispatch_UnmarshalablePayloadIsUnexpectedError(t *testing.T) {
 		t.Errorf("StatusCode = %q, want %q", resp.StatusCode, benzene.StatusUnexpectedError)
 	}
 }
+
+func TestDispatch_InvocationSetResponseHeadersMergeOntoResponse(t *testing.T) {
+	registry := benzene.NewRegistry()
+	handler := func(ctx context.Context, req greetRequest) benzene.Result[greetResponse] {
+		benzene.SetResponseHeader(ctx, "X-Request-Id", "abc-123")
+		benzene.SetResponseHeader(ctx, "Content-Type", "application/vnd.example+json")
+		return benzene.Ok(greetResponse{Greeting: "Hello " + req.Name})
+	}
+	if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](handler)); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	pipeline := benzene.NewPipeline(benzene.RouterMiddleware(registry))
+
+	resp := Dispatch(context.Background(), pipeline, benzene.NewContainer(), wire.Request{Topic: "greet", Body: `{"name":"World"}`})
+
+	if got := resp.Headers["x-request-id"]; got != "abc-123" {
+		t.Errorf(`Headers["x-request-id"] = %q, want %q`, got, "abc-123")
+	}
+	// An invocation-set header wins over the default content-type.
+	if got := resp.Headers["content-type"]; got != "application/vnd.example+json" {
+		t.Errorf(`Headers["content-type"] = %q, want the invocation-set override, got %q`, "application/vnd.example+json", got)
+	}
+}
+
+func TestDispatch_ResponseHeadersMergeOntoErrorResponses(t *testing.T) {
+	registry := benzene.NewRegistry()
+	handler := func(ctx context.Context, req greetRequest) benzene.Result[greetResponse] {
+		benzene.SetResponseHeader(ctx, "X-Request-Id", "abc-123")
+		return benzene.BadRequest[greetResponse]("no")
+	}
+	if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](handler)); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	pipeline := benzene.NewPipeline(benzene.RouterMiddleware(registry))
+
+	resp := Dispatch(context.Background(), pipeline, benzene.NewContainer(), wire.Request{Topic: "greet", Body: `{"name":"World"}`})
+
+	if resp.StatusCode != string(benzene.StatusBadRequest) {
+		t.Fatalf("StatusCode = %q, want %q", resp.StatusCode, benzene.StatusBadRequest)
+	}
+	if got := resp.Headers["x-request-id"]; got != "abc-123" {
+		t.Errorf(`Headers["x-request-id"] = %q, want %q (headers must survive a failure result)`, got, "abc-123")
+	}
+}
+
+func TestWithResponseHeaders_AllocatesWhenResponseHasNoHeaderMap(t *testing.T) {
+	// toResponse/errorResponse always populate Headers, so this guards the constructor
+	// invariant rather than a reachable Dispatch path - tested directly so a future response
+	// constructor without a header map can't turn the merge into a nil-map panic.
+	ic := benzene.NewInvocationContext(benzene.NewTopic("t"), nil, nil, nil)
+	ic.SetResponseHeader("x-request-id", "abc")
+
+	resp := withResponseHeaders(wire.Response{StatusCode: string(benzene.StatusOk)}, ic)
+
+	if got := resp.Headers["x-request-id"]; got != "abc" {
+		t.Errorf(`Headers["x-request-id"] = %q, want %q`, got, "abc")
+	}
+}

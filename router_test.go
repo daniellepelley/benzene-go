@@ -163,3 +163,27 @@ func TestRouterMiddleware_IsAnOrdinaryMiddlewareThatCallsNext(t *testing.T) {
 		t.Error("middleware registered after the router should still run - the router is an ordinary middleware, not a hard pipeline terminator")
 	}
 }
+
+func TestRouterMiddleware_HandlerCanSetResponseHeadersViaContext(t *testing.T) {
+	registry := NewRegistry()
+	topic := NewTopic("hello:headers")
+	handler := func(ctx context.Context, req helloRequest) Result[helloResponse] {
+		if ok := SetResponseHeader(ctx, "X-Request-Id", "abc-123"); !ok {
+			t.Error("SetResponseHeader() ok = false inside a routed handler, want true")
+		}
+		return Ok(helloResponse{Message: "Hello " + req.Name})
+	}
+	if err := Register(registry, topic, Handler[helloRequest, helloResponse](handler)); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	pipeline := NewPipeline(RouterMiddleware(registry))
+	ic := NewInvocationContext(topic, nil, helloRequest{Name: "World"}, nil)
+	if err := pipeline.Run(context.Background(), ic); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if got := ic.ResponseHeaders["x-request-id"]; got != "abc-123" {
+		t.Errorf(`ResponseHeaders["x-request-id"] = %q, want %q`, got, "abc-123")
+	}
+}

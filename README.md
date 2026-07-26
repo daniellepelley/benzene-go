@@ -61,24 +61,33 @@ check, and both HTTP entry points wired through the three-phase `App` lifecycle.
 | `benzene` (root) | 100% | Topic, Status, Result[T], Registry, Middleware/Pipeline, RouterMiddleware, the DI-lite Container/Scope, the three-phase App lifecycle |
 | `wire` | 100% | The transport-neutral message envelope (Request/Response/ErrorPayload) - no dependency on the rest of this module |
 | `httpstatus` | 100% | The Benzene<->HTTP status mapping tables |
-| `envelope` | 95%+ | Dispatches a `wire.Request` through a `Pipeline` and produces a `wire.Response` - shared by `httpbinding`, `httpclient`, and `conformance` |
-| `httpbinding` | 95%+ | The HTTP transport binding: a native REST-style `Handler` (real HTTP status codes, explicit route table) and an `EnvelopeHandler` (the wire envelope over HTTP) |
+| `grpcstatus` | 100% | The Benzene<->gRPC status mapping tables (wire-contracts §4.2) - raw numeric gRPC status codes, so this stays zero-dependency like `httpstatus`; a gRPC binding wraps the result as `codes.Code(...)` |
+| `envelope` | 96%+ | Dispatches a `wire.Request` through a `Pipeline` and produces a `wire.Response` (merging any invocation-set response headers - see `benzene.SetResponseHeader`) - shared by `httpbinding`, `httpclient`, and `conformance` |
+| `httpbinding` | 97%+ | The HTTP transport binding: a native REST-style `Handler` (real HTTP status codes, explicit route table with `{param}` path templating - captured segments arrive as `route-<name>` wire headers) and an `EnvelopeHandler` (the wire envelope over HTTP); handler-set response headers come back as real HTTP headers |
 | `httpclient` | 97%+ | The HTTP outbound client - one `Send(topic, headers, message)` method, mapping transport failures to `ServiceUnavailable` |
 | `healthcheck` | 100% | Middleware that intercepts the reserved `healthcheck` topic and responds with the standard aggregate health response |
+| `logging` | 100% | Basic request logging/timing middleware, `log/slog` only (zero deps): one structured line per invocation - topic, status, duration - Info/Warn/Error by outcome. The dependency-free alternative to `diagnostics` |
 | `mesh` | 100% | Phases 1-2 of [Benzene Mesh](docs/design/mesh.md): the service `Descriptor` derived from the live `Registry` - topics, per-topic request/response JSON Schemas derived at startup from the registered handler types, and the contract `descriptorHash` - plus reserved-`mesh`-topic descriptor middleware and `TraceMiddleware` + `LogExporter` emitting semantic per-invocation trace events. Every feed is optional - a service with only some feeds provisioned runs a reduced mesh, never a broken one |
 | `meshd` | 100% | Phases 3-4 of [Benzene Mesh](docs/design/mesh.md): the collector - itself an ordinary Benzene service serving `mesh:register`/`mesh:heartbeat`/`mesh:traces` and the `mesh:query:*` read models over an in-memory store, plus the Mesh View (one embedded self-contained page, no JS framework). Accepts partial fleets: a service missing a feed renders as reduced, never breaks ingestion or queries |
-| `awslambda` | 90%+ | AWS Lambda binding: a hand-rolled Lambda Runtime API bootstrap loop (`Start`), plus `HTTPHandler` (API Gateway v2 / Function URL events) and `EnvelopeHandler` (direct invoke) |
-| `azurefunctions` | 93%+ | Azure Functions custom-handler binding: `Handler` adapts the Data/Metadata JSON contract the Functions host forwards HTTP-triggered invocations over |
+| `awslambda` | 93%+ | AWS Lambda binding: a hand-rolled Lambda Runtime API bootstrap loop (`Start`), plus `HTTPHandler` (Function URL / API Gateway v2.0, API Gateway REST/v1.0, and ALB target-group events, detected per invocation) and `EnvelopeHandler` (direct invoke) |
+| `azurefunctions` | 94%+ | Azure Functions custom-handler binding: `Handler` adapts the Data/Metadata JSON contract for HTTP-triggered functions; `QueueHandler` adapts queue-shaped triggers (Storage Queue, Service Bus), reporting a failed message via a non-2xx outer status so the platform's own redelivery/poison-queue machinery takes over |
 | `client` | 100% | Outbound-client decorators (`CorrelationDecorator`, `RetryDecorator`) over a transport-agnostic `Sender` interface |
 | `cors` | 100% | Portable CORS middleware for HTTP-fronted services (origin/scheme/port matching, header wildcard, preflight) |
 | `benzenetest` | 100% | In-process test host for *your* application's tests - `Invoke[TReq, TRes]` runs one pipeline invocation without real HTTP/Lambda/etc. |
+| `cloudevents` | 99%+ | CloudEvents 1.0 mapping (zero deps): `type` ↔ topic, `data` ↔ body, other attributes ↔ `ce-`-prefixed wire headers; `Handler` accepts CloudEvents over HTTP in both content modes (binary `ce-*` headers and structured `application/cloudevents+json`) from Event Grid subscriptions, Knative triggers, EventBridge API destinations, etc.; `FromRequest`/`MarshalJSON` emit events for the outbound direction |
+| `gcppubsub` | 100% | Google Cloud Pub/Sub inbound binding (zero deps): an `http.Handler` for a push subscription's endpoint - decodes the push envelope, resolves the topic per wire-contracts §2 (`topic` attribute or envelope-in-body), acks with 204 / nacks with 500 so Pub/Sub's own redelivery/dead-letter machinery handles failures. Outbound publishing needs the Pub/Sub SDK - a pending dependency decision (see `ROADMAP.md`) |
 | `awssqs` ([own module](RELEASING.md)) | 100% | AWS SQS binding: inbound `Handler` for a Lambda triggered by an SQS event source mapping (zero deps), outbound `Client` publishing via `SendMessage` (needs `aws-sdk-go-v2/service/sqs` - this repo's first third-party dependency) |
+| `diagnostics` ([own module](RELEASING.md)) | 100% | OpenTelemetry diagnostics middleware - one server span per invocation (named by topic, joined to the caller's W3C `traceparent`, `benzene.topic`/`benzene.status` attributes) plus `benzene.invocations`/`benzene.invocation.duration` metrics. Depends on the OTel *API* only; your app owns the SDK/exporter, and with no SDK installed the no-op defaults make it free |
+| `kafka` ([own module](RELEASING.md)) | 100% | Kafka binding, matching the main repo's spec exactly (one Kafka topic = one Benzene topic, headers pass through verbatim, no envelope wrapping): a `Consumer` loop over a consumer group (one pipeline invocation + DI scope per record, explicit commits, an `OnFailure` hook since Kafka has no broker-side redelivery/DLQ to hand a failed message to) and an outbound `Client` satisfying `client.Sender` (needs `segmentio/kafka-go` - a broker wire protocol isn't hand-rollable) |
+| `grpcbinding` ([own module](RELEASING.md)) | 100% | gRPC binding, unary RPCs only: `UnaryServerInterceptor` claims specific registered `Route`s (full method path → topic, case-insensitive) on an ordinary `*grpc.Server` - unclaimed methods fall through to the native generated service untouched, per spec - with proto3-JSON body bridging, incoming/outgoing metadata as wire headers, and the mandatory `benzene-status` trailer; an outbound `Client` satisfying `client.Sender` recovers the precise status from that trailer. Needs `google.golang.org/grpc` + `google.golang.org/protobuf` |
+| `awseventbridge` ([own module](RELEASING.md)) | 96%+ | AWS EventBridge binding, matching the main repo's spec exactly: inbound `Handler` for a Lambda invoked by a rule (zero deps; topic is `detail-type` verbatim, body is the raw `detail` JSON, headers are `eventbridge-`-prefixed envelope metadata plus any `_benzeneHeaders` object embedded inside `detail`; a failed event returns a Go error, triggering AWS's async-invoke retry) and an outbound `Client` publishing via `PutEvents` (embeds headers under `_benzeneHeaders` when the message is a JSON object; needs `aws-sdk-go-v2/service/eventbridge`) |
 | `awssns` ([own module](RELEASING.md)) | 100% | AWS SNS binding: inbound `Handler` for a Lambda subscribed directly to an SNS topic (zero deps; a failed notification returns a Go error, triggering AWS's own async-invoke retry, since SNS has no batch/partial-failure mechanism), outbound `Client` publishing via `Publish` (needs `aws-sdk-go-v2/service/sns`) |
 | `conformance` | n/a (test-only) | Runs this port against the fixtures vendored from the main repo's `docs/specification/conformance/` |
 | `examples/helloworld` | - | A runnable example service - DI, health check, both HTTP entry points |
 | `examples/aws-lambda-helloworld` | - | The same service, deployable to AWS Lambda (Dockerfile + SAM template) |
 | `examples/azure-functions-helloworld` | - | The same service, deployable to Azure Functions (host.json/function.json) |
 | `examples/gcp-cloudrun-helloworld` | - | The same service, deployable to Google Cloud Run (Dockerfile, no new package needed) |
+| `examples/gcp-pubsub-helloworld` | - | A Cloud Run service consuming a Pub/Sub push subscription via `gcppubsub.Handler` - publish with `gcloud pubsub topics publish`, no publisher code needed |
 | `examples/aws-sqs-helloworld` ([own module](RELEASING.md)) | - | A publisher Lambda (Function URL) forwarding to SQS + a consumer Lambda triggered by that queue |
 | `examples/aws-sns-helloworld` ([own module](RELEASING.md)) | - | A publisher Lambda (Function URL) forwarding to SNS + a consumer Lambda subscribed to that topic |
 | `examples/mesh-helloworld` | - | The whole mesh story in one process: a `meshd` collector + two meshed services with a cross-service traced call - open the Mesh View and watch the derived fleet |
@@ -96,6 +105,7 @@ a type that can't actually fail to marshal). Run `go test ./... -cover` to see c
 | AWS | Lambda subscribed to SNS + publish-to-SNS | `awssns` - its own module (needs the AWS SDK) |
 | Azure | Azure Functions custom handler | `azurefunctions` - Azure has no native Go worker |
 | Google Cloud | Cloud Run | None - Cloud Run's contract is "listen on `$PORT`", which `httpbinding` + `net/http` already satisfies |
+| Google Cloud | Cloud Run consuming a Pub/Sub push subscription | `gcppubsub` (inbound only, zero deps) - the push envelope's base64/attributes/ack contract is the one GCP shape `httpbinding` can't cover |
 
 Each `examples/*-helloworld` directory's README documents the concrete deploy steps and states
 what was and wasn't verified in this repo's own CI sandbox. Each also has a matching GitHub
@@ -110,22 +120,27 @@ sandbox) - only the code, cross-compilation, and unit tests have been verified h
 This is a multi-module repo - see `RELEASING.md` for the full explanation (and for how Go's
 decentralized module distribution works at all, if you're coming from an ecosystem with a
 central package registry like NuGet). Short version: everything is one module except `awssqs`,
-`awssns`, `examples/aws-sqs-helloworld`, and `examples/aws-sns-helloworld`, which have their own
-`go.mod` because they need real third-party dependencies the rest of the repo shouldn't carry.
-`go.work` ties them together for local development.
+`awssns`, `awseventbridge`, `kafka`, `diagnostics`, `grpcbinding`, `examples/aws-sqs-helloworld`,
+and `examples/aws-sns-helloworld`, which have their own `go.mod` because they need real
+third-party dependencies the rest of the repo shouldn't carry. `go.work` ties them together for
+local development.
 
 ## Scope
 
 This port covers core-concepts.md and wire-contracts.md end to end (pipeline, DI, health
-checks, HTTP binding + client, conformance, AWS/Azure/GCP deployment, SQS and SNS bindings) but
-does **not** yet have: a gRPC binding, a Kafka binding (core-concepts.md's binding contract, not
-this repo's scope decision, is what a binding must satisfy once one exists), or a
-source-generator/codegen equivalent to the C# attribute-scanning sugar (per `porting-guide.md`,
-explicit registration is the framework contract in every language; attribute scanning is
-.NET-specific idiom, not something every port needs).
+checks, HTTP binding + client, conformance, AWS/Azure/GCP deployment, SQS/SNS/Pub-Sub/Kafka/
+gRPC bindings, CloudEvents) but does **not** yet have: gRPC's client-streaming/server-streaming/
+duplex-streaming shapes (`grpcbinding` covers unary RPCs only - a documented scope decision,
+not an oversight; see its package doc), or a source-generator/codegen equivalent to the C#
+attribute-scanning sugar (per `porting-guide.md`, explicit registration is the framework
+contract in every language; attribute scanning is .NET-specific idiom, not something every
+port needs).
 
 See `ROADMAP.md` for the fuller picture: what's next with zero new dependencies, what's next
 *pending* a dependency decision, and what's deliberately not being ported at all (and why).
+For how this project compares to the other ways of building cloud-portable services in Go
+(Dapr, Go CDK, Watermill, Encore) and when you'd pick each, see
+[docs/comparison.md](docs/comparison.md).
 
 ## Benzene Mesh
 

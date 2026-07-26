@@ -10,14 +10,22 @@ delivery order - just the current honest picture, kept up to date as things land
   handler-level resolution), the three-phase `App` lifecycle.
 - `wire` - the transport-neutral envelope.
 - `httpstatus` - the Benzene<->HTTP status mapping tables (conformance-verified).
+- `grpcstatus` - the Benzene<->gRPC status mapping tables (conformance-verified), in raw
+  numeric gRPC status codes so it stays zero-dependency like `httpstatus`.
 - `envelope` - `wire.Request` -> `Pipeline` -> `wire.Response` dispatch, shared by every
   HTTP-shaped binding below.
 - `httpbinding` - native REST-style HTTP binding + envelope-over-HTTP.
 - `httpclient` - the HTTP outbound client (one `Send` method).
 - `healthcheck` - reserved-topic health-check interception middleware.
-- `awslambda` - AWS Lambda binding (hand-rolled Runtime API bootstrap, HTTP v2 + envelope
-  adapters).
-- `azurefunctions` - Azure Functions custom-handler binding.
+- `logging` - basic request logging/timing middleware using only `log/slog`: one structured
+  line per invocation (topic/version, Benzene status, duration; Info/Warn/Error by outcome).
+  The dependency-free visibility option alongside the `diagnostics` module's full OTel feed.
+- `awslambda` - AWS Lambda binding (hand-rolled Runtime API bootstrap, HTTP + envelope
+  adapters; the HTTP adapter handles Function URL / API Gateway v2.0, API Gateway
+  REST/v1.0, and ALB target-group event shapes, detected per invocation).
+- `azurefunctions` - Azure Functions custom-handler binding: `Handler` for HTTP-triggered
+  functions, `QueueHandler` for queue-shaped triggers (Storage Queue, Service Bus) with
+  wire-contracts §2 topic resolution and platform-native retry on failure.
 - `client` - outbound-client decorators (`CorrelationDecorator`, `RetryDecorator`) over a
   transport-agnostic `Sender` interface; `httpclient.Client` satisfies it structurally.
 - `cors` - portable CORS middleware for HTTP-fronted services (origin/scheme/port matching,
@@ -36,12 +44,80 @@ delivery order - just the current honest picture, kept up to date as things land
   just this module). Unlike SQS's event source mapping, a direct SNS-to-Lambda subscription has
   no batch/partial-failure mechanism - `Handler` instead returns a Go error for a failed
   notification, triggering AWS's own async-invoke retry.
+- `mesh` - Phases 1-2 of `docs/design/mesh.md`: the service `Descriptor` derived from the live
+  `Registry` (topics + startup-derived JSON Schemas + `descriptorHash`), reserved-`mesh`-topic
+  descriptor middleware, `TraceMiddleware` with W3C `traceparent` propagation, and the
+  `LogExporter`/`PushExporter` trace feeds - every feed independent and optional.
+- `meshd` - Phases 3-4 of `docs/design/mesh.md`: the collector (register/heartbeat/traces
+  ingest + `mesh:query:*` read models over an in-memory store with a bounded trace ring) and
+  the Mesh View (one embedded self-contained page, no JS framework). The wire contract is
+  promoted to the main repo's `docs/specification/mesh.md` and pinned by vendored
+  `mesh-*.json` conformance fixtures.
+- `cloudevents` - CloudEvents 1.0 mapping (zero dependencies): the wire envelope to/from the
+  CNCF cross-cloud event format (`type` <-> topic, `data` <-> body, other attributes <->
+  "ce-"-prefixed headers), plus an inbound HTTP handler for both content modes - the bridge
+  that lets Event Grid, Knative, EventBridge, and anything else CloudEvents-shaped deliver
+  straight into a Benzene pipeline.
+- `gcppubsub` - Google Cloud Pub/Sub inbound binding (zero dependencies): an http.Handler
+  for a push subscription's endpoint, with wire-contracts §2 topic resolution and ack/nack
+  via the response status code. The outbound (publish) half needs the Pub/Sub SDK - see
+  "Later" below.
+- `awseventbridge` - AWS EventBridge binding, in its **own Go module** (see `RELEASING.md`),
+  matching the main repo's `transport-bindings.md` EventBridge entry exactly: an inbound
+  `Handler` for a Lambda invoked by an EventBridge rule (zero dependencies; topic is
+  `detail-type` verbatim - EventBridge's own native routing key, no bolted-on `topic`
+  attribute - body is the raw `detail` JSON, and headers are `eventbridge-`-prefixed envelope
+  metadata plus any wire headers embedded under the reserved `_benzeneHeaders` key inside
+  `detail`, since EventBridge has no native per-message attributes; a failed event returns a
+  Go error triggering AWS's async-invoke retry - the same posture as `awssns`), and an
+  outbound `Client` publishing via `PutEvents` (embeds headers under `_benzeneHeaders` when
+  the payload is a JSON object, mirroring `Benzene.Clients.Aws.EventBridge`; needs
+  `aws-sdk-go-v2/service/eventbridge`).
+- `diagnostics` - OpenTelemetry-based diagnostics middleware, in its **own Go module** (see
+  `RELEASING.md`) - the Go equivalent of the main repo's `Benzene.Diagnostics`: one server
+  span per invocation (topic-named, W3C traceparent join, `benzene.topic`/`benzene.status`
+  attributes) plus invocation count/duration metrics. Depends on the OpenTelemetry *API*
+  only (`go.opentelemetry.io/otel`); the application owns the SDK and exporter, and standard
+  OTLP export covers Datadog/Zipkin/etc. without vendor-specific packages (as promised
+  below).
+- `kafka` - Kafka binding, in its **own Go module** (see `RELEASING.md`), matching the main
+  repo's `Benzene.Kafka.Core` / `transport-bindings.md` "Kafka" entry exactly: one Kafka
+  topic maps to exactly one (unversioned) Benzene topic - unlike the SQS/SNS/EventBridge
+  bindings, which multiplex several Benzene topics over one physical queue/bus via a header
+  or `detail-type`, Kafka's own topic already is that routing key - headers pass through
+  verbatim in both directions, and the message value is the body verbatim, no envelope
+  wrapping. A `Consumer` loop over a consumer group (one pipeline invocation + DI scope per
+  record, explicit commits; Kafka has no broker-side redelivery/DLQ, so a failed message goes
+  to the `OnFailure` hook - dead-letter publish, log - and is then committed past, keeping
+  the partition moving) and an outbound `Client` satisfying `client.Sender` (writes to the
+  Kafka topic named after the Benzene topic, per message - mirroring
+  `KafkaClientMiddleware.HandleAsync`'s `ProduceAsync(context.Topic, ...)`). Needs
+  `github.com/segmentio/kafka-go` (chosen over `franz-go` for its narrow Reader/Writer
+  surface, which this repo's fake-behind-an-interface test style wraps cleanly) - a broker
+  wire protocol is not reasonably hand-rollable, hence the module split.
+- `grpcbinding` - gRPC binding, in its **own Go module** (see `RELEASING.md`), matching the
+  main repo's `Benzene.Grpc` (+ `.AspNet`)/`Benzene.Grpc.Client` and
+  `transport-bindings.md`'s gRPC entry: **unary RPCs only** - streaming (client/server/duplex)
+  is a documented gap, not an oversight, left for a later addition (see the package doc for
+  why). `UnaryServerInterceptor` wraps an ordinary `*grpc.Server` exactly like any other
+  interceptor and claims only the methods named in its `Route` table (full method path,
+  case-insensitive) - unmatched methods fall through to the real generated service untouched,
+  matching "the binding claims routes, it doesn't own the server" precisely; the app still
+  writes and registers real protoc-generated service code (no reflection/attribute-scanning
+  codegen, consistent with this repo's explicit-registration stance). Body is proto3-JSON
+  bridged both directions; the `benzene-status` trailer is set unconditionally (several
+  Benzene statuses collapse onto one gRPC code); an outbound `Client` satisfying
+  `client.Sender` recovers the precise status from that trailer, falling back to
+  `grpcstatus.FromGRPC` when a peer doesn't set one. Needs `google.golang.org/grpc` (no gRPC
+  in the Go standard library) and `google.golang.org/protobuf` (proto3-JSON).
 - `conformance` - runs this port against the main repo's vendored language-neutral fixtures.
 - Examples: `helloworld` (plain HTTP + DI + health check), `aws-lambda-helloworld`,
   `azure-functions-helloworld`, `gcp-cloudrun-helloworld` (no new package needed for GCP - see
   its README), `aws-sqs-helloworld` (publisher + consumer Lambdas, its own module),
-  `aws-sns-helloworld` (publisher + consumer Lambdas, its own module) - each with a matching CI
-  build/test path and a gated GitHub Actions deploy workflow
+  `aws-sns-helloworld` (publisher + consumer Lambdas, its own module),
+  `gcp-pubsub-helloworld` (a Cloud Run service consuming a Pub/Sub push subscription),
+  `mesh-helloworld` (collector + two meshed services, local-only) - each cloud example with a
+  matching CI build/test path and a gated GitHub Actions deploy workflow
   (`.github/workflows/deploy-*.yml`).
 
 Every non-test-only package sits at 100% coverage or just under it with the gap being a
@@ -49,15 +125,8 @@ documented, genuinely-unreachable defensive branch - see each package's own comm
 
 ## Next (zero new dependencies)
 
-The three items previously listed here (`client`, `cors`, `benzenetest`) have all landed. One
-candidate remains, not yet started:
-
-1. **Basic request logging/timing middleware.** A `benzene.Middleware` using only `log/slog`
-   (standard library since Go 1.21) - per-invocation duration and outcome, no tracing/metrics
-   export. This is deliberately *not* the OpenTelemetry-based diagnostics the main repo's
-   `Benzene.Diagnostics` provides (that needs `go.opentelemetry.io/otel`, a dependency decision -
-   see below); it's a smaller, dependency-free stopgap for anyone who wants basic visibility
-   before reaching for full tracing.
+Everything previously listed here (`client`, `cors`, `benzenetest`, and the `logging`
+middleware) has landed - see Done above. No zero-dependency candidate is currently queued.
 
 ## Later - needs a dependency decision first
 
@@ -65,27 +134,18 @@ Per `CLAUDE.md`: no third-party dependency without asking first. These are real,
 extensions, but each needs an explicit yes on a specific dependency before starting, not a
 unilateral add:
 
-- **Kafka bindings.** SQS and SNS are both now done (`awssqs`, `awssns`, each its own module -
-  see Done above). A self-hosted Kafka consumer/producer is the same shape (a broker protocol,
-  not reasonably hand-rollable) and would similarly need its own module - it needs a client
-  library (e.g. `github.com/segmentio/kafka-go` or `github.com/twmb/franz-go`), a dependency
-  this repo has not taken a position on yet.
-- **gRPC binding.** Go has no gRPC support in the standard library at all; this needs
-  `google.golang.org/grpc` + protobuf codegen tooling, a materially bigger dependency and
-  build-step footprint than anything else in this repo.
-- **EventBridge / DynamoDB Streams bindings.** Same shape as SQS - needs
-  `aws-sdk-go-v2` for the outbound (`PutEvents`) side at minimum (already a dependency via
-  `awssqs`, so this one's cheaper now); the inbound (Lambda event) side could plausibly be
-  hand-rolled similarly to `awslambda`'s existing HTTP v2 adapter and `awssqs`'s own inbound
-  handler, since it's "just" JSON event parsing, no signed API calls.
+- **DynamoDB Streams binding.** EventBridge is now done (`awseventbridge`, see Done above);
+  a Streams-triggered Lambda is the same shape as `awssqs`'s inbound handler (a Records
+  batch with `batchItemFailures` support) - the inbound side is hand-rollable, and there is
+  no outbound side to need an SDK, so this could even be zero-dependency in the root module.
+- **Pub/Sub outbound (publish) client.** The inbound half is done with zero dependencies
+  (`gcppubsub` - a push subscription is just HTTPS in). Publishing needs OAuth-signed API
+  calls, i.e. `cloud.google.com/go/pubsub` - the same shape as `awssqs`/`awssns`'s outbound
+  clients, and like them it would live in its own module so the dependency doesn't spread.
 - **Google Cloud Functions Gen2 (buildpack) deploy**, as opposed to the Cloud Run path already
   documented in `examples/gcp-cloudrun-helloworld` - needs
   `github.com/GoogleCloudPlatform/functions-framework-go`, the one Google-specific dependency
   this port has avoided by targeting Cloud Run instead.
-- **OpenTelemetry-based diagnostics** (tracing/metrics export), the Go equivalent of the main
-  repo's `Benzene.Diagnostics` - needs `go.opentelemetry.io/otel` plus an exporter. The basic
-  `log/slog`-only stopgap above covers "some visibility" without this dependency in the
-  meantime.
 
 ## Deliberately out of scope (not a "later" - a "no, and here's why")
 
@@ -108,7 +168,10 @@ equivalent to port, not gaps in this port:
 - **Code generation tooling** (`Benzene.CodeGen.*`) - .NET source generators and Go code
   generation work completely differently; if this port ever wants generated OpenAPI docs or a
   typed client, that's a fresh design, not a port of the C# generator.
-- **`Benzene.Mesh.*`** - the service-mesh visibility tooling is aggregator/UI infrastructure
-  that talks to *any* language's health-check endpoint over HTTP; it doesn't need a per-language
-  port at all, Go services already work with the existing (C#) aggregator once they expose the
-  standard health-check response shape (which `healthcheck` already produces).
+- ~~**`Benzene.Mesh.*`** - doesn't need a per-language port~~ - **superseded.** This entry
+  predates `docs/design/mesh.md`. The mesh as actually designed is not just an HTTP
+  health-check aggregator: the service-side feeds (descriptor derivation from the live
+  `Registry`, trace emission) are necessarily per-language, and this port ships them (`mesh`,
+  `meshd` - see Done above). What stays true is that the *collector* is language-neutral: any
+  implementation's collector can host any implementation's services over the shared
+  `mesh:*` wire contract.
