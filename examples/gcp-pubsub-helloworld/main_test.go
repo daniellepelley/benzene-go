@@ -1,39 +1,23 @@
 package main
 
 import (
-	"encoding/base64"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
+
+	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/benzenetest"
 )
 
-func pushBody(t *testing.T, attributes map[string]string, data string) string {
-	t.Helper()
-	body, err := json.Marshal(map[string]any{
-		"message": map[string]any{
-			"data":       base64.StdEncoding.EncodeToString([]byte(data)),
-			"attributes": attributes,
-		},
-		"subscription": "projects/p/subscriptions/greet-helloworld-push",
-	})
-	if err != nil {
-		t.Fatalf("json.Marshal() error = %v", err)
-	}
-	return string(body)
-}
+// The ack/nack tests boot the real app from its composition root and push a native Pub/Sub push
+// delivery in the front door with benzenetest.SendPubSub - the same harness shape as the AWS
+// consumers, only the Send* call differs. A success status acks (204); a failure nacks (500),
+// handing the message back for redelivery.
 
 func TestPushEndpoint_GreetMessageIsAcked(t *testing.T) {
-	server := httptest.NewServer(newHandler(newApp()))
-	defer server.Close()
+	host := benzenetest.NewHost(newApp())
 
-	resp, err := http.Post(server.URL+"/pubsub", "application/json",
-		strings.NewReader(pushBody(t, map[string]string{"topic": "greet"}, `{"name":"World"}`)))
-	if err != nil {
-		t.Fatalf("http.Post() error = %v", err)
-	}
-	defer resp.Body.Close()
+	resp := benzenetest.SendPubSub(t, host, benzene.NewTopic("greet"), greetRequest{Name: "World"}, nil)
 
 	if resp.StatusCode != http.StatusNoContent {
 		t.Errorf("status = %d, want %d (ack)", resp.StatusCode, http.StatusNoContent)
@@ -41,23 +25,19 @@ func TestPushEndpoint_GreetMessageIsAcked(t *testing.T) {
 }
 
 func TestPushEndpoint_FailedMessageIsNacked(t *testing.T) {
-	server := httptest.NewServer(newHandler(newApp()))
-	defer server.Close()
+	host := benzenetest.NewHost(newApp())
 
-	resp, err := http.Post(server.URL+"/pubsub", "application/json",
-		strings.NewReader(pushBody(t, map[string]string{"topic": "greet"}, `{"name":""}`)))
-	if err != nil {
-		t.Fatalf("http.Post() error = %v", err)
-	}
-	defer resp.Body.Close()
+	resp := benzenetest.SendPubSub(t, host, benzene.NewTopic("greet"), greetRequest{Name: ""}, nil)
 
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Errorf("status = %d, want %d (nack)", resp.StatusCode, http.StatusInternalServerError)
 	}
 }
 
+// This tests the mux routing in newHandler (app-specific glue), so it stays an httptest against
+// the assembled handler rather than a single-transport Send.
 func TestOtherPathsAreNotFound(t *testing.T) {
-	server := httptest.NewServer(newHandler(newApp()))
+	server := httptest.NewServer(newHandler(newApp().Run()))
 	defer server.Close()
 
 	resp, err := http.Get(server.URL + "/")

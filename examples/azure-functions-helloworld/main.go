@@ -30,24 +30,31 @@ func greetHandler(_ context.Context, req greetRequest) benzene.Result[greetRespo
 	return benzene.Ok(greetResponse{Greeting: "Hello, " + req.Name + "!"})
 }
 
-func newApp() *benzene.ApplicationBuilder {
-	registry := benzene.NewRegistry()
-	if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
-		log.Fatalf("register greet handler: %v", err)
-	}
-	return &benzene.ApplicationBuilder{
-		Registry:  registry,
-		Container: benzene.NewContainer(),
-		Pipeline:  benzene.NewPipeline(benzene.RouterMiddleware(registry)),
+// newApp is the composition root both main() and the tests boot from.
+func newApp() benzene.App[struct{}] {
+	return benzene.App[struct{}]{
+		GetConfiguration: func() struct{} { return struct{}{} },
+		ConfigureServices: func(registry *benzene.Registry, _ *benzene.Container, _ struct{}) {
+			if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
+				log.Fatalf("register greet handler: %v", err)
+			}
+		},
+		Configure: func(builder *benzene.ApplicationBuilder, _ struct{}) {
+			builder.UsePipeline(benzene.NewPipeline(benzene.RouterMiddleware(builder.Registry)))
+		},
 	}
 }
 
-// newHandler builds the custom-handler HTTP server. Route.Path is "/Greet" - the *local*
-// invocation path the Functions host uses (the ./Greet function folder's name), independent
-// of the "greet" public route configured in Greet/function.json.
+// routes is the HTTP route table both main() and the tests use. Route.Path is "/Greet" - the
+// *local* invocation path the Functions host uses (the ./Greet function folder's name),
+// independent of the "greet" public route configured in Greet/function.json.
+func routes() []httpbinding.Route {
+	return []httpbinding.Route{{Method: http.MethodPost, Path: "/Greet", Topic: benzene.NewTopic("greet")}}
+}
+
+// newHandler builds the custom-handler HTTP server.
 func newHandler(builder *benzene.ApplicationBuilder) http.Handler {
-	routes := []httpbinding.Route{{Method: http.MethodPost, Path: "/Greet", Topic: benzene.NewTopic("greet")}}
-	return azurefunctions.Handler(builder, routes)
+	return azurefunctions.Handler(builder, routes())
 }
 
 // portFromEnv reads FUNCTIONS_CUSTOMHANDLER_PORT, the port the Functions host tells the
@@ -61,7 +68,7 @@ func portFromEnv() string {
 }
 
 func main() {
-	handler := newHandler(newApp())
+	handler := newHandler(newApp().Run())
 	port := portFromEnv()
 	log.Printf("azure-functions-helloworld listening on :%s", port)
 	log.Fatal(http.ListenAndServe(":"+port, handler))

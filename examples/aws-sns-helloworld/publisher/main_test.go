@@ -3,96 +3,78 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"testing"
 
-	"github.com/aws/aws-sdk-go-v2/service/sns"
-
 	benzene "github.com/daniellepelley/benzene-go"
-	"github.com/daniellepelley/benzene-go/awslambda"
-	"github.com/daniellepelley/benzene-go/awssns"
-	"github.com/daniellepelley/benzene-go/httpbinding"
+	"github.com/daniellepelley/benzene-go/benzenetest"
+	"github.com/daniellepelley/benzene-go/client"
+
+	"github.com/daniellepelley/benzene-go/examples/aws-sns-helloworld/greeting"
 )
 
-type fakePublishAPI struct {
-	err error
+// These tests boot the real app from its composition root, push an API Gateway request in the
+// front door, and assert on BOTH the native HTTP response AND the egress captured by a
+// FakeMessageSender. WithServices swaps the real SNS client for the fake; last-registration-wins.
+
+// wiredButOverridden stands in for the real awssns.Client the composition root would wire. The
+// test overrides it via WithServices, and this fatal proves the override won.
+func wiredButOverridden(t *testing.T) client.Sender {
+	return client.SenderFunc(func(context.Context, benzene.Topic, map[string]string, []byte) benzene.Result[json.RawMessage] {
+		t.Fatal("the real Sender should have been overridden by WithServices")
+		return benzene.Result[json.RawMessage]{}
+	})
 }
 
-func (f *fakePublishAPI) Publish(context.Context, *sns.PublishInput, ...func(*sns.Options)) (*sns.PublishOutput, error) {
-	if f.err != nil {
-		return nil, f.err
-	}
-	return &sns.PublishOutput{}, nil
-}
-
-func newTestHandler(api *fakePublishAPI) awslambda.HandlerFunc {
-	snsClient := awssns.NewClient(api, "arn:aws:sns:us-east-1:123456789012:example")
-	builder := newApp(snsClient)
-	routes := []httpbinding.Route{{Method: http.MethodPost, Path: "/greet", Topic: benzene.NewTopic("greet")}}
-	return awslambda.HTTPHandler(builder, routes)
+func newTestHost(t *testing.T, fake *benzenetest.FakeMessageSender) *benzenetest.Host {
+	t.Helper()
+	return benzenetest.NewHost(newApp(wiredButOverridden(t)),
+		benzenetest.WithServices(func(b *benzene.ApplicationBuilder) {
+			client.RegisterSender(b.Container, fake)
+		}),
+		benzenetest.WithRoutes(routes()...),
+	)
 }
 
 func TestPublisher_ForwardsToTopicAndReturnsAccepted(t *testing.T) {
-	handler := newTestHandler(&fakePublishAPI{})
+	fake := benzenetest.NewFakeMessageSender()
+	host := newTestHost(t, fake)
 
-	event := `{"rawPath":"/greet","headers":{},"requestContext":{"http":{"method":"POST","path":"/greet"}},"body":"{\"name\":\"World\"}"}`
-	result, err := handler(context.Background(), json.RawMessage(event))
-	if err != nil {
-		t.Fatalf("handler() error = %v", err)
-	}
+	resp := benzenetest.SendAPIGateway(t, host, http.MethodPost, "/greet", greeting.GreetRequest{Name: "World"}, nil)
 
-	var resp struct {
-		StatusCode int `json:"statusCode"`
-	}
-	if err := json.Unmarshal(result, &resp); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
-	}
 	if resp.StatusCode != http.StatusAccepted {
-		t.Errorf("statusCode = %d, want %d", resp.StatusCode, http.StatusAccepted)
+		t.Fatalf("statusCode = %d, want %d; body = %s", resp.StatusCode, http.StatusAccepted, resp.Body)
+	}
+	if got := fake.LastTopic(); got != benzene.NewTopic("greet") {
+		t.Errorf("LastTopic = %v, want greet", got)
+	}
+	var sent greeting.GreetRequest
+	fake.DecodeLastMessage(t, &sent)
+	if sent.Name != "World" {
+		t.Errorf("published Name = %q, want %q", sent.Name, "World")
 	}
 }
 
 func TestPublisher_DoesNotValidateContentBeforeForwarding(t *testing.T) {
-	// The publisher's job is only to forward to the topic - it deliberately does not
-	// duplicate the consumer's own validation (greeting.Handler's "name is required" check).
-	// An empty name is still accepted here; it's the consumer, processing the notification
-	// later and asynchronously, that reports the actual validation failure - invisible to this
-	// original HTTP caller, an inherent tradeoff of fire-and-forget messaging.
-	handler := newTestHandler(&fakePublishAPI{})
+	fake := benzenetest.NewFakeMessageSender()
+	host := newTestHost(t, fake)
 
-	event := `{"rawPath":"/greet","headers":{},"requestContext":{"http":{"method":"POST","path":"/greet"}},"body":"{\"name\":\"\"}"}`
-	result, err := handler(context.Background(), json.RawMessage(event))
-	if err != nil {
-		t.Fatalf("handler() error = %v", err)
-	}
+	resp := benzenetest.SendAPIGateway(t, host, http.MethodPost, "/greet", greeting.GreetRequest{Name: ""}, nil)
 
-	var resp struct {
-		StatusCode int `json:"statusCode"`
-	}
-	if err := json.Unmarshal(result, &resp); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
-	}
 	if resp.StatusCode != http.StatusAccepted {
 		t.Errorf("statusCode = %d, want %d", resp.StatusCode, http.StatusAccepted)
+	}
+	if fake.Calls() != 1 {
+		t.Errorf("Calls = %d, want 1 (forwarded despite empty name)", fake.Calls())
 	}
 }
 
 func TestPublisher_TopicFailureIsServiceUnavailable(t *testing.T) {
-	handler := newTestHandler(&fakePublishAPI{err: errors.New("boom")})
+	fake := benzenetest.NewFakeMessageSender().WithResult(benzene.ServiceUnavailable[json.RawMessage]("boom"))
+	host := newTestHost(t, fake)
 
-	event := `{"rawPath":"/greet","headers":{},"requestContext":{"http":{"method":"POST","path":"/greet"}},"body":"{\"name\":\"World\"}"}`
-	result, err := handler(context.Background(), json.RawMessage(event))
-	if err != nil {
-		t.Fatalf("handler() error = %v", err)
-	}
+	resp := benzenetest.SendAPIGateway(t, host, http.MethodPost, "/greet", greeting.GreetRequest{Name: "World"}, nil)
 
-	var resp struct {
-		StatusCode int `json:"statusCode"`
-	}
-	if err := json.Unmarshal(result, &resp); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
-	}
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Errorf("statusCode = %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
 	}

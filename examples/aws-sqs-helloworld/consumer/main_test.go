@@ -1,37 +1,23 @@
 package main
 
 import (
-	"context"
-	"encoding/json"
 	"testing"
 
+	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/awssqs"
+	"github.com/daniellepelley/benzene-go/benzenetest"
+
+	"github.com/daniellepelley/benzene-go/examples/aws-sqs-helloworld/greeting"
 )
 
-type batchResponse struct {
-	BatchItemFailures []struct {
-		ItemIdentifier string `json:"itemIdentifier"`
-	} `json:"batchItemFailures"`
-}
-
-func invoke(t *testing.T, event string) batchResponse {
-	t.Helper()
-	handler := awssqs.Handler(newApp())
-	result, err := handler(context.Background(), json.RawMessage(event))
-	if err != nil {
-		t.Fatalf("handler() error = %v", err)
-	}
-	var resp batchResponse
-	if err := json.Unmarshal(result, &resp); err != nil {
-		t.Fatalf("json.Unmarshal(result) error = %v; result = %s", err, result)
-	}
-	return resp
-}
+// These tests boot the real app from its composition root (newApp) and push a native SQS event
+// in the front door with awssqs.SendSQS - the same harness shape every transport uses. To test
+// the consumer on GCP instead, only the Send* call would change (benzenetest.SendPubSub).
 
 func TestConsumer_ValidGreetMessageSucceeds(t *testing.T) {
-	event := `{"Records":[{"messageId":"msg-1","body":"{\"name\":\"World\"}","messageAttributes":{"topic":{"stringValue":"greet"}}}]}`
+	host := benzenetest.NewHost(newApp())
 
-	resp := invoke(t, event)
+	resp := awssqs.SendSQS(t, host, benzene.NewTopic("greet"), greeting.GreetRequest{Name: "World"}, nil)
 
 	if len(resp.BatchItemFailures) != 0 {
 		t.Errorf("BatchItemFailures = %v, want none", resp.BatchItemFailures)
@@ -39,11 +25,11 @@ func TestConsumer_ValidGreetMessageSucceeds(t *testing.T) {
 }
 
 func TestConsumer_MissingNameIsReportedAsBatchItemFailure(t *testing.T) {
-	event := `{"Records":[{"messageId":"msg-1","body":"{\"name\":\"\"}","messageAttributes":{"topic":{"stringValue":"greet"}}}]}`
+	host := benzenetest.NewHost(newApp())
 
-	resp := invoke(t, event)
+	resp := awssqs.SendSQS(t, host, benzene.NewTopic("greet"), greeting.GreetRequest{Name: ""}, nil)
 
-	if len(resp.BatchItemFailures) != 1 || resp.BatchItemFailures[0].ItemIdentifier != "msg-1" {
-		t.Errorf("BatchItemFailures = %v, want [{msg-1}]", resp.BatchItemFailures)
+	if len(resp.BatchItemFailures) != 1 || resp.BatchItemFailures[0].ItemIdentifier != awssqs.TestMessageID {
+		t.Errorf("BatchItemFailures = %v, want [{%s}]", resp.BatchItemFailures, awssqs.TestMessageID)
 	}
 }

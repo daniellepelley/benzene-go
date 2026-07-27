@@ -1,32 +1,32 @@
 package main
 
 import (
-	"context"
-	"encoding/json"
 	"testing"
 
+	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/awssns"
+	"github.com/daniellepelley/benzene-go/benzenetest"
+
+	"github.com/daniellepelley/benzene-go/examples/aws-sns-helloworld/greeting"
 )
 
-func invoke(t *testing.T, event string) error {
-	t.Helper()
-	handler := awssns.Handler(newApp())
-	_, err := handler(context.Background(), json.RawMessage(event))
-	return err
-}
+// These tests boot the real app from its composition root and push a native SNS notification in
+// the front door with awssns.SendSNS - the same harness shape as the SQS consumer, only the
+// Send* call differs. SNS has no partial-failure response, so a failed notification surfaces as
+// a non-nil error (AWS's async-invoke-retry signal).
 
 func TestConsumer_ValidGreetNotificationSucceeds(t *testing.T) {
-	event := `{"Records":[{"Sns":{"MessageId":"msg-1","Message":"{\"name\":\"World\"}","MessageAttributes":{"topic":{"Value":"greet"}}}}]}`
+	host := benzenetest.NewHost(newApp())
 
-	if err := invoke(t, event); err != nil {
-		t.Errorf("invoke() error = %v, want nil", err)
+	if err := awssns.SendSNS(t, host, benzene.NewTopic("greet"), greeting.GreetRequest{Name: "World"}, nil); err != nil {
+		t.Errorf("SendSNS() error = %v, want nil", err)
 	}
 }
 
 func TestConsumer_MissingNameIsReturnedAsError(t *testing.T) {
-	event := `{"Records":[{"Sns":{"MessageId":"msg-1","Message":"{\"name\":\"\"}","MessageAttributes":{"topic":{"Value":"greet"}}}}]}`
+	host := benzenetest.NewHost(newApp())
 
-	if err := invoke(t, event); err == nil {
-		t.Error("invoke() error = nil, want an error for a failed notification - triggers AWS's async-invoke retry")
+	if err := awssns.SendSNS(t, host, benzene.NewTopic("greet"), greeting.GreetRequest{Name: ""}, nil); err == nil {
+		t.Error("SendSNS() error = nil, want an error for a failed notification")
 	}
 }

@@ -29,16 +29,24 @@ func greetHandler(_ context.Context, req greetRequest) benzene.Result[greetRespo
 	return benzene.Ok(greetResponse{Greeting: "Hello, " + req.Name + "!"})
 }
 
-func newApp() *benzene.ApplicationBuilder {
-	registry := benzene.NewRegistry()
-	if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
-		panic(err)
+// newApp is the composition root both main() and the tests boot from.
+func newApp() benzene.App[struct{}] {
+	return benzene.App[struct{}]{
+		GetConfiguration: func() struct{} { return struct{}{} },
+		ConfigureServices: func(registry *benzene.Registry, _ *benzene.Container, _ struct{}) {
+			if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
+				panic(err)
+			}
+		},
+		Configure: func(builder *benzene.ApplicationBuilder, _ struct{}) {
+			builder.UsePipeline(benzene.NewPipeline(benzene.RouterMiddleware(builder.Registry)))
+		},
 	}
-	return &benzene.ApplicationBuilder{
-		Registry:  registry,
-		Container: benzene.NewContainer(),
-		Pipeline:  benzene.NewPipeline(benzene.RouterMiddleware(registry)),
-	}
+}
+
+// routes is the HTTP route table both main() and the tests use.
+func routes() []httpbinding.Route {
+	return []httpbinding.Route{{Method: http.MethodPost, Path: "/greet", Topic: benzene.NewTopic("greet")}}
 }
 
 // newHandler dispatches to awslambda.HTTPHandler for a Function-URL-shaped event (has a
@@ -46,8 +54,7 @@ func newApp() *benzene.ApplicationBuilder {
 // an HTTP caller (curl against the Function URL) and a direct/Lambda-to-Lambda envelope
 // invoke, without the caller needing to know which.
 func newHandler(builder *benzene.ApplicationBuilder) awslambda.HandlerFunc {
-	routes := []httpbinding.Route{{Method: http.MethodPost, Path: "/greet", Topic: benzene.NewTopic("greet")}}
-	httpHandler := awslambda.HTTPHandler(builder, routes)
+	httpHandler := awslambda.HTTPHandler(builder, routes())
 	envelopeHandler := awslambda.EnvelopeHandler(builder)
 
 	return func(ctx context.Context, event json.RawMessage) (json.RawMessage, error) {
@@ -62,5 +69,5 @@ func newHandler(builder *benzene.ApplicationBuilder) awslambda.HandlerFunc {
 }
 
 func main() {
-	awslambda.Start(newHandler(newApp()))
+	awslambda.Start(newHandler(newApp().Run()))
 }
