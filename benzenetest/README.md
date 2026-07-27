@@ -34,6 +34,7 @@ are identical - that parallelism is the point.
 
 | Transport | Specialization + dispatch | Native response |
 |-----------|---------------------------|-----------------|
+| Native HTTP (`net/http`) | `benzenetest.SendHTTP(t, host, method, path, payload, headers)` | `HTTPResponse` |
 | AWS API Gateway / Function URL | `benzenetest.SendAPIGateway(t, host, method, path, payload, headers)` | `HTTPResponse` |
 | AWS Lambda envelope (direct invoke) | `benzenetest.SendEnvelope(t, host, topic, payload, headers)` | `wire.Response` |
 | AWS SQS | `awssqs.SendSQS(t, host, topic, payload, headers)` | `awssqs.SQSResponse` |

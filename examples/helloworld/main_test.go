@@ -4,14 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/benzenetest"
 	"github.com/daniellepelley/benzene-go/httpbinding"
-	"github.com/daniellepelley/benzene-go/wire"
 )
+
+// These tests boot the real app from its composition root (newApp) and push native events in the
+// front door with the benzenetest harness - the same shape every transport uses. The native-HTTP
+// front door is benzenetest.SendHTTP; the raw wire-envelope front door is benzenetest.SendEnvelope.
+// To test these handlers on a cloud host instead, only the Send* call would change (SendAPIGateway
+// on AWS, SendPubSub on GCP, ...). Lines that create the host and assert stay identical.
 
 func TestGreetHandler_NoScopeOnContextIsUnexpectedError(t *testing.T) {
 	// A direct unit-level call bypassing the HTTP wiring, which always attaches a scope
@@ -25,10 +29,9 @@ func TestGreetHandler_NoScopeOnContextIsUnexpectedError(t *testing.T) {
 }
 
 func TestGreetEndpoint_ReturnsGreetingAndIncrementsCount(t *testing.T) {
-	server := httptest.NewServer(newHandler(newApp()))
-	defer server.Close()
+	host := benzenetest.NewHost(newApp(), benzenetest.WithRoutes(routes()...))
 
-	first := postGreet(t, server, "World")
+	first := postGreet(t, host, "World")
 	if first.Greeting != "Hello, World!" {
 		t.Errorf("Greeting = %q, want %q", first.Greeting, "Hello, World!")
 	}
@@ -36,21 +39,16 @@ func TestGreetEndpoint_ReturnsGreetingAndIncrementsCount(t *testing.T) {
 		t.Errorf("Count = %d, want 1", first.Count)
 	}
 
-	second := postGreet(t, server, "Go")
+	second := postGreet(t, host, "Go")
 	if second.Count != 2 {
 		t.Errorf("Count = %d, want 2 - the counter is a singleton shared across requests", second.Count)
 	}
 }
 
 func TestGreetEndpoint_MissingNameIsBadRequest(t *testing.T) {
-	server := httptest.NewServer(newHandler(newApp()))
-	defer server.Close()
+	host := benzenetest.NewHost(newApp(), benzenetest.WithRoutes(routes()...))
 
-	resp, err := http.Post(server.URL+"/greet", "application/json", strings.NewReader(`{"name":""}`))
-	if err != nil {
-		t.Fatalf("http.Post() error = %v", err)
-	}
-	defer resp.Body.Close()
+	resp := benzenetest.SendHTTP(t, host, http.MethodPost, "/greet", greetRequest{Name: ""}, nil)
 
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
@@ -58,17 +56,12 @@ func TestGreetEndpoint_MissingNameIsBadRequest(t *testing.T) {
 }
 
 func TestHealthEndpoint_ReturnsHealthy(t *testing.T) {
-	server := httptest.NewServer(newHandler(newApp()))
-	defer server.Close()
+	host := benzenetest.NewHost(newApp(), benzenetest.WithRoutes(routes()...))
 
-	resp, err := http.Get(server.URL + httpbinding.HealthPath)
-	if err != nil {
-		t.Fatalf("http.Get() error = %v", err)
-	}
-	defer resp.Body.Close()
+	resp := benzenetest.SendHTTP(t, host, http.MethodGet, httpbinding.HealthPath, nil, nil)
 
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+		t.Fatalf("status = %d, want %d; body = %s", resp.StatusCode, http.StatusOK, resp.Body)
 	}
 	var body struct {
 		IsHealthy    bool `json:"isHealthy"`
@@ -76,8 +69,8 @@ func TestHealthEndpoint_ReturnsHealthy(t *testing.T) {
 			Status string `json:"status"`
 		} `json:"healthChecks"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("json.Decode() error = %v", err)
+	if err := json.Unmarshal([]byte(resp.Body), &body); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v; body = %s", err, resp.Body)
 	}
 	if !body.IsHealthy {
 		t.Error("IsHealthy = false, want true")
@@ -88,40 +81,26 @@ func TestHealthEndpoint_ReturnsHealthy(t *testing.T) {
 }
 
 func TestInvokeEndpoint_EnvelopeRoundTrip(t *testing.T) {
-	server := httptest.NewServer(newHandler(newApp()))
-	defer server.Close()
+	host := benzenetest.NewHost(newApp())
 
-	reqBody, err := wire.MarshalRequest(wire.Request{Topic: "greet", Headers: map[string]string{}, Body: `{"name":"Envelope"}`})
-	if err != nil {
-		t.Fatalf("MarshalRequest() error = %v", err)
-	}
-	resp, err := http.Post(server.URL+httpbinding.EnvelopePath, "application/json", strings.NewReader(string(reqBody)))
-	if err != nil {
-		t.Fatalf("http.Post() error = %v", err)
-	}
-	defer resp.Body.Close()
+	resp := benzenetest.SendEnvelope(t, host, benzene.NewTopic("greet"), greetRequest{Name: "Envelope"}, nil)
 
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("outer HTTP status = %d, want %d", resp.StatusCode, http.StatusOK)
+	if resp.StatusCode != string(benzene.StatusOk) {
+		t.Fatalf("envelope statusCode = %q, want %q; body = %s", resp.StatusCode, benzene.StatusOk, resp.Body)
 	}
-	var envResp wire.Response
-	if err := json.NewDecoder(resp.Body).Decode(&envResp); err != nil {
-		t.Fatalf("json.Decode() error = %v", err)
+	var greeting greetResponse
+	if err := json.Unmarshal([]byte(resp.Body), &greeting); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v; body = %s", err, resp.Body)
 	}
-	if envResp.StatusCode != "Ok" {
-		t.Errorf("envelope statusCode = %q, want %q", envResp.StatusCode, "Ok")
+	if greeting.Greeting != "Hello, Envelope!" {
+		t.Errorf("Greeting = %q, want %q", greeting.Greeting, "Hello, Envelope!")
 	}
 }
 
 func TestUnknownRouteIsNotFound(t *testing.T) {
-	server := httptest.NewServer(newHandler(newApp()))
-	defer server.Close()
+	host := benzenetest.NewHost(newApp(), benzenetest.WithRoutes(routes()...))
 
-	resp, err := http.Get(server.URL + "/no-such-route")
-	if err != nil {
-		t.Fatalf("http.Get() error = %v", err)
-	}
-	defer resp.Body.Close()
+	resp := benzenetest.SendHTTP(t, host, http.MethodGet, "/no-such-route", nil, nil)
 
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusNotFound)
@@ -142,23 +121,17 @@ func TestPortFromEnv_UsesEnvWhenSet(t *testing.T) {
 	}
 }
 
-func postGreet(t *testing.T, server *httptest.Server, name string) greetResponse {
+// postGreet pushes a greet request through the native-HTTP front door and decodes the native
+// response body, so the increment assertions read against the real mapped HTTP response.
+func postGreet(t *testing.T, host *benzenetest.Host, name string) greetResponse {
 	t.Helper()
-	body, err := json.Marshal(greetRequest{Name: name})
-	if err != nil {
-		t.Fatalf("json.Marshal() error = %v", err)
-	}
-	resp, err := http.Post(server.URL+"/greet", "application/json", strings.NewReader(string(body)))
-	if err != nil {
-		t.Fatalf("http.Post() error = %v", err)
-	}
-	defer resp.Body.Close()
+	resp := benzenetest.SendHTTP(t, host, http.MethodPost, "/greet", greetRequest{Name: name}, nil)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+		t.Fatalf("status = %d, want %d; body = %s", resp.StatusCode, http.StatusOK, resp.Body)
 	}
 	var greeting greetResponse
-	if err := json.NewDecoder(resp.Body).Decode(&greeting); err != nil {
-		t.Fatalf("json.Decode() error = %v", err)
+	if err := json.Unmarshal([]byte(resp.Body), &greeting); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v; body = %s", err, resp.Body)
 	}
 	return greeting
 }

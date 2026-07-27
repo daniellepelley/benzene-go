@@ -110,6 +110,62 @@ func TestSendAPIGateway_MissingNameIsBadRequest(t *testing.T) {
 	}
 }
 
+// SendHTTP is the native-HTTP front door: parallel in name, argument order, and return shape with
+// SendAPIGateway (only the Send* call names the transport), driving the real httpbinding.Handler.
+func TestSendHTTP_ReturnsNativeResponse(t *testing.T) {
+	host := benzenetest.NewHost(newTestApp(), benzenetest.WithRoutes(testRoutes()...))
+
+	resp := benzenetest.SendHTTP(t, host, http.MethodPost, "/greet", greetRequest{Name: "World"}, nil)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("StatusCode = %d, want 200; body = %s", resp.StatusCode, resp.Body)
+	}
+	var greeting greetResponse
+	if err := json.Unmarshal([]byte(resp.Body), &greeting); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if greeting.Greeting != "Hello, World!" {
+		t.Errorf("Greeting = %q, want %q", greeting.Greeting, "Hello, World!")
+	}
+}
+
+func TestSendHTTP_MissingNameIsBadRequest(t *testing.T) {
+	host := benzenetest.NewHost(newTestApp(), benzenetest.WithRoutes(testRoutes()...))
+
+	resp := benzenetest.SendHTTP(t, host, http.MethodPost, "/greet", greetRequest{Name: ""}, nil)
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("StatusCode = %d, want 400", resp.StatusCode)
+	}
+}
+
+// The same ingress -> handler -> egress flow as the API Gateway flagship, over the native-HTTP
+// front door: the SAME app, the SAME override, the SAME egress assertion - only SendHTTP names the
+// transport.
+func TestSendHTTP_PublishesOnEgressTopic(t *testing.T) {
+	fake := benzenetest.NewFakeMessageSender()
+	host := benzenetest.NewHost(newTestApp(),
+		benzenetest.WithServices(func(b *benzene.ApplicationBuilder) {
+			client.RegisterSender(b.Container, fake)
+		}),
+		benzenetest.WithRoutes(testRoutes()...),
+	)
+
+	resp := benzenetest.SendHTTP(t, host, http.MethodPost, "/orders/publish", orderRequest{ID: "order-1"}, nil)
+
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("StatusCode = %d, want 202; body = %s", resp.StatusCode, resp.Body)
+	}
+	if got := fake.LastTopic(); got != benzene.NewTopic("order:created") {
+		t.Errorf("LastTopic = %v, want order:created", got)
+	}
+	var published orderRequest
+	fake.DecodeLastMessage(t, &published)
+	if published.ID != "order-1" {
+		t.Errorf("published ID = %q, want %q", published.ID, "order-1")
+	}
+}
+
 // The flagship: ingress (API Gateway) -> handler -> egress (faked Sender), asserting on both the
 // native response and what the service published. Only WithServices names the fake; the rest is
 // identical to any other test.

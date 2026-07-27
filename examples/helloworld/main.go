@@ -69,10 +69,12 @@ func greetHandler(ctx context.Context, req greetRequest) benzene.Result[greetRes
 	})
 }
 
-// newApp runs the three-phase lifecycle (core-concepts.md §7) and returns the resulting
-// ApplicationBuilder, ready for an HTTP entry point to attach to.
-func newApp() *benzene.ApplicationBuilder {
-	app := benzene.App[struct{}]{
+// newApp is the composition root: the three-phase benzene.App (core-concepts.md §7) both main()
+// and the tests boot from, so a test exercises exactly the wiring that ships. main() calls
+// .Run() to build the pipeline; the tests hand the App to benzenetest.NewHost, which runs the
+// same lifecycle with the WithServices test seam.
+func newApp() benzene.App[struct{}] {
+	return benzene.App[struct{}]{
 		GetConfiguration: func() struct{} { return struct{}{} },
 		ConfigureServices: func(registry *benzene.Registry, container *benzene.Container, _ struct{}) {
 			benzene.AddSingleton(container, greetingCounterKey, func(_ *benzene.Scope) GreetingCounter {
@@ -94,7 +96,16 @@ func newApp() *benzene.ApplicationBuilder {
 			))
 		},
 	}
-	return app.Run()
+}
+
+// routes is the HTTP route table (path/method -> topic) the native httpbinding entry point
+// mounts. It lives in one place so main() and the tests (via benzenetest.WithRoutes) agree on
+// exactly the same routing.
+func routes() []httpbinding.Route {
+	return []httpbinding.Route{
+		{Method: http.MethodPost, Path: "/greet", Topic: benzene.NewTopic("greet")},
+		{Method: http.MethodGet, Path: httpbinding.HealthPath, Topic: benzene.NewTopic("healthcheck")},
+	}
 }
 
 // newHandler builds the HTTP entry point: /greet as a native REST-style route
@@ -105,14 +116,9 @@ func newApp() *benzene.ApplicationBuilder {
 // with no route table to agree on. The /benzene/ prefix marks them as framework
 // infrastructure, not domain endpoints.
 func newHandler(builder *benzene.ApplicationBuilder) http.Handler {
-	routes := []httpbinding.Route{
-		{Method: http.MethodPost, Path: "/greet", Topic: benzene.NewTopic("greet")},
-		{Method: http.MethodGet, Path: httpbinding.HealthPath, Topic: benzene.NewTopic("healthcheck")},
-	}
-
 	mux := http.NewServeMux()
 	mux.Handle(httpbinding.EnvelopePath, httpbinding.EnvelopeHandler(builder))
-	mux.Handle("/", httpbinding.Handler(builder, routes))
+	mux.Handle("/", httpbinding.Handler(builder, routes()))
 	return mux
 }
 
@@ -124,7 +130,7 @@ func portFromEnv() string {
 }
 
 func main() {
-	builder := newApp()
+	builder := newApp().Run()
 	handler := newHandler(builder)
 	port := portFromEnv()
 

@@ -12,6 +12,7 @@ import (
 	"github.com/daniellepelley/benzene-go/awslambda"
 	"github.com/daniellepelley/benzene-go/azurefunctions"
 	"github.com/daniellepelley/benzene-go/gcppubsub"
+	"github.com/daniellepelley/benzene-go/httpbinding"
 	"github.com/daniellepelley/benzene-go/wire"
 )
 
@@ -50,6 +51,32 @@ func SendAPIGateway(t TB, host *Host, method, path string, payload any, headers 
 		t.Fatalf("benzenetest: decode API Gateway response: %v; response = %s", err, raw)
 	}
 	return HTTPResponse{StatusCode: resp.StatusCode, Headers: resp.Headers, Body: resp.Body}
+}
+
+// SendHTTP pushes a native net/http request for method+path (payload as the body, optional
+// headers) through the real httpbinding.Handler on host, and returns the native, framework-mapped
+// HTTP response (real status code via httpstatus, response headers, body). Topic comes from the
+// route table supplied via WithRoutes. This is the native-HTTP front door - the direct net/http
+// analogue of SendAPIGateway (API Gateway) and SendAzureHTTP (Azure Functions HTTP): parallel in
+// name, argument order, and return shape; only the Send* call changes between them.
+func SendHTTP(t TB, host *Host, method, path string, payload any, headers map[string]string) HTTPResponse {
+	t.Helper()
+	req := NewHTTPRequest(t, method, path, payload, headers)
+	return serveHTTPRequest(t, httpbinding.Handler(host.builder, host.routes), req)
+}
+
+// NewHTTPRequest builds the native net/http request for method+path carrying payload as the body,
+// with headers as HTTP request headers - the shape httpbinding.Handler parses. Topic comes from
+// the route table (WithRoutes), not the request. This is the HTTP binding's native-event builder;
+// unlike the JSON-envelope builders in events.go it returns an *http.Request, the HTTP binding's
+// own native shape.
+func NewHTTPRequest(t TB, method, path string, payload any, headers map[string]string) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(method, path, strings.NewReader(marshalBody(t, payload)))
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	return req
 }
 
 // SendEnvelope pushes the raw wire-contracts.md envelope for topic+payload+headers through the
@@ -128,7 +155,15 @@ func newAzureQueueEvent(t TB, dataName string, topic benzene.Topic, payload any,
 // delivery.
 func serveHTTP(t TB, handler http.Handler, method, path string, body json.RawMessage) HTTPResponse {
 	t.Helper()
-	req := httptest.NewRequest(method, path, strings.NewReader(string(body)))
+	return serveHTTPRequest(t, handler, httptest.NewRequest(method, path, strings.NewReader(string(body))))
+}
+
+// serveHTTPRequest drives an http.Handler binding with an already-built in-memory request and
+// returns the outer HTTP response - the credential-free, network-free counterpart of a real cloud
+// HTTP delivery. SendHTTP uses it directly (so request headers ride on the native *http.Request);
+// serveHTTP wraps it for the JSON-body bindings that carry their headers inside the event.
+func serveHTTPRequest(t TB, handler http.Handler, req *http.Request) HTTPResponse {
+	t.Helper()
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
