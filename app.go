@@ -1,5 +1,7 @@
 package benzene
 
+import "github.com/daniellepelley/benzene-go/wire"
+
 // App is a Benzene application definition: the three-phase lifecycle of
 // core-concepts.md §7, run once, in order, at startup:
 //
@@ -53,6 +55,13 @@ type ApplicationBuilder struct {
 	Registry  *Registry
 	Container *Container
 	Pipeline  *Pipeline
+	// ReservedNames overrides the reserved metadata/header names (wire-contracts.md §2). It is
+	// the single injectable value the spec calls for: set it once here and every inbound binding
+	// built off this builder reads it, so a service renames a colliding key in one place. Its
+	// zero value means the standard defaults. The same value MUST also be given to the service's
+	// outbound clients (the queue Client structs' ReservedNames field), since an override applies
+	// to both directions.
+	ReservedNames wire.ReservedNames
 }
 
 // UsePipeline sets the middleware pipeline transport bindings will run invocations through.
@@ -60,5 +69,14 @@ type ApplicationBuilder struct {
 // builder so calls can be chained.
 func (b *ApplicationBuilder) UsePipeline(pipeline *Pipeline) *ApplicationBuilder {
 	b.Pipeline = pipeline
+	return b
+}
+
+// UseReservedNames overrides the reserved metadata/header names (wire-contracts.md §2) for every
+// inbound binding built off this builder. Call it from Configure before the binding constructors.
+// Returns the builder so calls can be chained. Remember to pass the same names to the service's
+// outbound clients - an override applies to both directions.
+func (b *ApplicationBuilder) UseReservedNames(names wire.ReservedNames) *ApplicationBuilder {
+	b.ReservedNames = names
 	return b
 }

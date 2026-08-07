@@ -72,7 +72,7 @@ func Handler(builder *benzene.ApplicationBuilder) http.Handler {
 			return
 		}
 
-		resp, successful := envelope.DispatchResult(r.Context(), builder.Pipeline, builder.Container, resolveRequest(push.Message, string(data)))
+		resp, successful := envelope.DispatchResult(r.Context(), builder.Pipeline, builder.Container, resolveRequest(push.Message, string(data), builder.ReservedNames.Topic()))
 		if !successful {
 			w.Header().Set("content-type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
@@ -88,8 +88,8 @@ func Handler(builder *benzene.ApplicationBuilder) http.Handler {
 // headers), else the decoded data parsed as a full wire.Request envelope, else an empty
 // topic, which RouterMiddleware maps to ValidationError - the message is nacked, never
 // silently dropped.
-func resolveRequest(message pushMessage, data string) wire.Request {
-	topic, headers := wire.ResolveMetadataTopic(message.Attributes, wire.DefaultTopicKey)
+func resolveRequest(message pushMessage, data, topicKey string) wire.Request {
+	topic, headers := wire.ResolveMetadataTopic(message.Attributes, topicKey)
 
 	if topic != "" {
 		return wire.Request{Topic: topic, Headers: headers, Body: data}

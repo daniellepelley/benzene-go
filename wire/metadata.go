@@ -15,6 +15,46 @@ import "strings"
 // DefaultTopicKey unless the service configured another.
 const DefaultTopicKey = "topic"
 
+// DefaultCorrelationKey is the reserved outbound correlation header of wire-contracts.md §2
+// (tier C). Like DefaultTopicKey it is a default, not a literal to hard-code - it is
+// configurable via ReservedNames.
+const DefaultCorrelationKey = "x-correlation-id"
+
+// ReservedNames holds the configurable reserved metadata/header names of wire-contracts.md §2
+// ("Reserved names are defaults"). The spec requires an implementation to expose them "as a
+// single injectable value" a service sets once and applies to both its inbound bindings and its
+// outbound clients - an override on only one side would send messages the service cannot itself
+// receive. The zero value uses the defaults, and an empty field falls back to its default via
+// the accessors, so a service overrides only the name it needs and leaves the rest standard.
+//
+// The defaults carry interop: two services that have not overridden anything interoperate
+// untouched, and a service that renames a key is responsible for agreeing that change with
+// whatever it talks to.
+type ReservedNames struct {
+	// TopicKey is the native-metadata key the topic travels under on queue-shaped transports
+	// (SQS/SNS message attributes, Pub/Sub attributes; tier A). Empty means DefaultTopicKey.
+	TopicKey string
+	// CorrelationKey is the outbound correlation header (tier C). Empty means
+	// DefaultCorrelationKey.
+	CorrelationKey string
+}
+
+// Topic returns the configured topic metadata key, or DefaultTopicKey when unset.
+func (n ReservedNames) Topic() string {
+	if n.TopicKey != "" {
+		return n.TopicKey
+	}
+	return DefaultTopicKey
+}
+
+// Correlation returns the configured correlation header name, or DefaultCorrelationKey when unset.
+func (n ReservedNames) Correlation() string {
+	if n.CorrelationKey != "" {
+		return n.CorrelationKey
+	}
+	return DefaultCorrelationKey
+}
+
 // ResolveMetadataTopic splits a transport's native string->string metadata dictionary into the
 // resolved topic and the remaining headers, following wire-contracts.md §2 and
 // transport-metadata-cases.json:

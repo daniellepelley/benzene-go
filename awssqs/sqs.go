@@ -60,7 +60,7 @@ func Handler(builder *benzene.ApplicationBuilder) awslambda.HandlerFunc {
 
 		var failures []batchItemFailure
 		for _, record := range sqsEvt.Records {
-			req := resolveRequest(record)
+			req := resolveRequest(record, builder.ReservedNames.Topic())
 			_, successful := envelope.DispatchResult(ctx, builder.Pipeline, builder.Container, req)
 			if !successful {
 				failures = append(failures, batchItemFailure{ItemIdentifier: record.MessageID})
@@ -79,12 +79,12 @@ func Handler(builder *benzene.ApplicationBuilder) awslambda.HandlerFunc {
 // entry describes. If neither yields a topic, the request carries an empty topic, which
 // RouterMiddleware maps to ValidationError (see router.go) rather than silently dropping the
 // record - it's still reported as a batch item failure, not lost.
-func resolveRequest(record sqsRecord) wire.Request {
+func resolveRequest(record sqsRecord, topicKey string) wire.Request {
 	metadata := make(map[string]string, len(record.MessageAttributes))
 	for name, attr := range record.MessageAttributes {
 		metadata[name] = attr.StringValue
 	}
-	topic, headers := wire.ResolveMetadataTopic(metadata, wire.DefaultTopicKey)
+	topic, headers := wire.ResolveMetadataTopic(metadata, topicKey)
 
 	if topic != "" {
 		return wire.Request{Topic: topic, Headers: headers, Body: record.Body}

@@ -95,6 +95,24 @@ func TestCorrelationDecorator_NilGenerateDoesNotFabricate(t *testing.T) {
 	}
 }
 
+func TestCorrelationDecoratorWithKey_HonoursOverriddenHeaderName(t *testing.T) {
+	var seenHeaders map[string]string
+	captor := SenderFunc(func(ctx context.Context, topic benzene.Topic, headers map[string]string, message []byte) benzene.Result[json.RawMessage] {
+		seenHeaders = headers
+		return benzene.Result[json.RawMessage]{Status: benzene.StatusOk}
+	})
+
+	decorated := CorrelationDecoratorWithKey(captor, "x-my-correlation", func() string { return "cid-1" })
+	decorated.Send(context.Background(), benzene.NewTopic("t"), map[string]string{}, nil)
+
+	if seenHeaders["x-my-correlation"] != "cid-1" {
+		t.Errorf(`headers["x-my-correlation"] = %q, want "cid-1"`, seenHeaders["x-my-correlation"])
+	}
+	if _, ok := seenHeaders["x-correlation-id"]; ok {
+		t.Error("the default header should not be written when the key is overridden")
+	}
+}
+
 func TestRandomCorrelationID_GeneratesDistinctHexValues(t *testing.T) {
 	first := RandomCorrelationID()
 	second := RandomCorrelationID()

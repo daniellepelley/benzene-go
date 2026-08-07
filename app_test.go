@@ -3,6 +3,8 @@ package benzene
 import (
 	"context"
 	"testing"
+
+	"github.com/daniellepelley/benzene-go/wire"
 )
 
 type testConfig struct {
@@ -100,5 +102,24 @@ func TestApplicationBuilder_UsePipeline_ReturnsBuilderForChaining(t *testing.T) 
 	}
 	if b.Pipeline != pipeline {
 		t.Error("UsePipeline should set Pipeline on the builder")
+	}
+}
+
+func TestApplicationBuilder_UseReservedNames_SetsAndChains(t *testing.T) {
+	b := &ApplicationBuilder{Registry: NewRegistry(), Container: NewContainer()}
+	names := wire.ReservedNames{TopicKey: "x-my-topic"}
+	returned := b.UseReservedNames(names)
+
+	if returned != b {
+		t.Error("UseReservedNames should return the same builder instance for chaining")
+	}
+	if b.ReservedNames.Topic() != "x-my-topic" {
+		t.Errorf("ReservedNames.Topic() = %q, want %q", b.ReservedNames.Topic(), "x-my-topic")
+	}
+	// The zero value on a fresh builder yields the default key, so a binding that reads it
+	// without any override still resolves the standard "topic".
+	fresh := &ApplicationBuilder{}
+	if fresh.ReservedNames.Topic() != wire.DefaultTopicKey {
+		t.Errorf("fresh builder Topic() = %q, want the default %q", fresh.ReservedNames.Topic(), wire.DefaultTopicKey)
 	}
 }

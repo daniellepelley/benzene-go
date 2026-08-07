@@ -5,6 +5,31 @@ import (
 	"testing"
 )
 
+func TestReservedNames_AccessorsDefaultWhenUnset(t *testing.T) {
+	// The zero value uses the defaults; a set field is returned verbatim.
+	var zero ReservedNames
+	if got := zero.Topic(); got != DefaultTopicKey {
+		t.Errorf("zero.Topic() = %q, want %q", got, DefaultTopicKey)
+	}
+	if got := zero.Correlation(); got != DefaultCorrelationKey {
+		t.Errorf("zero.Correlation() = %q, want %q", got, DefaultCorrelationKey)
+	}
+
+	set := ReservedNames{TopicKey: "x-my-topic", CorrelationKey: "x-my-corr"}
+	if got := set.Topic(); got != "x-my-topic" {
+		t.Errorf("set.Topic() = %q, want %q", got, "x-my-topic")
+	}
+	if got := set.Correlation(); got != "x-my-corr" {
+		t.Errorf("set.Correlation() = %q, want %q", got, "x-my-corr")
+	}
+
+	// A field left empty falls back independently of the other.
+	partial := ReservedNames{TopicKey: "x-my-topic"}
+	if got := partial.Correlation(); got != DefaultCorrelationKey {
+		t.Errorf("partial.Correlation() = %q, want the default %q", got, DefaultCorrelationKey)
+	}
+}
+
 func TestResolveMetadataTopic(t *testing.T) {
 	tests := []struct {
 		name        string

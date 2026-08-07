@@ -8,31 +8,39 @@ import (
 	"strings"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/wire"
 )
 
-// correlationIDHeader is wire-contracts.md §2's outbound correlation header: "Legacy
-// correlation value, written by the outbound correlation client decorator when the application
-// populates one."
-const correlationIDHeader = "x-correlation-id"
-
-// CorrelationDecorator wraps next so an outbound Send propagates an x-correlation-id header
-// (wire-contracts.md §2) - the value the caller already put in its own headers (matched
-// case-insensitively, per §2's "case-insensitive on read"), left untouched and never
-// overwritten. Per §2 the header is "written ... when the application populates one," and
+// CorrelationDecorator wraps next so an outbound Send propagates the reserved correlation header
+// (wire-contracts.md §2, default x-correlation-id) - the value the caller already put in its own
+// headers (matched case-insensitively, per §2's "case-insensitive on read"), left untouched and
+// never overwritten. Per §2 the header is "written ... when the application populates one," and
 // Benzene "neither requires nor fabricates" a correlation value, so with generate == nil the
 // decorator does NOT invent one when the caller's headers lack it - a fresh per-send random
 // value correlates nothing and would misrepresent the framework as the source. Pass a non-nil
 // generate to opt into producing a value at the edge (e.g. to start a new correlation chain);
-// client.RandomCorrelationID is a ready-made generator for that.
+// client.RandomCorrelationID is a ready-made generator for that. Use CorrelationDecoratorWithKey
+// to override the header name.
 func CorrelationDecorator(next Sender, generate func() string) Sender {
+	return CorrelationDecoratorWithKey(next, "", generate)
+}
+
+// CorrelationDecoratorWithKey is CorrelationDecorator with the reserved correlation header name
+// overridden (wire-contracts.md §2 "Reserved names are defaults"). An empty key means the default
+// (wire.DefaultCorrelationKey). Pass the SAME name the rest of the service uses - an override
+// applies to both directions.
+func CorrelationDecoratorWithKey(next Sender, key string, generate func() string) Sender {
+	if key == "" {
+		key = wire.DefaultCorrelationKey
+	}
 	return SenderFunc(func(ctx context.Context, topic benzene.Topic, headers map[string]string, message []byte) benzene.Result[json.RawMessage] {
-		return next.Send(ctx, topic, withCorrelationID(headers, generate), message)
+		return next.Send(ctx, topic, withCorrelationID(headers, key, generate), message)
 	})
 }
 
-func withCorrelationID(headers map[string]string, generate func() string) map[string]string {
-	for key := range headers {
-		if strings.EqualFold(key, correlationIDHeader) {
+func withCorrelationID(headers map[string]string, key string, generate func() string) map[string]string {
+	for name := range headers {
+		if strings.EqualFold(name, key) {
 			return headers // already populated - never overwrite
 		}
 	}
@@ -44,7 +52,7 @@ func withCorrelationID(headers map[string]string, generate func() string) map[st
 	for k, v := range headers {
 		out[k] = v
 	}
-	out[correlationIDHeader] = generate()
+	out[key] = generate()
 	return out
 }
 

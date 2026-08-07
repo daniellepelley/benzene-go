@@ -10,6 +10,7 @@ import (
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/client"
+	"github.com/daniellepelley/benzene-go/wire"
 )
 
 // SendMessageAPI is the single SQS SDK method Client depends on. Depending on this narrow
@@ -33,6 +34,11 @@ type Client struct {
 	// Send call. Leave nil to rely on the queue's content-based deduplication setting, if
 	// enabled - AWS then derives one from the message body.
 	MessageDeduplicationID func(topic benzene.Topic, message []byte) string
+	// ReservedNames overrides the reserved metadata names (wire-contracts.md §2). Leave the zero
+	// value for the defaults; set it to the SAME value the consuming service configured on its
+	// inbound bindings (an override applies to both directions), so the topic attribute this
+	// client writes is the one that side reads.
+	ReservedNames wire.ReservedNames
 }
 
 // NewClient returns a Client publishing to queueURL via api (typically an *sqs.Client
@@ -41,14 +47,14 @@ func NewClient(api SendMessageAPI, queueURL string) *Client {
 	return &Client{API: api, QueueURL: queueURL}
 }
 
-// Send publishes message to the queue, with topic written as a "topic" message attribute per
+// Send publishes message to the queue, with topic written as the reserved topic message attribute (default "topic", ReservedNames-configurable) per
 // wire-contracts.md §2 ("the topic travels as an attribute named topic") and headers written as
 // additional message attributes. A successful publish maps to StatusAccepted - wire-contracts.md
 // §3's own description fits exactly: "Accepted for asynchronous processing". A transport-level
 // failure maps to ServiceUnavailable, matching every other Sender in this repo.
 func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[string]string, message []byte) benzene.Result[json.RawMessage] {
 	attributes := make(map[string]types.MessageAttributeValue, len(headers)+1)
-	attributes["topic"] = stringAttribute(topic.String())
+	attributes[c.ReservedNames.Topic()] = stringAttribute(topic.String())
 	for k, v := range headers {
 		attributes[k] = stringAttribute(v)
 	}

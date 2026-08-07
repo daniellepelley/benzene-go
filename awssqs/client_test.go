@@ -8,6 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/wire"
 )
 
 type fakeSendMessageAPI struct {
@@ -62,6 +63,21 @@ func TestClient_SendWritesTopicAsMessageAttribute(t *testing.T) {
 	}
 	if *attr.DataType != "String" {
 		t.Errorf(`MessageAttributes["topic"].DataType = %q, want "String"`, *attr.DataType)
+	}
+}
+
+func TestClient_SendWritesTopicUnderTheConfiguredReservedKey(t *testing.T) {
+	api := &fakeSendMessageAPI{}
+	c := NewClient(api, "https://sqs.example/queue")
+	c.ReservedNames = wire.ReservedNames{TopicKey: "x-my-topic"}
+
+	c.Send(context.Background(), benzene.NewTopic("greet"), nil, []byte("{}"))
+
+	if attr, ok := api.input.MessageAttributes["x-my-topic"]; !ok || *attr.StringValue != "greet" {
+		t.Errorf(`MessageAttributes["x-my-topic"] = %+v (present=%v), want the topic "greet"`, attr, ok)
+	}
+	if _, ok := api.input.MessageAttributes["topic"]; ok {
+		t.Error(`the default "topic" attribute must not be written when the key is overridden`)
 	}
 }
 

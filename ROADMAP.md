@@ -8,7 +8,13 @@ delivery order - just the current honest picture, kept up to date as things land
 - Core spec model: `Topic`, `Status`, `Result[T]`/`ResultInfo`, `Registry`, `Middleware`/
   `Pipeline`, `RouterMiddleware`, the DI-lite `Container`/`Scope` (+ `ScopeFromContext` for
   handler-level resolution), the three-phase `App` lifecycle.
-- `wire` - the transport-neutral envelope.
+- `wire` - the transport-neutral envelope, plus `ResolveMetadataTopic` (the shared native-metadata
+  topic resolver every queue-shaped binding delegates to) and `ReservedNames` - the single
+  injectable value for the configurable reserved names of `wire-contracts.md` §2 (the `topic`
+  metadata key and the `x-correlation-id` header). A service sets it once on the
+  `ApplicationBuilder` (`UseReservedNames`) for its inbound bindings and on its outbound clients'
+  `ReservedNames` field / `CorrelationDecoratorWithKey`, so a colliding key is renamed in one
+  place for both directions; the defaults carry the interop baseline.
 - `httpstatus` - the Benzene<->HTTP status mapping tables (conformance-verified).
 - `grpcstatus` - the Benzene<->gRPC status mapping tables (conformance-verified), in raw
   numeric gRPC status codes so it stays zero-dependency like `httpstatus`.
@@ -202,19 +208,6 @@ is a decision rather than a surprise:
   unversioned topic"), a conforming service needs neither versioning axis, and the .NET
   implementation leans on reflection-based property mapping this zero-dependency port avoids. If
   pursued it should be its own package, like the other dependency-bearing extensions.
-- **The reserved metadata names are not yet a single service-wide injectable value.**
-  `wire-contracts.md` §2 ("Reserved names are defaults") requires an implementation to expose the
-  reserved key names - the `topic` metadata key and the `x-correlation-id` header - as a single
-  injectable value a service can override in one place, applied to both inbound bindings and
-  outbound clients. Today the defaults (which match the spec spellings and carry the interop
-  baseline) are correct, but the override seam is only partial: `wire.ResolveMetadataTopic` takes
-  the topic key as a parameter (and is conformance-tested with an override), yet the inbound
-  `Handler`s and outbound `Client`s pass `wire.DefaultTopicKey`, and `CorrelationDecorator`'s
-  header name is a fixed `x-correlation-id`. The remaining step is a shared reserved-names value
-  threaded through each native-metadata binding (`awssqs`, `awssns`, `gcppubsub`) and the client
-  decorators, so a service that must avoid a colliding `topic` or `x-correlation-id` name can
-  rename it once for both directions. This is a public-API shape worth settling deliberately
-  rather than piecemeal.
 - **Mesh `benzene:mesh:issues` feed and produced-vs-consumed version reconciliation.** The
   issue feed (`mesh.md` §4.1) is marked in the spec itself as optional with "Go reference parity
   pending" and adds no Cloud Service Profile requirement; the aggregator-level
