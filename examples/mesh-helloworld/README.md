@@ -40,9 +40,10 @@ Everything the view shows is **derived** from the running services, nothing is d
   heartbeats (which carry the descriptor hash, so a redeployed instance with a changed
   contract would show a hash mismatch in `benzene:mesh:query:service`).
 - **Consumer edges from trace parentage** (spec §3-4): the `greet` topic shows
-  *consumers: frontdoor, legacy-portal* because each caller forwards
-  `mesh.SpanFromContext(ctx)` as a `traceparent` header (see `welcomeHandler`) - the only
-  mesh-specific line an application handler ever writes.
+  *consumers: frontdoor, legacy-portal* because each caller's outbound client is wrapped in
+  `mesh.TraceContextDecorator`, which forwards the current invocation's span as a `traceparent`
+  header (the outbound counterpart to `mesh.TraceMiddleware`). Propagation is entirely in the
+  wiring - `welcomeHandler` itself writes no mesh-specific line.
 - **Issue feed** (spec §4.1): every service also runs `mesh.IssueMiddleware` with a
   `mesh.PushIssueExporter`, so a failing invocation - e.g. `curl -X POST localhost:8081/welcome
   -d '{"name":""}'`, where greeter answers `bad-request` - is classified and deduplicated by

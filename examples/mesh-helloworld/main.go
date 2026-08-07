@@ -30,6 +30,7 @@ import (
 	"time"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/client"
 	"github.com/daniellepelley/benzene-go/healthcheck"
 	"github.com/daniellepelley/benzene-go/httpbinding"
 	"github.com/daniellepelley/benzene-go/httpclient"
@@ -68,21 +69,17 @@ type welcomeResponse struct {
 }
 
 // welcomeHandler is the cross-service hop: it calls greeter's "greet" topic over the wire
-// envelope, forwarding its own trace span as a traceparent header. That propagation is
-// the only mesh-specific line a handler ever writes, and it is what joins the two
-// services' trace events into one flow (and derives the consumer edge) on the collector.
-func welcomeHandler(greeter *httpclient.Client) benzene.Handler[welcomeRequest, welcomeResponse] {
+// envelope. Trace propagation - forwarding this invocation's span as a traceparent header, which
+// joins the two services' trace events into one flow and derives the consumer edge on the
+// collector - is handled by wrapping greeter in mesh.TraceContextDecorator at construction (see
+// the call sites), so the handler itself writes no mesh-specific line at all.
+func welcomeHandler(greeter client.Sender) benzene.Handler[welcomeRequest, welcomeResponse] {
 	return func(ctx context.Context, req welcomeRequest) benzene.Result[welcomeResponse] {
-		headers := map[string]string{}
-		if span, ok := mesh.SpanFromContext(ctx); ok {
-			headers["traceparent"] = span.Traceparent()
-		}
-
 		body, err := json.Marshal(greetRequest{Name: req.Name})
 		if err != nil {
 			return benzene.UnexpectedError[welcomeResponse]("marshal greet request: " + err.Error())
 		}
-		result := greeter.Send(ctx, benzene.NewTopic("greet"), headers, body)
+		result := greeter.Send(ctx, benzene.NewTopic("greet"), nil, body)
 		if !result.IsSuccessful() {
 			return benzene.Result[welcomeResponse]{Status: result.Status, Errors: result.Errors}
 		}
@@ -213,7 +210,7 @@ func main() {
 	go func() { log.Fatal(http.ListenAndServe(":"+greeterPort, greeter.handler)) }()
 
 	frontdoor := newService("frontdoor", meshdEndpoint, true, func(registry *benzene.Registry) {
-		greeterClient := httpclient.NewClient("http://localhost:" + greeterPort + httpbinding.EnvelopePath)
+		greeterClient := mesh.TraceContextDecorator(httpclient.NewClient("http://localhost:" + greeterPort + httpbinding.EnvelopePath))
 		if err := benzene.Register(registry, benzene.NewTopic("welcome"), welcomeHandler(greeterClient)); err != nil {
 			log.Fatalf("register welcome: %v", err)
 		}
@@ -230,7 +227,7 @@ func main() {
 	// "missing feeds: descriptor, health" - and its calls to greeter still produce the
 	// legacy-portal→greet consumer edge. This is the degradation rule, live.
 	legacy := newService("legacy-portal", meshdEndpoint, false, func(registry *benzene.Registry) {
-		greeterClient := httpclient.NewClient("http://localhost:" + greeterPort + httpbinding.EnvelopePath)
+		greeterClient := mesh.TraceContextDecorator(httpclient.NewClient("http://localhost:" + greeterPort + httpbinding.EnvelopePath))
 		if err := benzene.Register(registry, benzene.NewTopic("legacy:relay"), welcomeHandler(greeterClient)); err != nil {
 			log.Fatalf("register legacy:relay: %v", err)
 		}
