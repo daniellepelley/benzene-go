@@ -67,8 +67,8 @@ func QueueHandler(builder *benzene.ApplicationBuilder, dataName string) http.Han
 			return
 		}
 
-		resp := envelope.Dispatch(r.Context(), builder.Pipeline, builder.Container, resolveQueueRequest(inv, dataName))
-		if !benzene.Status(resp.StatusCode).IsSuccess() {
+		resp, successful := envelope.DispatchResult(r.Context(), builder.Pipeline, builder.Container, resolveQueueRequest(inv, dataName))
+		if !successful {
 			w.Header().Set("content-type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
 			io.WriteString(w, resp.Body)

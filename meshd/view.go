@@ -23,7 +23,7 @@ const (
 
 // ViewHandler serves the Mesh View (mesh.md §6, Phase 4): one self-contained page - no
 // JS framework, no external assets, matching this module's zero-dependency stance - that
-// polls the collector's own mesh:query:fleet topic through the wire-envelope endpoint
+// polls the collector's own benzene:mesh:query:fleet topic through the wire-envelope endpoint
 // mounted at envelopePath (same-origin; "" means the standard EnvelopePath). The page is
 // a read-only rendering of FleetView: services with health and reduced-feed markers, the
 // topic catalog with observed consumers, and recent flows.

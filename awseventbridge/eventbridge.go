@@ -69,8 +69,8 @@ func Handler(builder *benzene.ApplicationBuilder) awslambda.HandlerFunc {
 			return nil, fmt.Errorf("awseventbridge: malformed EventBridge event: %w", err)
 		}
 
-		resp := envelope.Dispatch(ctx, builder.Pipeline, builder.Container, resolveRequest(rule))
-		if !benzene.Status(resp.StatusCode).IsSuccess() {
+		resp, successful := envelope.DispatchResult(ctx, builder.Pipeline, builder.Container, resolveRequest(rule))
+		if !successful {
 			return nil, fmt.Errorf("awseventbridge: event %s failed: %s", rule.ID, resp.StatusCode)
 		}
 		return json.Marshal(struct{}{})

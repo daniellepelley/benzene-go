@@ -59,7 +59,7 @@ func Middleware(logger *slog.Logger) benzene.Middleware {
 		case err != nil:
 			attrs = append(attrs, slog.String("error", err.Error()))
 			target.LogAttrs(ctx, slog.LevelError, "invocation failed", attrs...)
-		case status != "" && benzene.Status(status).IsSuccess():
+		case status != "" && !benzene.Status(status).IsFailure():
 			target.LogAttrs(ctx, slog.LevelInfo, "invocation completed", attrs...)
 		default:
 			if ic.Result != nil {

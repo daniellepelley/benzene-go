@@ -63,20 +63,20 @@ func TestTraceMiddleware_RecordsSemanticInvocations(t *testing.T) {
 			topic:      benzene.NewTopic("order:create").WithVersion("v2"),
 			register:   true,
 			handler:    echoHandler,
-			wantStatus: "Ok",
+			wantStatus: "ok",
 		},
 		{
 			name:       "missing handler becomes NotFound, still traced",
 			topic:      benzene.NewTopic("no:such:topic"),
 			register:   false,
-			wantStatus: "NotFound",
+			wantStatus: "not-found",
 		},
 		{
 			name:       "handler panic becomes ServiceUnavailable, still traced",
 			topic:      benzene.NewTopic("order:create"),
 			register:   true,
 			handler:    panicHandler,
-			wantStatus: "ServiceUnavailable",
+			wantStatus: "service-unavailable",
 		},
 	}
 

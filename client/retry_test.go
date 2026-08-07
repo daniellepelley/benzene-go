@@ -77,7 +77,54 @@ func TestRetryDecorator_NonRetryableStatusIsNotRetried(t *testing.T) {
 		t.Errorf("Status = %q, want %q", result.Status, benzene.StatusBadRequest)
 	}
 	if calls() != 1 {
-		t.Errorf("calls = %d, want 1 - only ServiceUnavailable is retryable", calls())
+		t.Errorf("calls = %d, want 1 - bad-request is not a retryable status", calls())
+	}
+}
+
+func TestRetryDecorator_TooManyRequestsIsRetriedByDefault(t *testing.T) {
+	// too-many-requests is transient and retry-safe per wire-contracts.md §3 ("back off and
+	// retry"), so the default predicate retries it just like service-unavailable.
+	sender, calls := countingSender(benzene.StatusTooManyRequests, benzene.StatusOk)
+	decorated := RetryDecorator(sender, RetryOptions{MaxAttempts: 5, Backoff: noBackoff})
+
+	result := decorated.Send(context.Background(), benzene.NewTopic("t"), nil, nil)
+
+	if result.Status != benzene.StatusOk {
+		t.Errorf("Status = %q, want %q", result.Status, benzene.StatusOk)
+	}
+	if calls() != 2 {
+		t.Errorf("calls = %d, want 2 (too-many-requests is retried)", calls())
+	}
+}
+
+func TestRetryDecorator_TimeoutIsNotRetriedByDefault(t *testing.T) {
+	// timeout is transient but not retry-safe by default (the operation may have been applied),
+	// so the default predicate does not retry it.
+	sender, calls := countingSender(benzene.StatusTimeout)
+	decorated := RetryDecorator(sender, RetryOptions{MaxAttempts: 5, Backoff: noBackoff})
+
+	if result := decorated.Send(context.Background(), benzene.NewTopic("t"), nil, nil); result.Status != benzene.StatusTimeout {
+		t.Errorf("Status = %q, want %q", result.Status, benzene.StatusTimeout)
+	}
+	if calls() != 1 {
+		t.Errorf("calls = %d, want 1 (timeout is not retried by default)", calls())
+	}
+}
+
+func TestRetryDecorator_CustomShouldRetryPredicateIsHonoured(t *testing.T) {
+	// A caller whose operation is idempotent can opt timeout in via a custom predicate.
+	sender, calls := countingSender(benzene.StatusTimeout, benzene.StatusOk)
+	decorated := RetryDecorator(sender, RetryOptions{
+		MaxAttempts: 5,
+		Backoff:     noBackoff,
+		ShouldRetry: func(s benzene.Status) bool { return s == benzene.StatusTimeout },
+	})
+
+	if result := decorated.Send(context.Background(), benzene.NewTopic("t"), nil, nil); result.Status != benzene.StatusOk {
+		t.Errorf("Status = %q, want %q", result.Status, benzene.StatusOk)
+	}
+	if calls() != 2 {
+		t.Errorf("calls = %d, want 2 (custom predicate retries timeout)", calls())
 	}
 }
 

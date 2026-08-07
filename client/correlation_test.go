@@ -78,7 +78,9 @@ func TestCorrelationDecorator_NilHeadersIsHandled(t *testing.T) {
 	}
 }
 
-func TestCorrelationDecorator_NilGenerateUsesDefault(t *testing.T) {
+func TestCorrelationDecorator_NilGenerateDoesNotFabricate(t *testing.T) {
+	// With no generator the decorator propagates only - it must NOT invent a correlation value
+	// the application never populated (wire-contracts.md §2: Benzene does not fabricate one).
 	var seenHeaders map[string]string
 	captor := SenderFunc(func(ctx context.Context, topic benzene.Topic, headers map[string]string, message []byte) benzene.Result[json.RawMessage] {
 		seenHeaders = headers
@@ -88,19 +90,52 @@ func TestCorrelationDecorator_NilGenerateUsesDefault(t *testing.T) {
 	decorated := CorrelationDecorator(captor, nil)
 	decorated.Send(context.Background(), benzene.NewTopic("t"), map[string]string{}, nil)
 
-	matched, err := regexp.MatchString("^[0-9a-f]{32}$", seenHeaders["x-correlation-id"])
-	if err != nil {
-		t.Fatalf("regexp error = %v", err)
-	}
-	if !matched {
-		t.Errorf("x-correlation-id = %q, want a 32-character lowercase hex string", seenHeaders["x-correlation-id"])
+	if got, ok := seenHeaders["x-correlation-id"]; ok {
+		t.Errorf("x-correlation-id = %q, want it absent (the decorator must not fabricate one)", got)
 	}
 }
 
-func TestDefaultCorrelationID_GeneratesDistinctValues(t *testing.T) {
-	first := defaultCorrelationID()
-	second := defaultCorrelationID()
+func TestCorrelationDecoratorWithKey_HonoursOverriddenHeaderName(t *testing.T) {
+	var seenHeaders map[string]string
+	captor := SenderFunc(func(ctx context.Context, topic benzene.Topic, headers map[string]string, message []byte) benzene.Result[json.RawMessage] {
+		seenHeaders = headers
+		return benzene.Result[json.RawMessage]{Status: benzene.StatusOk}
+	})
+
+	decorated := CorrelationDecoratorWithKey(captor, "x-my-correlation", func() string { return "cid-1" })
+	decorated.Send(context.Background(), benzene.NewTopic("t"), map[string]string{}, nil)
+
+	if seenHeaders["x-my-correlation"] != "cid-1" {
+		t.Errorf(`headers["x-my-correlation"] = %q, want "cid-1"`, seenHeaders["x-my-correlation"])
+	}
+	if _, ok := seenHeaders["x-correlation-id"]; ok {
+		t.Error("the default header should not be written when the key is overridden")
+	}
+}
+
+func TestRandomCorrelationID_GeneratesDistinctHexValues(t *testing.T) {
+	first := RandomCorrelationID()
+	second := RandomCorrelationID()
+	if matched, _ := regexp.MatchString("^[0-9a-f]{32}$", first); !matched {
+		t.Errorf("RandomCorrelationID() = %q, want a 32-character lowercase hex string", first)
+	}
 	if first == second {
-		t.Error("defaultCorrelationID() returned the same value twice in a row")
+		t.Error("RandomCorrelationID() returned the same value twice in a row")
+	}
+}
+
+func TestCorrelationDecorator_ExplicitGeneratorStartsAChain(t *testing.T) {
+	// Passing a generator opts into edge-generation when the caller supplied none.
+	var seenHeaders map[string]string
+	captor := SenderFunc(func(ctx context.Context, topic benzene.Topic, headers map[string]string, message []byte) benzene.Result[json.RawMessage] {
+		seenHeaders = headers
+		return benzene.Result[json.RawMessage]{Status: benzene.StatusOk}
+	})
+
+	decorated := CorrelationDecorator(captor, RandomCorrelationID)
+	decorated.Send(context.Background(), benzene.NewTopic("t"), map[string]string{}, nil)
+
+	if matched, _ := regexp.MatchString("^[0-9a-f]{32}$", seenHeaders["x-correlation-id"]); !matched {
+		t.Errorf("x-correlation-id = %q, want a generated value", seenHeaders["x-correlation-id"])
 	}
 }

@@ -52,17 +52,21 @@ alongside the shared spec.
 - `mesh/` - Phases 1-2 of `docs/design/mesh.md`: service `Descriptor` derived from the
   `Registry` (topics + JSON Schemas derived at startup from the `TReq`/`TRes` types the
   Registry captures at `Register` time, plus the contract `descriptorHash`),
-  reserved-`mesh`-topic descriptor middleware, and trace middleware + log exporter.
+  reserved-`benzene:mesh`-topic descriptor middleware, trace middleware + log exporter, and the
+  issue feed's emitter half (`IssueMiddleware` + `PushIssueExporter`: source-side dedup by the
+  normative §4.1 classification + SHA-256 fingerprint, delta counts, liveness flush).
   Schema derivation is the one sanctioned use of `reflect` - startup-only, never on the
   dispatch path. Every feed is independent and optional - degradation (nil registry, nil
   or failing exporter, unprovisioned descriptor endpoint) must reduce the mesh, never
-  break the service. The `mesh:*` wire topics and shapes (wire.go) are shared with the
+  break the service. The `benzene:mesh:*` wire topics and shapes (wire.go) are shared with the
   collector and promoted to the main repo's spec (`docs/specification/mesh.md` there, now
   the normative text; `docs/design/mesh-spec-draft.md` is the historical draft), pinned by
   the vendored `mesh-*.json` fixtures in `conformance/`.
 - `meshd/` - Phases 3-4 of `docs/design/mesh.md`: the collector - an ordinary Benzene
-  service (register/heartbeat/traces ingest + `mesh:query:*` read models over an
-  in-memory store with a bounded trace ring) and the Mesh View (an embedded,
+  service (register/heartbeat/traces/issues ingest + `benzene:mesh:query:*` read models over an
+  in-memory store with a bounded trace ring; the `benzene:mesh:issues` feed of mesh.md §4.1
+  merges failure signatures by fingerprint and surfaces them on the fleet view) and the Mesh
+  View (an embedded,
   self-contained HTML page - no JS framework, per the zero-dependency stance). Consumer
   edges are derived from trace parentage at query time; providers from descriptors;
   nothing is declared. It must accept partial fleets: a missing feed renders a service

@@ -28,7 +28,7 @@ curl localhost:8080/benzene/health
 # The raw wire-contracts.md envelope, for service-to-service calls with no route table
 curl -X POST localhost:8080/benzene/invoke \
   -d '{"topic":"greet","headers":{},"body":"{\"name\":\"Envelope\"}"}'
-# {"statusCode":"Ok","headers":{"content-type":"application/json"},"body":"{\"greeting\":\"Hello, Envelope!\",\"count\":2}"}
+# {"statusCode":"ok","headers":{"content-type":"application/json"},"body":"{\"greeting\":\"Hello, Envelope!\",\"count\":2}"}
 ```
 
 ## What this demonstrates

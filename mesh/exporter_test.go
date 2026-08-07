@@ -28,7 +28,7 @@ func TestLogExporter_WritesOneJSONLinePerEvent(t *testing.T) {
 		TraceID:   "4bf92f3577b34da6a3ce929d0e0e4736",
 		SpanID:    "00f067aa0ba902b7",
 		Topic:     "order:create",
-		Status:    "Ok",
+		Status:    "ok",
 		StartedAt: time.Date(2026, 7, 16, 9, 14, 3, 0, time.UTC),
 	})
 
@@ -40,7 +40,7 @@ func TestLogExporter_WritesOneJSONLinePerEvent(t *testing.T) {
 	if err := json.Unmarshal([]byte(line), &raw); err != nil {
 		t.Fatalf("line is not valid JSON: %v: %q", err, line)
 	}
-	if raw["topic"] != "order:create" || raw["status"] != "Ok" {
+	if raw["topic"] != "order:create" || raw["status"] != "ok" {
 		t.Errorf("line = %q, want topic/status present", line)
 	}
 }
@@ -55,7 +55,7 @@ func TestLogExporter_ConcurrentExportsDoNotInterleave(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func() {
 			defer wg.Done()
-			exporter.Export(context.Background(), TraceEvent{Topic: "order:create", Status: "Ok"})
+			exporter.Export(context.Background(), TraceEvent{Topic: "order:create", Status: "ok"})
 		}()
 	}
 	wg.Wait()
@@ -80,5 +80,5 @@ func TestLogExporter_FailingSinkIsDroppedSilently(t *testing.T) {
 	exporter := NewLogExporter(failingWriter{})
 
 	// Must neither panic nor surface the error anywhere - the feed is lossy by design.
-	exporter.Export(context.Background(), TraceEvent{Topic: "order:create", Status: "Ok"})
+	exporter.Export(context.Background(), TraceEvent{Topic: "order:create", Status: "ok"})
 }

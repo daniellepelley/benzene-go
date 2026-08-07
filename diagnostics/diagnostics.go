@@ -127,7 +127,7 @@ func Middleware(opts ...Option) benzene.Middleware {
 		case err != nil:
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
-		case status != "" && !benzene.Status(status).IsSuccess():
+		case status != "" && benzene.Status(status).IsFailure():
 			span.SetStatus(codes.Error, strings.Join(ic.Result.ResultErrors(), ", "))
 		}
 		span.End()

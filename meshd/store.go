@@ -43,6 +43,26 @@ type serviceState struct {
 	lastSeen    time.Time
 	invocations int64
 	errors      int64
+	// issues holds this service's deduplicated failure signatures merged by fingerprint.
+	issues map[string]*issueState
+	// issuesFeedSeen records whether any issue batch (even empty) has arrived - the feed's
+	// liveness. Once true, the "issues" missing-feed marker is cleared even with zero issues.
+	issuesFeedSeen bool
+}
+
+// issueState is one merged failure signature (mesh.md §4.1). count accumulates the wire deltas.
+type issueState struct {
+	classification   string
+	topic            string
+	version          string
+	transport        string
+	status           string
+	exceptionType    string
+	count            int64
+	firstSeen        time.Time
+	lastSeen         time.Time
+	exemplarTraceIds []string
+	resolutionHint   string
 }
 
 type instanceState struct {
@@ -72,7 +92,7 @@ func newStore(capacity int, now func() time.Time) *store {
 func (s *store) ensureService(name string) *serviceState {
 	state, ok := s.services[name]
 	if !ok {
-		state = &serviceState{instances: map[string]*instanceState{}}
+		state = &serviceState{instances: map[string]*instanceState{}, issues: map[string]*issueState{}}
 		s.services[name] = state
 	}
 	return state
@@ -136,7 +156,7 @@ func (s *store) addEvents(events []mesh.TraceEvent) int {
 			s.next = (s.next + 1) % s.capacity
 		}
 
-		failed := !benzene.Status(event.Status).IsSuccess()
+		failed := benzene.Status(event.Status).IsFailure()
 
 		topic := s.ensureTopic(topicKey{id: event.Topic, version: event.TopicVersion})
 		topic.invocations++
@@ -157,6 +177,63 @@ func (s *store) addEvents(events []mesh.TraceEvent) int {
 		}
 	}
 	return len(events)
+}
+
+// addIssues merges an issue batch into the store by fingerprint (mesh.md §4.1). Receiving any
+// batch - even an empty one - marks the service's issue feed as live. Count is a delta, so a
+// repeat fingerprint accumulates (count += delta, firstSeen = min, lastSeen = max, newest ≤3
+// exemplars kept, other fields latest-wins). An entry with an empty fingerprint is invalid and
+// skipped, never rejecting the batch; the return is the number of valid entries accepted.
+func (s *store) addIssues(batch mesh.IssueBatch) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	service := s.ensureService(batch.Service)
+	service.lastSeen = s.now()
+	service.issuesFeedSeen = true
+
+	accepted := 0
+	for _, issue := range batch.Issues {
+		if issue.Fingerprint == "" {
+			continue // invalid entry - skipped, never rejected
+		}
+		accepted++
+
+		merged := service.issues[issue.Fingerprint]
+		if merged == nil {
+			merged = &issueState{}
+			service.issues[issue.Fingerprint] = merged
+		}
+		merged.count += issue.Count
+		merged.classification = issue.Classification
+		merged.topic = issue.Topic
+		merged.version = issue.Version
+		merged.transport = issue.Transport
+		merged.status = issue.Status
+		merged.exceptionType = issue.ExceptionType
+		merged.resolutionHint = issue.ResolutionHint
+		if !issue.FirstSeen.IsZero() && (merged.firstSeen.IsZero() || issue.FirstSeen.Before(merged.firstSeen)) {
+			merged.firstSeen = issue.FirstSeen
+		}
+		if issue.LastSeen.After(merged.lastSeen) {
+			merged.lastSeen = issue.LastSeen
+		}
+		merged.exemplarTraceIds = newestExemplars(merged.exemplarTraceIds, issue.ExemplarTraceIds)
+	}
+	return accepted
+}
+
+// maxExemplars bounds the exemplar trace ids kept per merged issue (mesh.md §4.1: newest ≤3).
+const maxExemplars = 3
+
+// newestExemplars appends the delta's exemplars after the existing ones (the delta is newer) and
+// keeps the newest maxExemplars.
+func newestExemplars(existing, delta []string) []string {
+	combined := append(existing, delta...)
+	if len(combined) > maxExemplars {
+		combined = combined[len(combined)-maxExemplars:]
+	}
+	return combined
 }
 
 // consumersByTopic derives who-calls-whom from the ring window: an event's parent span
@@ -198,11 +275,14 @@ func (s *store) fleet() FleetView {
 		Services:    []ServiceSummary{},
 		Topics:      []TopicSummary{},
 		Traces:      []TraceSummary{},
+		Issues:      []IssueView{},
 	}
 	for name := range s.services {
 		view.Services = append(view.Services, s.serviceSummary(name))
 	}
 	sort.Slice(view.Services, func(i, j int) bool { return view.Services[i].Service < view.Services[j].Service })
+
+	view.Issues = s.fleetIssues()
 
 	consumers := s.consumersByTopic()
 	for key := range s.topics {
@@ -217,6 +297,38 @@ func (s *store) fleet() FleetView {
 
 	view.Traces = s.traceSummaries(maxFleetTraces)
 	return view
+}
+
+// fleetIssues flattens every service's merged issues into the fleet view, sorted by service then
+// fingerprint for a stable rendering. Caller holds s.mu.
+func (s *store) fleetIssues() []IssueView {
+	issues := []IssueView{}
+	for name, state := range s.services {
+		for fingerprint, issue := range state.issues {
+			issues = append(issues, IssueView{
+				Fingerprint:      fingerprint,
+				Classification:   issue.classification,
+				Service:          name,
+				Topic:            issue.topic,
+				Version:          issue.version,
+				Transport:        issue.transport,
+				Status:           issue.status,
+				ExceptionType:    issue.exceptionType,
+				Count:            issue.count,
+				FirstSeen:        issue.firstSeen,
+				LastSeen:         issue.lastSeen,
+				ExemplarTraceIds: issue.exemplarTraceIds,
+				ResolutionHint:   issue.resolutionHint,
+			})
+		}
+	}
+	sort.Slice(issues, func(i, j int) bool {
+		if issues[i].Service != issues[j].Service {
+			return issues[i].Service < issues[j].Service
+		}
+		return issues[i].Fingerprint < issues[j].Fingerprint
+	})
+	return issues
 }
 
 // maxFleetTraces bounds the recent-flows list on the fleet view.
@@ -255,6 +367,13 @@ func (s *store) serviceSummary(name string) ServiceSummary {
 	}
 	if state.invocations == 0 {
 		summary.MissingFeeds = append(summary.MissingFeeds, "traces")
+	}
+	// The issues feed is only flagged missing when a failure needs explaining: the service has
+	// recorded failures but has never sent an issue batch to explain them (mesh.md §4.1). A
+	// service with no failures, or one whose issue feed is live (even with zero issues), is not
+	// reduced by its absence.
+	if state.errors > 0 && !state.issuesFeedSeen {
+		summary.MissingFeeds = append(summary.MissingFeeds, "issues")
 	}
 	return summary
 }
@@ -303,7 +422,7 @@ func (s *store) traceSummaries(limit int) []TraceSummary {
 			if event.Service != "" {
 				services[event.Service] = true
 			}
-			if !benzene.Status(event.Status).IsSuccess() {
+			if benzene.Status(event.Status).IsFailure() {
 				summary.Failed = true
 			}
 		}

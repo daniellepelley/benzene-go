@@ -95,6 +95,34 @@ func TestMiddleware_FailureResultLogsWarnWithErrors(t *testing.T) {
 	}
 }
 
+func TestMiddleware_ApplicationDefinedStatusLogsInfo(t *testing.T) {
+	// An application-defined status is not a framework failure, so it logs at Info
+	// ("completed"), not Warn - consistent with Result.IsSuccessful (= !IsFailure).
+	registry := benzene.NewRegistry()
+	if err := benzene.Register(registry, benzene.NewTopic("partial"),
+		benzene.Handler[greetRequest, greetResponse](func(_ context.Context, _ greetRequest) benzene.Result[greetResponse] {
+			return benzene.Result[greetResponse]{Status: benzene.Status("partial-success"), Payload: &greetResponse{Greeting: "partly"}}
+		})); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	pipeline := benzene.NewPipeline(Middleware(logger), benzene.RouterMiddleware(registry))
+	ic := benzene.NewInvocationContext(benzene.NewTopic("partial"), nil, greetRequest{Name: "x"}, nil)
+	_ = pipeline.Run(context.Background(), ic)
+
+	var record map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(buf.String())), &record); err != nil {
+		t.Fatalf("json.Unmarshal(log line) error = %v", err)
+	}
+	if record["level"] != "INFO" {
+		t.Errorf("level = %v, want INFO for an application-defined status", record["level"])
+	}
+	if record["status"] != "partial-success" {
+		t.Errorf("status = %v, want %q", record["status"], "partial-success")
+	}
+}
+
 func TestMiddleware_PipelineErrorLogsErrorAndPropagates(t *testing.T) {
 	boom := errors.New("middleware exploded")
 	failing := benzene.Middleware(func(ctx context.Context, ic *benzene.InvocationContext, next func(context.Context) error) error {

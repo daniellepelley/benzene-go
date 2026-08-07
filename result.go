@@ -10,12 +10,31 @@ type Result[T any] struct {
 	Payload *T
 	// Errors holds zero or more human-readable error messages, populated on failure.
 	Errors []string
+	// successful, when non-nil, overrides the status-derived success classification (see
+	// SetResult and IsSuccessful). Unexported so the only way to set it is the deliberate
+	// SetResult constructor; a plain struct literal leaves it nil and derives from the status.
+	successful *bool
 }
 
-// IsSuccessful reports whether Status belongs to the success class.
+// IsSuccessful reports whether this result should be treated as a success. Unless an explicit
+// flag was set via SetResult, it is derived from the status class as "not a failure"
+// (core-concepts.md §5), so a framework success status and an application-defined status both
+// count as successful and carry their payload, while only a framework failure status does not -
+// the extensibility promise that custom statuses flow through untouched (design-principles.md).
+// This mirrors the .NET reference's ServiceBenzeneResult, whose IsSuccessful defaults to
+// !BenzeneResultStatus.IsFailure(status) but can be set explicitly.
 func (r Result[T]) IsSuccessful() bool {
-	return r.Status.IsSuccess()
+	if r.successful != nil {
+		return *r.successful
+	}
+	return !r.Status.IsFailure()
 }
+
+// ResultIsSuccessful exposes IsSuccessful on the type-erased ResultInfo path. A transport
+// binding renders the payload vs an error body from the ResultInfo it holds, and this lets an
+// explicit success flag (SetResult) survive type erasure; a binding checks for it via the
+// optional interface { ResultIsSuccessful() bool } and falls back to the status otherwise.
+func (r Result[T]) ResultIsSuccessful() bool { return r.IsSuccessful() }
 
 // ResultInfo is the type-erased view of a Result[T], implemented by every instantiation.
 // The registry stores handlers behind a non-generic dispatch signature (Go generics can't
@@ -44,6 +63,17 @@ func success[T any](status Status, payload T) Result[T] {
 	return Result[T]{Status: status, Payload: &payload}
 }
 
+// SetResult builds a Result whose success classification is set explicitly, decoupled from the
+// status class, mirroring the .NET reference's BenzeneResult.Set(status, payload, isSuccessful).
+// The intended use is the reserved health check returning StatusServiceUnavailable - so an HTTP
+// probe sees 503 and a load balancer drains the instance - while still rendering its report body
+// (successful=true) rather than an error payload. For ordinary results prefer Ok/Fail and the
+// status-derived default; reach for this only when the transport outcome and the body's meaning
+// genuinely diverge.
+func SetResult[T any](status Status, payload T, successful bool) Result[T] {
+	return Result[T]{Status: status, Payload: &payload, successful: &successful}
+}
+
 // Ok returns a successful Result with StatusOk.
 func Ok[T any](payload T) Result[T] { return success(StatusOk, payload) }
 
@@ -62,14 +92,20 @@ func Deleted[T any](payload T) Result[T] { return success(StatusDeleted, payload
 // Ignored returns a successful Result with StatusIgnored - handled deliberately, not an error.
 func Ignored[T any](payload T) Result[T] { return success(StatusIgnored, payload) }
 
-// Fail returns a failed Result with the given status and error messages. Panics if status
-// is in the success class, since that would produce a self-contradictory Result (mirrors the
-// C# BenzeneResult's guard against the same mistake).
+// Fail returns a failed Result with the given status and error messages. It is the
+// errors-based failure constructor, so the result is always unsuccessful - even for an
+// application-defined status that IsFailure does not recognise - mirroring the .NET reference's
+// errors-based BenzeneResult.Set(status, errors), which is unconditionally isSuccessful=false.
+// (That is what makes a custom failure status nack/redeliver on a queue and render its errors,
+// rather than being mistaken for a success.) Panics if status is in the framework success class,
+// since that would produce a self-contradictory Result; a Go-side guard with no direct .NET
+// counterpart.
 func Fail[T any](status Status, errors ...string) Result[T] {
 	if status.IsSuccess() {
 		panic("benzene: Fail called with a success-class status " + string(status))
 	}
-	return Result[T]{Status: status, Errors: errors}
+	unsuccessful := false
+	return Result[T]{Status: status, Errors: errors, successful: &unsuccessful}
 }
 
 // BadRequest returns a failed Result with StatusBadRequest.

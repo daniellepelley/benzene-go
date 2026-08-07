@@ -1,5 +1,5 @@
 // Package meshd implements Phases 3-4 of the Benzene Mesh design (docs/design/mesh.md):
-// the collector. It is itself an ordinary Benzene service - its mesh:* topics live in a
+// the collector. It is itself an ordinary Benzene service - its benzene:mesh:* topics live in a
 // Registry, are served through a Pipeline, and it serves its own descriptor on the
 // reserved mesh topic - so deploying it anywhere this module's bindings reach (Lambda,
 // Functions, Cloud Run, plain HTTP) is the same exercise as deploying any other service.
@@ -40,13 +40,32 @@ type Ack struct {
 	Accepted int `json:"accepted"`
 }
 
-// FleetView is the mesh:query:fleet response: the whole known fleet in one shape - what
+// FleetView is the benzene:mesh:query:fleet response: the whole known fleet in one shape - what
 // the Mesh View renders (mesh.md §6.1/§6.2/§6.4).
 type FleetView struct {
 	GeneratedAt time.Time        `json:"generatedAt"`
 	Services    []ServiceSummary `json:"services"`
 	Topics      []TopicSummary   `json:"topics"`
 	Traces      []TraceSummary   `json:"traces"`
+	Issues      []IssueView      `json:"issues"`
+}
+
+// IssueView is one merged failure signature on the fleet view (mesh.md §4.1). Unlike the wire
+// Issue's delta Count, this Count is the cumulative total the collector has merged.
+type IssueView struct {
+	Fingerprint      string    `json:"fingerprint"`
+	Classification   string    `json:"classification"`
+	Service          string    `json:"service"`
+	Topic            string    `json:"topic"`
+	Version          string    `json:"version,omitempty"`
+	Transport        string    `json:"transport,omitempty"`
+	Status           string    `json:"status"`
+	ExceptionType    string    `json:"exceptionType,omitempty"`
+	Count            int64     `json:"count"`
+	FirstSeen        time.Time `json:"firstSeen"`
+	LastSeen         time.Time `json:"lastSeen"`
+	ExemplarTraceIds []string  `json:"exemplarTraceIds,omitempty"`
+	ResolutionHint   string    `json:"resolutionHint,omitempty"`
 }
 
 // Health classification of a service, from its instances' latest heartbeats.
@@ -97,7 +116,7 @@ type TraceSummary struct {
 	Failed     bool      `json:"failed"`
 }
 
-// ServiceView is the mesh:query:service response.
+// ServiceView is the benzene:mesh:query:service response.
 type ServiceView struct {
 	ServiceSummary
 	Descriptor *mesh.Descriptor `json:"descriptor,omitempty"`
@@ -116,24 +135,24 @@ type InstanceView struct {
 	HashMatches    *bool     `json:"hashMatches,omitempty"`
 }
 
-// TraceView is the mesh:query:trace response: the flow's events in start order.
+// TraceView is the benzene:mesh:query:trace response: the flow's events in start order.
 type TraceView struct {
 	TraceID string            `json:"traceId"`
 	Events  []mesh.TraceEvent `json:"events"`
 }
 
-// ServiceQuery is the mesh:query:service request body.
+// ServiceQuery is the benzene:mesh:query:service request body.
 type ServiceQuery struct {
 	Service string `json:"service"`
 }
 
-// TopicQuery is the mesh:query:topic request body.
+// TopicQuery is the benzene:mesh:query:topic request body.
 type TopicQuery struct {
 	Topic   string `json:"topic"`
 	Version string `json:"version,omitempty"`
 }
 
-// TraceQuery is the mesh:query:trace request body.
+// TraceQuery is the benzene:mesh:query:trace request body.
 type TraceQuery struct {
 	TraceID string `json:"traceId"`
 }
@@ -144,7 +163,7 @@ type Collector struct {
 	builder *benzene.ApplicationBuilder
 }
 
-// New builds a Collector with every mesh:* topic registered and a pipeline that also
+// New builds a Collector with every benzene:mesh:* topic registered and a pipeline that also
 // serves the collector's own descriptor on the reserved mesh topic (the collector is a
 // Benzene service like any other, and appears in its own catalog).
 func New(options Options) *Collector {
@@ -179,6 +198,16 @@ func New(options Options) *Collector {
 	mustRegister(benzene.Register(registry, benzene.NewTopic(mesh.TopicTraces),
 		benzene.Handler[mesh.TraceBatch, Ack](func(_ context.Context, batch mesh.TraceBatch) benzene.Result[Ack] {
 			return benzene.Ok(Ack{Accepted: s.addEvents(batch.Events)})
+		})))
+
+	mustRegister(benzene.Register(registry, benzene.NewTopic(mesh.TopicIssues),
+		benzene.Handler[mesh.IssueBatch, Ack](func(_ context.Context, batch mesh.IssueBatch) benzene.Result[Ack] {
+			// Batch-level service is required and attributable, even for the empty-batch liveness
+			// assertion (mesh.md §4.1).
+			if batch.Service == "" {
+				return benzene.BadRequest[Ack]("service is required")
+			}
+			return benzene.Ok(Ack{Accepted: s.addIssues(batch)})
 		})))
 
 	// The fleet query takes no parameters; json.RawMessage tolerates any body, including

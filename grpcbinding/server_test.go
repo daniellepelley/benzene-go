@@ -86,7 +86,7 @@ func TestUnaryServerInterceptor_FailureResultBecomesGRPCErrorWithTrailer(t *test
 	if st.Message() != "name is required" {
 		t.Errorf("Message() = %q, want the handler's error detail", st.Message())
 	}
-	if got := trailer.Get(BenzeneStatusTrailer); len(got) != 1 || got[0] != "BadRequest" {
+	if got := trailer.Get(BenzeneStatusTrailer); len(got) != 1 || got[0] != "bad-request" {
 		t.Errorf("%s trailer = %v, want [BadRequest]", BenzeneStatusTrailer, got)
 	}
 }
@@ -98,7 +98,7 @@ func TestUnaryServerInterceptor_SuccessSetsTrailerToo(t *testing.T) {
 	if _, err := invokeGreet(t, conn, "World", grpc.Trailer(&trailer)); err != nil {
 		t.Fatalf("Invoke() error = %v", err)
 	}
-	if got := trailer.Get(BenzeneStatusTrailer); len(got) != 1 || got[0] != "Ok" {
+	if got := trailer.Get(BenzeneStatusTrailer); len(got) != 1 || got[0] != "ok" {
 		t.Errorf("%s trailer = %v, want [Ok]", BenzeneStatusTrailer, got)
 	}
 }
@@ -180,7 +180,7 @@ func TestUnaryServerInterceptor_NoResultAtAllTrailersUnknown(t *testing.T) {
 	if err == nil {
 		t.Fatal("Invoke() error = nil, want an error - dispatch produces UnexpectedError with no router")
 	}
-	if got := trailer.Get(BenzeneStatusTrailer); len(got) != 1 || got[0] != "UnexpectedError" {
+	if got := trailer.Get(BenzeneStatusTrailer); len(got) != 1 || got[0] != "unexpected-error" {
 		t.Errorf("%s trailer = %v, want [UnexpectedError]", BenzeneStatusTrailer, got)
 	}
 }
@@ -338,8 +338,8 @@ func TestTrailerValue(t *testing.T) {
 	if got := trailerValue(""); got != "Unknown" {
 		t.Errorf(`trailerValue("") = %q, want "Unknown"`, got)
 	}
-	if got := trailerValue("Ok"); got != "Ok" {
-		t.Errorf(`trailerValue("Ok") = %q, want "Ok"`, got)
+	if got := trailerValue("ok"); got != "ok" {
+		t.Errorf(`trailerValue("ok") = %q, want "ok"`, got)
 	}
 }
 
@@ -395,9 +395,9 @@ func TestErrorDetail(t *testing.T) {
 		resp wire.Response
 		want string
 	}{
-		{name: "detail from error payload", resp: wire.Response{StatusCode: "BadRequest", Body: `{"status":"BadRequest","detail":"name is required"}`}, want: "name is required"},
-		{name: "no body falls back to status", resp: wire.Response{StatusCode: "NotFound", Body: ""}, want: "NotFound"},
-		{name: "malformed body falls back to status", resp: wire.Response{StatusCode: "NotFound", Body: "not json"}, want: "NotFound"},
+		{name: "detail from error payload", resp: wire.Response{StatusCode: "bad-request", Body: `{"status":"bad-request","detail":"name is required"}`}, want: "name is required"},
+		{name: "no body falls back to status", resp: wire.Response{StatusCode: "not-found", Body: ""}, want: "not-found"},
+		{name: "malformed body falls back to status", resp: wire.Response{StatusCode: "not-found", Body: "not json"}, want: "not-found"},
 		{name: "nothing at all", resp: wire.Response{}, want: "Error"},
 	}
 	for _, tt := range tests {

@@ -58,9 +58,9 @@ func Handler(builder *benzene.ApplicationBuilder) awslambda.HandlerFunc {
 
 		var failures []string
 		for _, record := range snsEvt.Records {
-			req := resolveRequest(record.Sns)
-			resp := envelope.Dispatch(ctx, builder.Pipeline, builder.Container, req)
-			if !benzene.Status(resp.StatusCode).IsSuccess() {
+			req := resolveRequest(record.Sns, builder.ReservedNames.Topic())
+			resp, successful := envelope.DispatchResult(ctx, builder.Pipeline, builder.Container, req)
+			if !successful {
 				failures = append(failures, fmt.Sprintf("%s: %s", record.Sns.MessageID, resp.StatusCode))
 			}
 		}
@@ -78,16 +78,12 @@ func Handler(builder *benzene.ApplicationBuilder) awslambda.HandlerFunc {
 // envelope (topic/headers/body) - the "or envelope" fallback. If neither yields a topic, the
 // request carries an empty topic, which RouterMiddleware maps to ValidationError (router.go),
 // surfaced as a Go error (see Handler) rather than a silently dropped notification.
-func resolveRequest(sns snsMessage) wire.Request {
-	headers := make(map[string]string, len(sns.MessageAttributes))
-	var topic string
+func resolveRequest(sns snsMessage, topicKey string) wire.Request {
+	metadata := make(map[string]string, len(sns.MessageAttributes))
 	for name, attr := range sns.MessageAttributes {
-		if strings.EqualFold(name, "topic") {
-			topic = attr.Value
-			continue
-		}
-		headers[name] = attr.Value
+		metadata[name] = attr.Value
 	}
+	topic, headers := wire.ResolveMetadataTopic(metadata, topicKey)
 
 	if topic != "" {
 		return wire.Request{Topic: topic, Headers: headers, Body: sns.Message}

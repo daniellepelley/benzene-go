@@ -93,7 +93,10 @@ func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[stri
 
 func toResult(resp wire.Response) benzene.Result[json.RawMessage] {
 	status := benzene.Status(resp.StatusCode)
-	if !status.IsSuccess() {
+	// Only a framework failure status is read back as an error payload; a success status and
+	// an application-defined (unknown) status both carry their body as the payload, mirroring
+	// the server-side envelope rendering and .NET's IsSuccessful (= !IsFailure).
+	if status.IsFailure() {
 		errPayload, parseErr := wire.UnmarshalErrorPayload([]byte(resp.Body))
 		if parseErr != nil || errPayload.Detail == "" {
 			return benzene.Fail[json.RawMessage](status)

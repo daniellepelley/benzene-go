@@ -27,7 +27,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strings"
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/envelope"
@@ -73,8 +72,8 @@ func Handler(builder *benzene.ApplicationBuilder) http.Handler {
 			return
 		}
 
-		resp := envelope.Dispatch(r.Context(), builder.Pipeline, builder.Container, resolveRequest(push.Message, string(data)))
-		if !benzene.Status(resp.StatusCode).IsSuccess() {
+		resp, successful := envelope.DispatchResult(r.Context(), builder.Pipeline, builder.Container, resolveRequest(push.Message, string(data), builder.ReservedNames.Topic()))
+		if !successful {
 			w.Header().Set("content-type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
 			io.WriteString(w, resp.Body)
@@ -89,16 +88,8 @@ func Handler(builder *benzene.ApplicationBuilder) http.Handler {
 // headers), else the decoded data parsed as a full wire.Request envelope, else an empty
 // topic, which RouterMiddleware maps to ValidationError - the message is nacked, never
 // silently dropped.
-func resolveRequest(message pushMessage, data string) wire.Request {
-	headers := make(map[string]string, len(message.Attributes))
-	var topic string
-	for name, value := range message.Attributes {
-		if strings.EqualFold(name, "topic") {
-			topic = value
-			continue
-		}
-		headers[name] = value
-	}
+func resolveRequest(message pushMessage, data, topicKey string) wire.Request {
+	topic, headers := wire.ResolveMetadataTopic(message.Attributes, topicKey)
 
 	if topic != "" {
 		return wire.Request{Topic: topic, Headers: headers, Body: data}

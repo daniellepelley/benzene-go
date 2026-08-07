@@ -237,10 +237,10 @@ func TestCollector_TracesDriveStatsAndConsumers(t *testing.T) {
 	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("greeter", "greet"))
 
 	status, ack := invoke[Ack](t, c, mesh.TopicTraces, mesh.TraceBatch{Events: []mesh.TraceEvent{
-		event("trace-1", "span-front", "", "frontdoor", "welcome", "Ok", 20),
-		event("trace-1", "span-greet", "span-front", "greeter", "greet", "Ok", 10),
-		event("trace-2", "span-fail", "", "greeter", "greet", "ServiceUnavailable", 30),
-		event("trace-2", "span-self", "span-fail", "greeter", "greet", "Ok", 5), // same-service parent: no edge
+		event("trace-1", "span-front", "", "frontdoor", "welcome", "ok", 20),
+		event("trace-1", "span-greet", "span-front", "greeter", "greet", "ok", 10),
+		event("trace-2", "span-fail", "", "greeter", "greet", "service-unavailable", 30),
+		event("trace-2", "span-self", "span-fail", "greeter", "greet", "ok", 5), // same-service parent: no edge
 	}})
 	if status != benzene.StatusOk || ack.Accepted != 4 {
 		t.Fatalf("traces = (%v, %+v), want (Ok, accepted 4)", status, ack)
@@ -253,8 +253,8 @@ func TestCollector_TracesDriveStatsAndConsumers(t *testing.T) {
 	if greet.Invocations != 3 || greet.Errors != 1 {
 		t.Errorf("greet stats = %+v, want 3 invocations, 1 error", greet)
 	}
-	if greet.StatusCounts["Ok"] != 2 || greet.StatusCounts["ServiceUnavailable"] != 1 {
-		t.Errorf("StatusCounts = %v, want Ok:2 ServiceUnavailable:1", greet.StatusCounts)
+	if greet.StatusCounts["ok"] != 2 || greet.StatusCounts["service-unavailable"] != 1 {
+		t.Errorf("StatusCounts = %v, want ok:2 service-unavailable:1", greet.StatusCounts)
 	}
 	if greet.AvgDurationMs != 15 {
 		t.Errorf("AvgDurationMs = %v, want 15", greet.AvgDurationMs)
@@ -296,11 +296,32 @@ func TestCollector_TracesDriveStatsAndConsumers(t *testing.T) {
 	}
 }
 
+func TestCollector_ApplicationDefinedTraceStatusIsNotAnError(t *testing.T) {
+	// A trace carrying an application-defined status is not a framework failure, so it counts
+	// as an invocation but not an error, and its flow is not marked failed - matching the
+	// .NET aggregator's IsFailureResult (= IsFailure) and Result.IsSuccessful.
+	c := newTestCollector(t)
+	_, ack := invoke[Ack](t, c, mesh.TopicTraces, mesh.TraceBatch{Events: []mesh.TraceEvent{
+		event("trace-9", "span-9", "", "svc", "topic", "partial-success", 5),
+	}})
+	if ack.Accepted != 1 {
+		t.Fatalf("accepted = %d, want 1", ack.Accepted)
+	}
+	_, summary := invoke[TopicSummary](t, c, mesh.TopicQueryTopic, TopicQuery{Topic: "topic"})
+	if summary.Invocations != 1 || summary.Errors != 0 {
+		t.Errorf("summary = %+v, want 1 invocation, 0 errors for an application-defined status", summary)
+	}
+	_, fleet := invoke[FleetView](t, c, mesh.TopicQueryFleet, struct{}{})
+	if len(fleet.Traces) != 1 || fleet.Traces[0].Failed {
+		t.Errorf("Traces = %+v, want one flow, not failed", fleet.Traces)
+	}
+}
+
 func TestCollector_AnonymousEventsCountTopicsButNoService(t *testing.T) {
 	c := newTestCollector(t)
 
 	invoke[Ack](t, c, mesh.TopicTraces, mesh.TraceBatch{Events: []mesh.TraceEvent{
-		event("trace-1", "span-1", "", "", "greet", "Ok", 10),
+		event("trace-1", "span-1", "", "", "greet", "ok", 10),
 	}})
 
 	_, fleet := invoke[FleetView](t, c, mesh.TopicQueryFleet, struct{}{})
@@ -315,11 +336,11 @@ func TestCollector_AnonymousEventsCountTopicsButNoService(t *testing.T) {
 func TestCollector_TraceQueryAndRingEviction(t *testing.T) {
 	c := New(Options{MaxTraceEvents: 2, Now: func() time.Time { return testClock }})
 
-	later := event("trace-1", "span-2", "", "greeter", "greet", "Ok", 5)
+	later := event("trace-1", "span-2", "", "greeter", "greet", "ok", 5)
 	later.StartedAt = testClock.Add(time.Second)
 	invoke[Ack](t, c, mesh.TopicTraces, mesh.TraceBatch{Events: []mesh.TraceEvent{
 		later,
-		event("trace-1", "span-1", "", "frontdoor", "welcome", "Ok", 20),
+		event("trace-1", "span-1", "", "frontdoor", "welcome", "ok", 20),
 	}})
 
 	status, view := invoke[TraceView](t, c, mesh.TopicQueryTrace, TraceQuery{TraceID: "trace-1"})
@@ -342,8 +363,8 @@ func TestCollector_TraceQueryAndRingEviction(t *testing.T) {
 
 	// Two more events overwrite the full ring; trace-1 ages out of the window.
 	invoke[Ack](t, c, mesh.TopicTraces, mesh.TraceBatch{Events: []mesh.TraceEvent{
-		event("trace-2", "span-3", "", "greeter", "greet", "Ok", 5),
-		event("trace-2", "span-4", "", "greeter", "greet", "Ok", 5),
+		event("trace-2", "span-3", "", "greeter", "greet", "ok", 5),
+		event("trace-2", "span-4", "", "greeter", "greet", "ok", 5),
 	}})
 	if status, _ := invoke[TraceView](t, c, mesh.TopicQueryTrace, TraceQuery{TraceID: "trace-1"}); status != benzene.StatusNotFound {
 		t.Errorf("evicted trace query = %v, want NotFound (the window is bounded by design)", status)
@@ -360,7 +381,7 @@ func TestCollector_FleetTraceListIsBounded(t *testing.T) {
 
 	events := make([]mesh.TraceEvent, 0, maxFleetTraces+5)
 	for i := 0; i < maxFleetTraces+5; i++ {
-		e := event("trace-"+string(rune('a'+i)), "span-"+string(rune('a'+i)), "", "svc", "topic", "Ok", 1)
+		e := event("trace-"+string(rune('a'+i)), "span-"+string(rune('a'+i)), "", "svc", "topic", "ok", 1)
 		e.StartedAt = testClock.Add(time.Duration(i) * time.Second)
 		events = append(events, e)
 	}

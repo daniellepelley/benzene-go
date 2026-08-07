@@ -189,7 +189,7 @@ func TestSend_MalformedEnvelopeResponseIsServiceUnavailable(t *testing.T) {
 func TestSend_FailureWithMalformedErrorPayloadHasNoErrors(t *testing.T) {
 	client := &Client{Endpoint: "http://example.invalid", HTTPClient: &http.Client{
 		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-			body := `{"statusCode":"NotFound","headers":{},"body":"not json"}`
+			body := `{"statusCode":"not-found","headers":{},"body":"not json"}`
 			return &http.Response{StatusCode: 200, Body: io.NopCloser(bytesReader(body)), Header: make(http.Header)}, nil
 		}),
 	}}

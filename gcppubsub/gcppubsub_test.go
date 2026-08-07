@@ -201,7 +201,7 @@ func TestResolveRequest(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := resolveRequest(tt.message, tt.data)
+			req := resolveRequest(tt.message, tt.data, wire.DefaultTopicKey)
 			if req.Topic != tt.wantTopic {
 				t.Errorf("Topic = %q, want %q", req.Topic, tt.wantTopic)
 			}
@@ -217,5 +217,22 @@ func TestResolveRequest(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestResolveRequest_HonoursTheConfiguredTopicKey(t *testing.T) {
+	// With the reserved topic key overridden, an attribute under the new name routes and the
+	// old default "topic" attribute becomes an ordinary header (wire-contracts.md §2).
+	msg := pushMessage{Attributes: map[string]string{"x-my-topic": "orders:create", "topic": "not-the-topic"}}
+	req := resolveRequest(msg, "payload", "x-my-topic")
+
+	if req.Topic != "orders:create" {
+		t.Errorf("Topic = %q, want %q", req.Topic, "orders:create")
+	}
+	if req.Headers["topic"] != "not-the-topic" {
+		t.Errorf(`Headers["topic"] = %q, want the default key carried as an ordinary header`, req.Headers["topic"])
+	}
+	if _, ok := req.Headers["x-my-topic"]; ok {
+		t.Error("the configured topic key should be stripped from headers")
 	}
 }

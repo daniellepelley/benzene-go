@@ -56,6 +56,131 @@ func TestDispatch_SuccessWithPayload(t *testing.T) {
 	}
 }
 
+func TestDispatch_ApplicationDefinedStatusCarriesPayload(t *testing.T) {
+	// A handler returning an application-defined (non-framework) status with a payload must
+	// have that payload rendered as the body, not replaced by an error payload - the
+	// extensibility promise, matching .NET's IsSuccessful (= !IsFailure).
+	registry := benzene.NewRegistry()
+	if err := benzene.Register(registry, benzene.NewTopic("partial"),
+		benzene.Handler[greetRequest, greetResponse](func(_ context.Context, req greetRequest) benzene.Result[greetResponse] {
+			return benzene.Result[greetResponse]{
+				Status:  benzene.Status("partial-success"),
+				Payload: &greetResponse{Greeting: "Partly " + req.Name},
+			}
+		})); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	container := benzene.NewContainer()
+	pipeline := benzene.NewPipeline(benzene.RouterMiddleware(registry))
+
+	resp := Dispatch(context.Background(), pipeline, container, wire.Request{
+		Topic: "partial", Headers: map[string]string{}, Body: `{"name":"World"}`,
+	})
+
+	if resp.StatusCode != "partial-success" {
+		t.Errorf("StatusCode = %q, want %q", resp.StatusCode, "partial-success")
+	}
+	var payload greetResponse
+	if err := json.Unmarshal([]byte(resp.Body), &payload); err != nil {
+		t.Fatalf("body is not the payload (rendered as error?): %v; body = %s", err, resp.Body)
+	}
+	if payload.Greeting != "Partly World" {
+		t.Errorf("Greeting = %q, want %q", payload.Greeting, "Partly World")
+	}
+}
+
+func TestDispatch_ExplicitlySuccessfulFailureStatusCarriesPayload(t *testing.T) {
+	// A result set explicitly successful (SetResult) with a failure status - the health-check
+	// 503-but-render-the-body shape - carries its payload rather than an error payload, and the
+	// envelope's statusCode is the failure status (which maps to HTTP 503 for a probe).
+	registry := benzene.NewRegistry()
+	if err := benzene.Register(registry, benzene.NewTopic("health"),
+		benzene.Handler[greetRequest, greetResponse](func(_ context.Context, _ greetRequest) benzene.Result[greetResponse] {
+			return benzene.SetResult(benzene.StatusServiceUnavailable, greetResponse{Greeting: "degraded"}, true)
+		})); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	container := benzene.NewContainer()
+	pipeline := benzene.NewPipeline(benzene.RouterMiddleware(registry))
+
+	resp := Dispatch(context.Background(), pipeline, container, wire.Request{
+		Topic: "health", Headers: map[string]string{}, Body: `{"name":"x"}`,
+	})
+
+	if resp.StatusCode != string(benzene.StatusServiceUnavailable) {
+		t.Errorf("StatusCode = %q, want %q", resp.StatusCode, benzene.StatusServiceUnavailable)
+	}
+	var payload greetResponse
+	if err := json.Unmarshal([]byte(resp.Body), &payload); err != nil {
+		t.Fatalf("body is not the payload (rendered as error?): %v; body = %s", err, resp.Body)
+	}
+	if payload.Greeting != "degraded" {
+		t.Errorf("Greeting = %q, want %q", payload.Greeting, "degraded")
+	}
+}
+
+func TestDispatchResult_SuccessFlagMatchesTheResultNotJustTheStatus(t *testing.T) {
+	// The in-process success flag a queue binding acks/nacks on must follow the result's
+	// IsSuccessful, which diverges from the wire status class for an application-defined failure
+	// (Fail -> nack, not ack -> no silent message loss) and the health-check shape (SetResult
+	// service-unavailable but successful -> ack, not a needless retry).
+	cases := []struct {
+		name       string
+		handler    benzene.Handler[greetRequest, greetResponse]
+		wantOK     bool
+		wantStatus benzene.Status
+	}{
+		{"ok is successful", func(context.Context, greetRequest) benzene.Result[greetResponse] {
+			return benzene.Ok(greetResponse{Greeting: "hi"})
+		}, true, benzene.StatusOk},
+		{"framework failure is not successful", func(context.Context, greetRequest) benzene.Result[greetResponse] {
+			return benzene.ServiceUnavailable[greetResponse]("down")
+		}, false, benzene.StatusServiceUnavailable},
+		{"application-defined Fail is not successful", func(context.Context, greetRequest) benzene.Result[greetResponse] {
+			return benzene.Fail[greetResponse](benzene.Status("partial-failure"), "boom")
+		}, false, benzene.Status("partial-failure")},
+		{"health-shape service-unavailable-but-successful is successful", func(context.Context, greetRequest) benzene.Result[greetResponse] {
+			return benzene.SetResult(benzene.StatusServiceUnavailable, greetResponse{Greeting: "degraded"}, true)
+		}, true, benzene.StatusServiceUnavailable},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			registry := benzene.NewRegistry()
+			if err := benzene.Register(registry, benzene.NewTopic("t"), tc.handler); err != nil {
+				t.Fatalf("Register() error = %v", err)
+			}
+			pipeline := benzene.NewPipeline(benzene.RouterMiddleware(registry))
+			resp, successful := DispatchResult(context.Background(), pipeline, benzene.NewContainer(), wire.Request{
+				Topic: "t", Headers: map[string]string{}, Body: `{"name":"x"}`,
+			})
+			if successful != tc.wantOK {
+				t.Errorf("successful = %v, want %v", successful, tc.wantOK)
+			}
+			if resp.StatusCode != string(tc.wantStatus) {
+				t.Errorf("StatusCode = %q, want %q", resp.StatusCode, tc.wantStatus)
+			}
+		})
+	}
+}
+
+// foreignResultInfo is a benzene.ResultInfo that does NOT implement the optional
+// ResultIsSuccessful interface, exercising resultSuccessful's status-class fallback (every
+// Result[T] implements it, so the fallback is otherwise unreachable through a real dispatch).
+type foreignResultInfo struct{ status benzene.Status }
+
+func (f foreignResultInfo) ResultStatus() benzene.Status { return f.status }
+func (f foreignResultInfo) ResultErrors() []string       { return nil }
+func (f foreignResultInfo) ResultPayload() any           { return nil }
+
+func TestResultSuccessful_FallsBackToStatusForForeignResultInfo(t *testing.T) {
+	if resultSuccessful(foreignResultInfo{status: benzene.StatusServiceUnavailable}) {
+		t.Error("resultSuccessful(framework failure) = true, want false via the status fallback")
+	}
+	if !resultSuccessful(foreignResultInfo{status: benzene.StatusOk}) {
+		t.Error("resultSuccessful(ok) = false, want true via the status fallback")
+	}
+}
+
 func TestDispatch_MissingHandlerIsNotFound(t *testing.T) {
 	_, container, pipeline := newTestApp(t)
 

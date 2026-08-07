@@ -234,7 +234,7 @@ func TestRecoverStatus(t *testing.T) {
 		trailer metadata.MD
 		want    benzene.Status
 	}{
-		{name: "trailer wins verbatim", code: 0, trailer: metadata.Pairs(BenzeneStatusTrailer, "Created"), want: benzene.StatusCreated},
+		{name: "trailer wins verbatim", code: 0, trailer: metadata.Pairs(BenzeneStatusTrailer, "created"), want: benzene.StatusCreated},
 		{name: "no trailer falls back to code", code: 5, trailer: nil, want: benzene.StatusNotFound},
 		{name: "empty trailer value falls back to code", code: 5, trailer: metadata.Pairs(BenzeneStatusTrailer, ""), want: benzene.StatusNotFound},
 	}

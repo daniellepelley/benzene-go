@@ -152,7 +152,7 @@ func TestResolveRequest_NonTopicAttributesBecomeHeaders(t *testing.T) {
 		},
 	}
 
-	req := resolveRequest(record)
+	req := resolveRequest(record, wire.DefaultTopicKey)
 
 	if req.Topic != "greet" {
 		t.Errorf("Topic = %q, want %q", req.Topic, "greet")

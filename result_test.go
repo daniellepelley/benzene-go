@@ -26,6 +26,51 @@ func TestOk(t *testing.T) {
 	}
 }
 
+func TestResult_ApplicationDefinedStatusIsSuccessful(t *testing.T) {
+	// An application-defined status is not a framework failure, so IsSuccessful is true and
+	// the payload is carried - the extensibility promise (design-principles.md), matching the
+	// .NET reference where IsSuccessful defaults to !IsFailure(status).
+	payload := greeting{Message: "partial"}
+	r := Result[greeting]{Status: Status("partial-success"), Payload: &payload}
+	if !r.IsSuccessful() {
+		t.Errorf("IsSuccessful() = false for an application-defined status, want true")
+	}
+	// A framework failure status, by contrast, is not successful.
+	f := Result[greeting]{Status: StatusServiceUnavailable}
+	if f.IsSuccessful() {
+		t.Errorf("IsSuccessful() = true for %q, want false", StatusServiceUnavailable)
+	}
+	// An application-defined status raised via Fail (the errors-based failure constructor) is
+	// NOT successful even though it is not a framework failure - it carries errors, so it is a
+	// failure by construction, mirroring .NET's errors-based Set.
+	if Fail[greeting](Status("partial-failure"), "boom").IsSuccessful() {
+		t.Error("IsSuccessful() = true for a Fail() with an application-defined status, want false")
+	}
+}
+
+func TestSetResult_ExplicitSuccessDecoupledFromStatus(t *testing.T) {
+	// The health-check shape: service-unavailable (503 to probes) but explicitly successful so
+	// the report body renders. Mirrors .NET BenzeneResult.Set(status, payload, isSuccessful).
+	payload := greeting{Message: "report"}
+	r := SetResult(StatusServiceUnavailable, payload, true)
+	if !r.IsSuccessful() {
+		t.Error("IsSuccessful() = false, want true (explicit flag overrides the failure status)")
+	}
+	if r.Status != StatusServiceUnavailable {
+		t.Errorf("Status = %q, want %q", r.Status, StatusServiceUnavailable)
+	}
+	if r.Payload == nil || r.Payload.Message != "report" {
+		t.Errorf("Payload = %+v, want the report payload", r.Payload)
+	}
+	if r.ResultIsSuccessful() != r.IsSuccessful() {
+		t.Error("ResultIsSuccessful() must mirror IsSuccessful() on the type-erased path")
+	}
+	// The inverse: explicitly not-successful despite a success status.
+	if SetResult(StatusOk, payload, false).IsSuccessful() {
+		t.Error("IsSuccessful() = true, want false when explicitly set false")
+	}
+}
+
 func TestSuccessConstructors(t *testing.T) {
 	tests := []struct {
 		name       string

@@ -25,9 +25,10 @@ import (
 	benzene "github.com/daniellepelley/benzene-go"
 )
 
-// TopicID is the reserved topic intercepted by Middleware (mesh.md §9 tracks the naming
-// question; this Phase 1 uses the bare reserved id, matching the healthcheck precedent).
-const TopicID = "mesh"
+// TopicID is the reserved topic intercepted by Middleware to serve the ServiceDescriptor
+// (mesh.md §1). It is namespaced under the benzene: default-service-standard prefix
+// (design-principles.md §5.1) and matches the .NET reference's BenzeneTopic.Mesh.
+const TopicID = "benzene:mesh"
 
 // FeedRegistry names the topic-catalog feed in Descriptor.Degraded: the Registry the
 // descriptor's topic list is derived from.
@@ -126,7 +127,7 @@ func Describe(registry *benzene.Registry, info ServiceInfo) Descriptor {
 	return desc
 }
 
-// Middleware intercepts the reserved "mesh" topic (plus any additional aliases) and
+// Middleware intercepts the reserved benzene:mesh topic (plus any additional aliases) and
 // short-circuits the pipeline with descriptor, exactly as the healthcheck package does for
 // its reserved topic. Interception is by topic ID alone, ignoring version, matching
 // healthcheck's behavior. Any other topic passes through to next unchanged.
