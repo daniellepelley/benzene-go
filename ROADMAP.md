@@ -55,8 +55,10 @@ delivery order - just the current honest picture, kept up to date as things land
   reserved-`benzene:mesh`-topic descriptor middleware, `TraceMiddleware` with W3C `traceparent`
   propagation, and the `LogExporter`/`PushExporter` trace feeds - every feed independent and
   optional.
-- `meshd` - Phases 3-4 of `docs/design/mesh.md`: the collector (register/heartbeat/traces
-  ingest + `benzene:mesh:query:*` read models over an in-memory store with a bounded trace ring) and
+- `meshd` - Phases 3-4 of `docs/design/mesh.md`: the collector (register/heartbeat/traces/issues
+  ingest + `benzene:mesh:query:*` read models over an in-memory store with a bounded trace ring;
+  the `benzene:mesh:issues` feed merges failure signatures by fingerprint and flags the feed's
+  absence only when a failure needs explaining, per mesh.md §4.1) and
   the Mesh View (one embedded self-contained page, no JS framework). The wire contract is
   promoted to the main repo's `docs/specification/mesh.md` and pinned by vendored
   `mesh-*.json` conformance fixtures.
@@ -208,8 +210,12 @@ is a decision rather than a surprise:
   unversioned topic"), a conforming service needs neither versioning axis, and the .NET
   implementation leans on reflection-based property mapping this zero-dependency port avoids. If
   pursued it should be its own package, like the other dependency-bearing extensions.
-- **Mesh `benzene:mesh:issues` feed and produced-vs-consumed version reconciliation.** The
-  issue feed (`mesh.md` §4.1) is marked in the spec itself as optional with "Go reference parity
-  pending" and adds no Cloud Service Profile requirement; the aggregator-level
+- **Mesh `benzene:mesh:issues` emitter and produced-vs-consumed version reconciliation.** The
+  issue feed's **collector** half is now implemented (`meshd` ingests, merges by fingerprint, and
+  surfaces issues on the fleet view; conformance-verified against `mesh-issue-cases.json` - see
+  Done). The **emitter** half - a pipeline middleware that classifies each failure by the §4.1
+  precedence table, derives the normative SHA-256 fingerprint, aggregates deltas, and flushes
+  asynchronously - is the remaining piece; it is optional on both sides and adds no Cloud Service
+  Profile requirement, so a service that does not emit degrades to today. The aggregator-level
   produced-vs-consumed version skew read model is an advanced mesh-UI feature, not a
   message-conformance requirement. Both are additive follow-ups, not gaps in what ships.

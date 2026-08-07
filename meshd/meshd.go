@@ -47,6 +47,25 @@ type FleetView struct {
 	Services    []ServiceSummary `json:"services"`
 	Topics      []TopicSummary   `json:"topics"`
 	Traces      []TraceSummary   `json:"traces"`
+	Issues      []IssueView      `json:"issues"`
+}
+
+// IssueView is one merged failure signature on the fleet view (mesh.md §4.1). Unlike the wire
+// Issue's delta Count, this Count is the cumulative total the collector has merged.
+type IssueView struct {
+	Fingerprint      string    `json:"fingerprint"`
+	Classification   string    `json:"classification"`
+	Service          string    `json:"service"`
+	Topic            string    `json:"topic"`
+	Version          string    `json:"version,omitempty"`
+	Transport        string    `json:"transport,omitempty"`
+	Status           string    `json:"status"`
+	ExceptionType    string    `json:"exceptionType,omitempty"`
+	Count            int64     `json:"count"`
+	FirstSeen        time.Time `json:"firstSeen"`
+	LastSeen         time.Time `json:"lastSeen"`
+	ExemplarTraceIds []string  `json:"exemplarTraceIds,omitempty"`
+	ResolutionHint   string    `json:"resolutionHint,omitempty"`
 }
 
 // Health classification of a service, from its instances' latest heartbeats.
@@ -179,6 +198,16 @@ func New(options Options) *Collector {
 	mustRegister(benzene.Register(registry, benzene.NewTopic(mesh.TopicTraces),
 		benzene.Handler[mesh.TraceBatch, Ack](func(_ context.Context, batch mesh.TraceBatch) benzene.Result[Ack] {
 			return benzene.Ok(Ack{Accepted: s.addEvents(batch.Events)})
+		})))
+
+	mustRegister(benzene.Register(registry, benzene.NewTopic(mesh.TopicIssues),
+		benzene.Handler[mesh.IssueBatch, Ack](func(_ context.Context, batch mesh.IssueBatch) benzene.Result[Ack] {
+			// Batch-level service is required and attributable, even for the empty-batch liveness
+			// assertion (mesh.md §4.1).
+			if batch.Service == "" {
+				return benzene.BadRequest[Ack]("service is required")
+			}
+			return benzene.Ok(Ack{Accepted: s.addIssues(batch)})
 		})))
 
 	// The fleet query takes no parameters; json.RawMessage tolerates any body, including

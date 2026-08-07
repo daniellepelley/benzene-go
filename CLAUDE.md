@@ -61,8 +61,10 @@ alongside the shared spec.
   the normative text; `docs/design/mesh-spec-draft.md` is the historical draft), pinned by
   the vendored `mesh-*.json` fixtures in `conformance/`.
 - `meshd/` - Phases 3-4 of `docs/design/mesh.md`: the collector - an ordinary Benzene
-  service (register/heartbeat/traces ingest + `benzene:mesh:query:*` read models over an
-  in-memory store with a bounded trace ring) and the Mesh View (an embedded,
+  service (register/heartbeat/traces/issues ingest + `benzene:mesh:query:*` read models over an
+  in-memory store with a bounded trace ring; the `benzene:mesh:issues` feed of mesh.md §4.1
+  merges failure signatures by fingerprint and surfaces them on the fleet view) and the Mesh
+  View (an embedded,
   self-contained HTML page - no JS framework, per the zero-dependency stance). Consumer
   edges are derived from trace parentage at query time; providers from descriptors;
   nothing is declared. It must accept partial fleets: a missing feed renders a service

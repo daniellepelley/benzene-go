@@ -264,7 +264,20 @@ type meshCollectorFixture struct {
 func TestConformance_MeshCollectorCases(t *testing.T) {
 	var fixture meshCollectorFixture
 	loadFixture(t, "mesh-collector-cases.json", &fixture)
+	runMeshCollectorFixture(t, fixture)
+}
 
+// TestConformance_MeshIssueCases runs the issue-feed collector fixture (mesh.md §4.1). It shares
+// mesh-collector-cases' step/assertion model exactly, so it reuses the same runner - required
+// only because this collector claims the issue feed (conformance/README.md).
+func TestConformance_MeshIssueCases(t *testing.T) {
+	var fixture meshCollectorFixture
+	loadFixture(t, "mesh-issue-cases.json", &fixture)
+	runMeshCollectorFixture(t, fixture)
+}
+
+func runMeshCollectorFixture(t *testing.T, fixture meshCollectorFixture) {
+	t.Helper()
 	for _, c := range fixture.Cases {
 		t.Run(c.Name, func(t *testing.T) {
 			builder := meshd.New(meshd.Options{}).Builder()

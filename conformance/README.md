@@ -19,6 +19,7 @@ cp path/to/Benzene/docs/specification/conformance/envelope-cases.json testdata/
 cp path/to/Benzene/docs/specification/conformance/mesh-descriptor-cases.json testdata/
 cp path/to/Benzene/docs/specification/conformance/mesh-trace-cases.json testdata/
 cp path/to/Benzene/docs/specification/conformance/mesh-collector-cases.json testdata/
+cp path/to/Benzene/docs/specification/conformance/mesh-issue-cases.json testdata/
 cp path/to/Benzene/docs/specification/conformance/transport-metadata-cases.json testdata/
 ```
 
@@ -41,9 +42,12 @@ runner. Descriptor cases derive the service descriptor from the two canonical en
 handlers and assert the derived schemas plus the descriptorHash's format/invariance/
 sensitivity properties; trace cases assert the traceparent join/reject rules and the
 invocation→semantic-status mapping; collector cases run ordered envelope sequences against a
-fresh `meshd` collector per case. Mesh fixtures add one matching rule: arrays compare by
-exact length with per-element subset matching, and an expected `[]` matches an
-absent-or-empty actual array.
+fresh `meshd` collector per case. `mesh-issue-cases.json` pins the issue-feed collector
+(`mesh.md` §4.1: batch-service required, empty-batch liveness, delta-merge by fingerprint,
+invalid-entry skip, and the conditional `issues` missing-feed marker); it shares the collector
+cases' step/assertion model exactly and reuses the same runner. Mesh fixtures add one matching
+rule: arrays compare by exact length with per-element subset matching, and an expected `[]`
+matches an absent-or-empty actual array.
 
 ## Transport metadata fixture
 
