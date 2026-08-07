@@ -70,7 +70,7 @@ func Handler(builder *benzene.ApplicationBuilder) awslambda.HandlerFunc {
 		}
 
 		resp := envelope.Dispatch(ctx, builder.Pipeline, builder.Container, resolveRequest(rule))
-		if !benzene.Status(resp.StatusCode).IsSuccess() {
+		if benzene.Status(resp.StatusCode).IsFailure() {
 			return nil, fmt.Errorf("awseventbridge: event %s failed: %s", rule.ID, resp.StatusCode)
 		}
 		return json.Marshal(struct{}{})

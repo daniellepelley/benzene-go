@@ -91,7 +91,7 @@ func (c *Consumer) Run(ctx context.Context) error {
 		}
 
 		resp := envelope.Dispatch(ctx, c.Builder.Pipeline, c.Builder.Container, resolveRequest(msg))
-		if !benzene.Status(resp.StatusCode).IsSuccess() && c.OnFailure != nil {
+		if benzene.Status(resp.StatusCode).IsFailure() && c.OnFailure != nil {
 			c.OnFailure(ctx, msg, resp)
 		}
 

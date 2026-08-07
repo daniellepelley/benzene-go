@@ -60,7 +60,7 @@ func Handler(builder *benzene.ApplicationBuilder) awslambda.HandlerFunc {
 		for _, record := range snsEvt.Records {
 			req := resolveRequest(record.Sns)
 			resp := envelope.Dispatch(ctx, builder.Pipeline, builder.Container, req)
-			if !benzene.Status(resp.StatusCode).IsSuccess() {
+			if benzene.Status(resp.StatusCode).IsFailure() {
 				failures = append(failures, fmt.Sprintf("%s: %s", record.Sns.MessageID, resp.StatusCode))
 			}
 		}

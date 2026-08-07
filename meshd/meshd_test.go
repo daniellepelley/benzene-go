@@ -296,6 +296,27 @@ func TestCollector_TracesDriveStatsAndConsumers(t *testing.T) {
 	}
 }
 
+func TestCollector_ApplicationDefinedTraceStatusIsNotAnError(t *testing.T) {
+	// A trace carrying an application-defined status is not a framework failure, so it counts
+	// as an invocation but not an error, and its flow is not marked failed - matching the
+	// .NET aggregator's IsFailureResult (= IsFailure) and Result.IsSuccessful.
+	c := newTestCollector(t)
+	_, ack := invoke[Ack](t, c, mesh.TopicTraces, mesh.TraceBatch{Events: []mesh.TraceEvent{
+		event("trace-9", "span-9", "", "svc", "topic", "partial-success", 5),
+	}})
+	if ack.Accepted != 1 {
+		t.Fatalf("accepted = %d, want 1", ack.Accepted)
+	}
+	_, summary := invoke[TopicSummary](t, c, mesh.TopicQueryTopic, TopicQuery{Topic: "topic"})
+	if summary.Invocations != 1 || summary.Errors != 0 {
+		t.Errorf("summary = %+v, want 1 invocation, 0 errors for an application-defined status", summary)
+	}
+	_, fleet := invoke[FleetView](t, c, mesh.TopicQueryFleet, struct{}{})
+	if len(fleet.Traces) != 1 || fleet.Traces[0].Failed {
+		t.Errorf("Traces = %+v, want one flow, not failed", fleet.Traces)
+	}
+}
+
 func TestCollector_AnonymousEventsCountTopicsButNoService(t *testing.T) {
 	c := newTestCollector(t)
 

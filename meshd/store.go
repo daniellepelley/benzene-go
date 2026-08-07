@@ -136,7 +136,7 @@ func (s *store) addEvents(events []mesh.TraceEvent) int {
 			s.next = (s.next + 1) % s.capacity
 		}
 
-		failed := !benzene.Status(event.Status).IsSuccess()
+		failed := benzene.Status(event.Status).IsFailure()
 
 		topic := s.ensureTopic(topicKey{id: event.Topic, version: event.TopicVersion})
 		topic.invocations++
@@ -303,7 +303,7 @@ func (s *store) traceSummaries(limit int) []TraceSummary {
 			if event.Service != "" {
 				services[event.Service] = true
 			}
-			if !benzene.Status(event.Status).IsSuccess() {
+			if benzene.Status(event.Status).IsFailure() {
 				summary.Failed = true
 			}
 		}

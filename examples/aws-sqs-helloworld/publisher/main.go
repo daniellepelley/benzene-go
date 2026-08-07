@@ -40,7 +40,7 @@ func forwardHandler() benzene.Handler[greeting.GreetRequest, struct{}] {
 		}
 
 		result := client.SenderFromScope(scope).Send(ctx, benzene.NewTopic("greet"), nil, body)
-		if !result.Status.IsSuccess() {
+		if !result.IsSuccessful() {
 			return benzene.Result[struct{}]{Status: result.Status, Errors: result.Errors}
 		}
 		return benzene.Result[struct{}]{Status: result.Status}
