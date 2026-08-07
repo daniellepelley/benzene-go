@@ -40,6 +40,12 @@ func TestResult_ApplicationDefinedStatusIsSuccessful(t *testing.T) {
 	if f.IsSuccessful() {
 		t.Errorf("IsSuccessful() = true for %q, want false", StatusServiceUnavailable)
 	}
+	// An application-defined status raised via Fail (the errors-based failure constructor) is
+	// NOT successful even though it is not a framework failure - it carries errors, so it is a
+	// failure by construction, mirroring .NET's errors-based Set.
+	if Fail[greeting](Status("partial-failure"), "boom").IsSuccessful() {
+		t.Error("IsSuccessful() = true for a Fail() with an application-defined status, want false")
+	}
 }
 
 func TestSetResult_ExplicitSuccessDecoupledFromStatus(t *testing.T) {

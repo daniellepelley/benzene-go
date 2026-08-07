@@ -22,16 +22,39 @@ import (
 // including "no handler" and a handler panic, is represented as a wire.Response, since a
 // binding built on this always needs to produce SOME response for its caller.
 func Dispatch(ctx context.Context, pipeline *benzene.Pipeline, container *benzene.Container, req wire.Request) wire.Response {
+	resp, _ := DispatchResult(ctx, pipeline, container, req)
+	return resp
+}
+
+// DispatchResult is Dispatch plus the invocation's in-process success flag (the result's
+// IsSuccessful). The wire.Response is identical and unchanged - the flag is a separate return,
+// never part of the serialized envelope (the wire contract carries only the status). It exists
+// for in-process bindings that must decide acknowledge-vs-retry the way the .NET applications do:
+// on the result's success flag, not the wire status class. The two coincide for framework
+// statuses but differ for an application-defined failure status (Fail, unsuccessful) and the
+// health-check "service-unavailable but successful" shape (SetResult), where classifying by the
+// status alone would nack a message the handler acked, or ack one it failed.
+func DispatchResult(ctx context.Context, pipeline *benzene.Pipeline, container *benzene.Container, req wire.Request) (wire.Response, bool) {
 	scope := container.NewScope()
 	ic := benzene.NewInvocationContext(benzene.NewTopic(req.Topic), req.Headers, json.RawMessage(req.Body), scope)
 
 	if err := pipeline.Run(ctx, ic); err != nil {
-		return withResponseHeaders(errorResponse(benzene.ServiceUnavailable[any](err.Error())), ic)
+		return withResponseHeaders(errorResponse(benzene.ServiceUnavailable[any](err.Error())), ic), false
 	}
 	if ic.Result == nil {
-		return withResponseHeaders(errorResponse(benzene.UnexpectedError[any]("pipeline completed without producing a result")), ic)
+		return withResponseHeaders(errorResponse(benzene.UnexpectedError[any]("pipeline completed without producing a result")), ic), false
 	}
-	return withResponseHeaders(toResponse(ic.Result), ic)
+	return withResponseHeaders(toResponse(ic.Result), ic), resultSuccessful(ic.Result)
+}
+
+// resultSuccessful reads the result's success flag off the type-erased ResultInfo (via the
+// optional ResultIsSuccessful interface every Result[T] satisfies), falling back to the status
+// class if some other ResultInfo implementation does not expose it.
+func resultSuccessful(result benzene.ResultInfo) bool {
+	if s, ok := result.(interface{ ResultIsSuccessful() bool }); ok {
+		return s.ResultIsSuccessful()
+	}
+	return !result.ResultStatus().IsFailure()
 }
 
 // withResponseHeaders merges headers set during the invocation (by middleware, or by a

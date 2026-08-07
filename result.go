@@ -92,15 +92,20 @@ func Deleted[T any](payload T) Result[T] { return success(StatusDeleted, payload
 // Ignored returns a successful Result with StatusIgnored - handled deliberately, not an error.
 func Ignored[T any](payload T) Result[T] { return success(StatusIgnored, payload) }
 
-// Fail returns a failed Result with the given status and error messages. Panics if status
-// is in the framework success class, since that would produce a self-contradictory Result;
-// an application-defined status is allowed (it is not a framework success status). This is a
-// Go-side guard - it has no direct counterpart in the .NET reference.
+// Fail returns a failed Result with the given status and error messages. It is the
+// errors-based failure constructor, so the result is always unsuccessful - even for an
+// application-defined status that IsFailure does not recognise - mirroring the .NET reference's
+// errors-based BenzeneResult.Set(status, errors), which is unconditionally isSuccessful=false.
+// (That is what makes a custom failure status nack/redeliver on a queue and render its errors,
+// rather than being mistaken for a success.) Panics if status is in the framework success class,
+// since that would produce a self-contradictory Result; a Go-side guard with no direct .NET
+// counterpart.
 func Fail[T any](status Status, errors ...string) Result[T] {
 	if status.IsSuccess() {
 		panic("benzene: Fail called with a success-class status " + string(status))
 	}
-	return Result[T]{Status: status, Errors: errors}
+	unsuccessful := false
+	return Result[T]{Status: status, Errors: errors, successful: &unsuccessful}
 }
 
 // BadRequest returns a failed Result with StatusBadRequest.
