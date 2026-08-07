@@ -52,7 +52,9 @@ alongside the shared spec.
 - `mesh/` - Phases 1-2 of `docs/design/mesh.md`: service `Descriptor` derived from the
   `Registry` (topics + JSON Schemas derived at startup from the `TReq`/`TRes` types the
   Registry captures at `Register` time, plus the contract `descriptorHash`),
-  reserved-`benzene:mesh`-topic descriptor middleware, and trace middleware + log exporter.
+  reserved-`benzene:mesh`-topic descriptor middleware, trace middleware + log exporter, and the
+  issue feed's emitter half (`IssueMiddleware` + `PushIssueExporter`: source-side dedup by the
+  normative §4.1 classification + SHA-256 fingerprint, delta counts, liveness flush).
   Schema derivation is the one sanctioned use of `reflect` - startup-only, never on the
   dispatch path. Every feed is independent and optional - degradation (nil registry, nil
   or failing exporter, unprovisioned descriptor endpoint) must reduce the mesh, never

@@ -53,8 +53,9 @@ delivery order - just the current honest picture, kept up to date as things land
 - `mesh` - Phases 1-2 of `docs/design/mesh.md`: the service `Descriptor` derived from the live
   `Registry` (topics + startup-derived JSON Schemas + `descriptorHash`),
   reserved-`benzene:mesh`-topic descriptor middleware, `TraceMiddleware` with W3C `traceparent`
-  propagation, and the `LogExporter`/`PushExporter` trace feeds - every feed independent and
-  optional.
+  propagation, the `LogExporter`/`PushExporter` trace feeds, and the issue feed's emitter
+  (`IssueMiddleware` + `PushIssueExporter`: source-side classification, SHA-256 fingerprint, delta
+  aggregation, liveness flush - mesh.md §4.1) - every feed independent and optional.
 - `meshd` - Phases 3-4 of `docs/design/mesh.md`: the collector (register/heartbeat/traces/issues
   ingest + `benzene:mesh:query:*` read models over an in-memory store with a bounded trace ring;
   the `benzene:mesh:issues` feed merges failure signatures by fingerprint and flags the feed's
@@ -210,12 +211,12 @@ is a decision rather than a surprise:
   unversioned topic"), a conforming service needs neither versioning axis, and the .NET
   implementation leans on reflection-based property mapping this zero-dependency port avoids. If
   pursued it should be its own package, like the other dependency-bearing extensions.
-- **Mesh `benzene:mesh:issues` emitter and produced-vs-consumed version reconciliation.** The
-  issue feed's **collector** half is now implemented (`meshd` ingests, merges by fingerprint, and
-  surfaces issues on the fleet view; conformance-verified against `mesh-issue-cases.json` - see
-  Done). The **emitter** half - a pipeline middleware that classifies each failure by the §4.1
-  precedence table, derives the normative SHA-256 fingerprint, aggregates deltas, and flushes
-  asynchronously - is the remaining piece; it is optional on both sides and adds no Cloud Service
-  Profile requirement, so a service that does not emit degrades to today. The aggregator-level
-  produced-vs-consumed version skew read model is an advanced mesh-UI feature, not a
-  message-conformance requirement. Both are additive follow-ups, not gaps in what ships.
+- **Produced-vs-consumed version reconciliation.** Both halves of the `benzene:mesh:issues` feed
+  now ship - the `meshd` collector (fingerprint merge + fleet view, conformance-verified against
+  `mesh-issue-cases.json`) and the `mesh` emitter (`IssueMiddleware`/`PushIssueExporter`), see
+  Done. The remaining mesh follow-up is the aggregator-level produced-vs-consumed version skew
+  read model - an advanced mesh-UI feature, not a message-conformance requirement, and an additive
+  follow-up rather than a gap in what ships. (The Go emitter leaves `exceptionType` empty: Go's
+  router converts a handler panic to a `service-unavailable` result before the middleware sees it,
+  so there is no language-native thrown type to capture - `exceptionType` is optional in §4.1 for
+  exactly this reason, and classification falls to the status-based rows.)
