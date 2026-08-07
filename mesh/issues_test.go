@@ -121,12 +121,43 @@ func TestIssueMiddleware_NilResultIsAWiringGap(t *testing.T) {
 	}
 }
 
-func TestIssueMiddleware_CapturesTheTraceparentExemplar(t *testing.T) {
+func TestIssueMiddleware_FallsBackToTheTraceparentHeaderWhenNoSpan(t *testing.T) {
+	// With no TraceMiddleware (no span on the context), the exemplar comes from the inbound
+	// traceparent header.
 	recorder := &fakeRecorder{}
 	headers := map[string]string{"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
 	runIssueMiddleware(t, recorder, benzene.ServiceUnavailable[any]("down"), headers)
 	if len(recorder.occurrences) != 1 || recorder.occurrences[0].TraceID != "4bf92f3577b34da6a3ce929d0e0e4736" {
 		t.Errorf("occurrence = %+v, want the traceparent trace id as the exemplar", recorder.occurrences)
+	}
+}
+
+func TestIssueMiddleware_ExemplarMatchesTheTraceFeedIdAtAnEntryPoint(t *testing.T) {
+	// At an entry point (no inbound traceparent), TraceMiddleware mints a fresh trace id and puts
+	// its span on the context. The issue exemplar must be that same id - the two feeds compose
+	// over one trace - not empty.
+	traceExp := &captureExporter{}
+	recorder := &fakeRecorder{}
+	info := ServiceInfo{Service: "orders"}
+	terminal := func(_ context.Context, ic *benzene.InvocationContext, _ func(context.Context) error) error {
+		ic.Result = benzene.ServiceUnavailable[any]("down")
+		return nil
+	}
+	pipeline := benzene.NewPipeline(TraceMiddleware(info, traceExp), IssueMiddleware(info, recorder), terminal)
+	ic := benzene.NewInvocationContext(benzene.NewTopic("order:create"), map[string]string{}, nil, nil)
+	if err := pipeline.Run(context.Background(), ic); err != nil {
+		t.Fatalf("pipeline.Run() error = %v", err)
+	}
+
+	if len(recorder.occurrences) != 1 || len(traceExp.events) != 1 {
+		t.Fatalf("occurrences=%d trace events=%d, want 1 each", len(recorder.occurrences), len(traceExp.events))
+	}
+	exemplar := recorder.occurrences[0].TraceID
+	if exemplar == "" {
+		t.Fatal("issue exemplar traceID is empty at an entry point; want the trace feed's fresh id")
+	}
+	if exemplar != traceExp.events[0].TraceID {
+		t.Errorf("issue exemplar = %q, want the trace event's id %q", exemplar, traceExp.events[0].TraceID)
 	}
 }
 

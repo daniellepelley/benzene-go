@@ -100,7 +100,17 @@ func IssueMiddleware(info ServiceInfo, exporter IssueRecorder) benzene.Middlewar
 			if ic.Result != nil {
 				status = string(ic.Result.ResultStatus())
 			}
-			traceID, _ := parseTraceparent(ic.Headers["traceparent"])
+			// Link the exemplar to the same trace id the trace feed used for this invocation:
+			// TraceMiddleware (registered outer) puts the invocation's span - a fresh id at an
+			// entry point, or the adopted inbound one - on the context. Only when no span is
+			// present (no trace middleware, or a different ordering) fall back to the inbound
+			// traceparent header, which is empty for an edge invocation.
+			traceID := ""
+			if span, ok := SpanFromContext(ctx); ok {
+				traceID = span.TraceID
+			} else {
+				traceID, _ = parseTraceparent(ic.Headers["traceparent"])
+			}
 			exporter.Record(IssueOccurrence{
 				Topic:   ic.Topic.ID,
 				Version: ic.Topic.Version,
