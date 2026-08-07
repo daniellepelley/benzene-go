@@ -49,8 +49,8 @@ func TestPushExporter_FlushesOnBatchSize(t *testing.T) {
 	exporter := NewPushExporter(sender, PushExporterOptions{BatchSize: 2, FlushInterval: time.Hour})
 	defer exporter.Close()
 
-	exporter.Export(context.Background(), TraceEvent{Topic: "a", Status: "Ok"})
-	exporter.Export(context.Background(), TraceEvent{Topic: "b", Status: "Ok"})
+	exporter.Export(context.Background(), TraceEvent{Topic: "a", Status: "ok"})
+	exporter.Export(context.Background(), TraceEvent{Topic: "b", Status: "ok"})
 
 	deadline := time.Now().Add(5 * time.Second)
 	for sender.eventCount() < 2 && time.Now().Before(deadline) {
@@ -75,7 +75,7 @@ func TestPushExporter_FlushesPartialBatchOnInterval(t *testing.T) {
 	exporter := NewPushExporter(sender, PushExporterOptions{BatchSize: 100, FlushInterval: 10 * time.Millisecond})
 	defer exporter.Close()
 
-	exporter.Export(context.Background(), TraceEvent{Topic: "a", Status: "Ok"})
+	exporter.Export(context.Background(), TraceEvent{Topic: "a", Status: "ok"})
 
 	deadline := time.Now().Add(5 * time.Second)
 	for sender.eventCount() < 1 && time.Now().Before(deadline) {
@@ -91,7 +91,7 @@ func TestPushExporter_CloseFlushesTheTail(t *testing.T) {
 	exporter := NewPushExporter(sender, PushExporterOptions{BatchSize: 100, FlushInterval: time.Hour})
 
 	for i := 0; i < 5; i++ {
-		exporter.Export(context.Background(), TraceEvent{Topic: "tail", Status: "Ok"})
+		exporter.Export(context.Background(), TraceEvent{Topic: "tail", Status: "ok"})
 	}
 	exporter.Close()
 
@@ -112,7 +112,7 @@ func TestPushExporter_FullBufferDropsInsteadOfBlocking(t *testing.T) {
 	go func() {
 		defer close(finished)
 		for i := 0; i < sent; i++ {
-			exporter.Export(context.Background(), TraceEvent{Topic: "overflow", Status: "Ok"})
+			exporter.Export(context.Background(), TraceEvent{Topic: "overflow", Status: "ok"})
 		}
 	}()
 
@@ -153,7 +153,7 @@ func TestPushExporter_CloseIsIdempotent(t *testing.T) {
 	sender := &captureSender{}
 	exporter := NewPushExporter(sender, PushExporterOptions{})
 
-	exporter.Export(context.Background(), TraceEvent{Topic: "a", Status: "Ok"})
+	exporter.Export(context.Background(), TraceEvent{Topic: "a", Status: "ok"})
 	exporter.Close()
 	exporter.Close()
 

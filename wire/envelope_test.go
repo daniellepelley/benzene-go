@@ -48,7 +48,7 @@ func TestRequest_WireFieldNamesAreCamelCase(t *testing.T) {
 
 func TestResponse_RoundTrip(t *testing.T) {
 	original := Response{
-		StatusCode: "Ok",
+		StatusCode: "ok",
 		Headers:    map[string]string{"content-type": "application/json"},
 		Body:       `{"message":"hi"}`,
 	}
@@ -68,7 +68,7 @@ func TestResponse_RoundTrip(t *testing.T) {
 }
 
 func TestResponse_WireFieldNamesAreCamelCase(t *testing.T) {
-	data, err := MarshalResponse(Response{StatusCode: "Ok", Headers: map[string]string{}, Body: "b"})
+	data, err := MarshalResponse(Response{StatusCode: "ok", Headers: map[string]string{}, Body: "b"})
 	if err != nil {
 		t.Fatalf("MarshalResponse() error = %v", err)
 	}
@@ -85,7 +85,7 @@ func TestResponse_WireFieldNamesAreCamelCase(t *testing.T) {
 }
 
 func TestErrorPayload_RoundTrip(t *testing.T) {
-	original := ErrorPayload{Status: "NotFound", Detail: "no handler found for topic order:create"}
+	original := ErrorPayload{Status: "not-found", Detail: "no handler found for topic order:create"}
 
 	data, err := MarshalErrorPayload(original)
 	if err != nil {
@@ -102,7 +102,7 @@ func TestErrorPayload_RoundTrip(t *testing.T) {
 }
 
 func TestErrorPayload_ReservedFieldsOmittedWhenEmpty(t *testing.T) {
-	data, err := MarshalErrorPayload(ErrorPayload{Status: "NotFound", Detail: "missing"})
+	data, err := MarshalErrorPayload(ErrorPayload{Status: "not-found", Detail: "missing"})
 	if err != nil {
 		t.Fatalf("MarshalErrorPayload() error = %v", err)
 	}
@@ -120,7 +120,7 @@ func TestErrorPayload_ReservedFieldsOmittedWhenEmpty(t *testing.T) {
 
 func TestErrorPayload_ReservedFieldsPresentWhenSet(t *testing.T) {
 	data, err := MarshalErrorPayload(ErrorPayload{
-		Status: "NotFound", Detail: "missing", Type: "about:blank", Title: "Not Found", Instance: "/orders/123",
+		Status: "not-found", Detail: "missing", Type: "about:blank", Title: "Not Found", Instance: "/orders/123",
 	})
 	if err != nil {
 		t.Fatalf("MarshalErrorPayload() error = %v", err)
