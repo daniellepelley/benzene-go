@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/awsdynamodb"
 	"github.com/daniellepelley/benzene-go/awslambda"
 	"github.com/daniellepelley/benzene-go/azurefunctions"
 	"github.com/daniellepelley/benzene-go/gcppubsub"
@@ -162,6 +163,33 @@ func SendCosmosChangeFeed(t TB, host *Host, dataName, path string, topic benzene
 	t.Helper()
 	event := NewCosmosChangeFeedEvent(t, dataName, documents)
 	return serveHTTP(t, azurefunctions.CosmosHandler(host.builder, topic, dataName), http.MethodPost, path, event)
+}
+
+// SendDynamoDBStream pushes a Lambda DynamoDB stream delivery for one change record through the
+// awsdynamodb binding and returns the reported batch-item failures (each entry the failing
+// record's sequence number) - empty when the record was handled successfully. The topic resolves
+// to "{tableName}:{eventName}" and newImage is the plain document (encoded to AttributeValue format
+// by the builder). The DynamoDB analogue of SendSQS, for a stream-triggered consumer.
+func SendDynamoDBStream(t TB, host *Host, eventName, tableName, sequenceNumber string, newImage any) []string {
+	t.Helper()
+	event := NewDynamoDBStreamEvent(t, eventName, tableName, sequenceNumber, newImage)
+	raw, err := awsdynamodb.Handler(host.builder)(context.Background(), event)
+	if err != nil {
+		t.Fatalf("benzenetest: SendDynamoDBStream dispatch error: %v", err)
+	}
+	var resp struct {
+		BatchItemFailures []struct {
+			ItemIdentifier string `json:"itemIdentifier"`
+		} `json:"batchItemFailures"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		t.Fatalf("benzenetest: decode DynamoDB batch response: %v; response = %s", err, raw)
+	}
+	failures := make([]string, len(resp.BatchItemFailures))
+	for i, f := range resp.BatchItemFailures {
+		failures[i] = f.ItemIdentifier
+	}
+	return failures
 }
 
 // serveHTTP drives an http.Handler binding with an in-memory request/response and returns the

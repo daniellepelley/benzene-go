@@ -1,6 +1,7 @@
 package benzenetest
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 
@@ -167,6 +168,87 @@ func NewCosmosChangeFeedEvent(t TB, dataName string, documents any) json.RawMess
 		"Data": map[string]json.RawMessage{dataName: json.RawMessage(marshalBody(t, documents))},
 	}
 	return mustMarshal(t, event)
+}
+
+// NewDynamoDBStreamEvent builds the Lambda DynamoDB stream event-source-mapping payload for one
+// change record - the shape awsdynamodb.Handler parses. The topic it resolves to is
+// "{tableName}:{eventName}" (e.g. "orders:INSERT"); newImage is the plain document (a struct or
+// map), which this encodes into DynamoDB AttributeValue format under dynamodb.NewImage so the
+// binding round-trips it back to plain JSON for the handler. sequenceNumber identifies the record
+// in a batch-item-failure report (and rides on the synthesized stream ARN's table segment).
+func NewDynamoDBStreamEvent(t TB, eventName, tableName, sequenceNumber string, newImage any) json.RawMessage {
+	t.Helper()
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(marshalBody(t, newImage)), &fields); err != nil {
+		t.Fatalf("benzenetest: NewDynamoDBStreamEvent newImage must be a JSON object: %v", err)
+	}
+	image := make(map[string]any, len(fields))
+	for name, value := range fields {
+		image[name] = jsonToAttributeValue(t, value)
+	}
+	arn := "arn:aws:dynamodb:us-east-1:000000000000:table/" + tableName + "/stream/2024-01-01T00:00:00.000"
+	event := map[string]any{
+		"Records": []map[string]any{{
+			"eventID":        "evt-" + sequenceNumber,
+			"eventName":      eventName,
+			"eventSource":    "aws:dynamodb",
+			"eventSourceARN": arn,
+			"awsRegion":      "us-east-1",
+			"dynamodb": map[string]any{
+				"NewImage":       image,
+				"SequenceNumber": sequenceNumber,
+				"StreamViewType": "NEW_AND_OLD_IMAGES",
+			},
+		}},
+	}
+	return mustMarshal(t, event)
+}
+
+// jsonToAttributeValue encodes one plain-JSON value into its DynamoDB AttributeValue wrapper - the
+// inverse of the awsdynamodb binding's converter, used only to build test events. Number literals
+// pass through verbatim (as the "N" string) so integer precision is preserved.
+func jsonToAttributeValue(t TB, raw json.RawMessage) any {
+	t.Helper()
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return map[string]any{"NULL": true}
+	}
+	switch trimmed[0] {
+	case '{':
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(trimmed, &obj); err != nil {
+			t.Fatalf("benzenetest: encode AttributeValue map: %v", err)
+		}
+		m := make(map[string]any, len(obj))
+		for name, value := range obj {
+			m[name] = jsonToAttributeValue(t, value)
+		}
+		return map[string]any{"M": m}
+	case '[':
+		var arr []json.RawMessage
+		if err := json.Unmarshal(trimmed, &arr); err != nil {
+			t.Fatalf("benzenetest: encode AttributeValue list: %v", err)
+		}
+		list := make([]any, len(arr))
+		for i, value := range arr {
+			list[i] = jsonToAttributeValue(t, value)
+		}
+		return map[string]any{"L": list}
+	case '"':
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err != nil {
+			t.Fatalf("benzenetest: encode AttributeValue string: %v", err)
+		}
+		return map[string]any{"S": s}
+	case 't', 'f':
+		var b bool
+		if err := json.Unmarshal(trimmed, &b); err != nil {
+			t.Fatalf("benzenetest: encode AttributeValue bool: %v", err)
+		}
+		return map[string]any{"BOOL": b}
+	default:
+		return map[string]any{"N": string(trimmed)}
+	}
 }
 
 func mustMarshal(t TB, v any) json.RawMessage {

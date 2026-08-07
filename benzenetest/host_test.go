@@ -281,6 +281,86 @@ func withOrderBatchHandler() benzenetest.Option {
 	})
 }
 
+// orderDoc is a row of an "orders" table, as a DynamoDB stream record delivers it after the
+// binding converts the AttributeValue image back to plain JSON.
+type orderDoc struct {
+	ID     string  `json:"id"`
+	Amount float64 `json:"amount"`
+}
+
+// withOrderInsertHandler registers a handler for the "orders:INSERT" topic (the {table}:{event}
+// shape a DynamoDB stream resolves to), failing a row with no id so a test can drive both the
+// success and batch-item-failure paths.
+func withOrderInsertHandler() benzenetest.Option {
+	return benzenetest.WithServices(func(b *benzene.ApplicationBuilder) {
+		if err := benzene.Register(b.Registry, benzene.NewTopic("orders:INSERT"), benzene.Handler[orderDoc, struct{}](
+			func(_ context.Context, o orderDoc) benzene.Result[struct{}] {
+				if o.ID == "" {
+					return benzene.BadRequest[struct{}]("order id is required")
+				}
+				return benzene.Ok(struct{}{})
+			})); err != nil {
+			panic(err)
+		}
+	})
+}
+
+func TestSendDynamoDBStream_SuccessReportsNoFailures(t *testing.T) {
+	host := benzenetest.NewHost(newTestApp(), withOrderInsertHandler())
+
+	failures := benzenetest.SendDynamoDBStream(t, host, "INSERT", "orders", "seq-1", orderDoc{ID: "o-1", Amount: 9.99})
+
+	if len(failures) != 0 {
+		t.Errorf("failures = %v, want none for a valid row", failures)
+	}
+}
+
+func TestSendDynamoDBStream_FailedRecordIsReportedBySequenceNumber(t *testing.T) {
+	host := benzenetest.NewHost(newTestApp(), withOrderInsertHandler())
+
+	failures := benzenetest.SendDynamoDBStream(t, host, "INSERT", "orders", "seq-7", orderDoc{ID: "", Amount: 1})
+
+	if len(failures) != 1 || failures[0] != "seq-7" {
+		t.Errorf("failures = %v, want [seq-7] (reported for redelivery)", failures)
+	}
+}
+
+// richDoc exercises every AttributeValue kind the builder encodes: string (S), number (N), bool
+// (BOOL), list (L), map (M), and a nil pointer (NULL).
+type richDoc struct {
+	ID     string            `json:"id"`
+	Count  int               `json:"count"`
+	Active bool              `json:"active"`
+	Tags   []string          `json:"tags"`
+	Meta   map[string]string `json:"meta"`
+	Note   *string           `json:"note"`
+}
+
+func TestSendDynamoDBStream_RichDocumentRoundTripsThroughAttributeValue(t *testing.T) {
+	// A document with every value kind must survive the JSON -> AttributeValue -> JSON round trip
+	// (the builder encodes it, the binding decodes it) intact when the handler reads it back.
+	var got richDoc
+	host := benzenetest.NewHost(newTestApp(), benzenetest.WithServices(func(b *benzene.ApplicationBuilder) {
+		if err := benzene.Register(b.Registry, benzene.NewTopic("orders:INSERT"), benzene.Handler[richDoc, struct{}](
+			func(_ context.Context, d richDoc) benzene.Result[struct{}] {
+				got = d
+				return benzene.Ok(struct{}{})
+			})); err != nil {
+			panic(err)
+		}
+	}))
+
+	want := richDoc{ID: "o-1", Count: 3, Active: true, Tags: []string{"a", "b"}, Meta: map[string]string{"k": "v"}}
+	failures := benzenetest.SendDynamoDBStream(t, host, "INSERT", "orders", "seq-1", want)
+
+	if len(failures) != 0 {
+		t.Fatalf("failures = %v, want none", failures)
+	}
+	if got.ID != "o-1" || got.Count != 3 || !got.Active || len(got.Tags) != 2 || got.Tags[1] != "b" || got.Meta["k"] != "v" || got.Note != nil {
+		t.Errorf("round-tripped doc = %+v, want %+v with nil Note", got, want)
+	}
+}
+
 func TestSendAzureQueue_SuccessAcksAndNackOnFailure(t *testing.T) {
 	host := benzenetest.NewHost(newTestApp())
 
