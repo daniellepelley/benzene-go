@@ -325,6 +325,30 @@ func TestSendDynamoDBStream_FailedRecordIsReportedBySequenceNumber(t *testing.T)
 	}
 }
 
+func TestSendDynamoDBStream_RemoveUsesOldImage(t *testing.T) {
+	// A REMOVE carries no NewImage; the helper must place the row under OldImage and the binding's
+	// NewImage-else-OldImage-else-Keys fallback must still deliver it to the handler.
+	var got orderDoc
+	host := benzenetest.NewHost(newTestApp(), benzenetest.WithServices(func(b *benzene.ApplicationBuilder) {
+		if err := benzene.Register(b.Registry, benzene.NewTopic("orders:REMOVE"), benzene.Handler[orderDoc, struct{}](
+			func(_ context.Context, o orderDoc) benzene.Result[struct{}] {
+				got = o
+				return benzene.Ok(struct{}{})
+			})); err != nil {
+			panic(err)
+		}
+	}))
+
+	failures := benzenetest.SendDynamoDBStream(t, host, "REMOVE", "orders", "seq-1", orderDoc{ID: "gone", Amount: 0})
+
+	if len(failures) != 0 {
+		t.Fatalf("failures = %v, want none", failures)
+	}
+	if got.ID != "gone" {
+		t.Errorf("handler saw id %q, want the OldImage row \"gone\"", got.ID)
+	}
+}
+
 // richDoc exercises every AttributeValue kind the builder encodes: string (S), number (N), bool
 // (BOOL), list (L), map (M), and a nil pointer (NULL).
 type richDoc struct {

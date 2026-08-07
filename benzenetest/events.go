@@ -158,33 +158,41 @@ func NewAzureHTTPEvent(t TB, method string, payload any, headers map[string]stri
 }
 
 // NewCosmosChangeFeedEvent builds the Azure Functions custom-handler invocation payload for a
-// Cosmos DB Change Feed trigger: the batch of changed documents under Data[dataName] as a JSON
-// array - the shape azurefunctions.CosmosHandler parses. documents is the whole batch (typically a
-// slice); the change feed is fan-in, so it is one event, not one per document, and there is no
-// topic or header channel (the documents are the payload).
+// Cosmos DB Change Feed trigger: the batch of changed documents under Data[dataName] - the shape
+// azurefunctions.CosmosHandler parses. documents is the whole batch (typically a slice); the change
+// feed is fan-in, so it is one event, not one per document, and there is no topic or header channel
+// (the documents are the payload). The batch is delivered as a JSON *string* wrapping the array,
+// the same double-encoding the Functions host applies to a trigger input (and that newAzureQueueEvent
+// reproduces), so an adopter's test exercises the binding's string-unwrap path, not just a raw array.
 func NewCosmosChangeFeedEvent(t TB, dataName string, documents any) json.RawMessage {
 	t.Helper()
 	event := map[string]any{
-		"Data": map[string]json.RawMessage{dataName: json.RawMessage(marshalBody(t, documents))},
+		"Data": map[string]json.RawMessage{dataName: mustMarshal(t, marshalBody(t, documents))},
 	}
 	return mustMarshal(t, event)
 }
 
 // NewDynamoDBStreamEvent builds the Lambda DynamoDB stream event-source-mapping payload for one
 // change record - the shape awsdynamodb.Handler parses. The topic it resolves to is
-// "{tableName}:{eventName}" (e.g. "orders:INSERT"); newImage is the plain document (a struct or
-// map), which this encodes into DynamoDB AttributeValue format under dynamodb.NewImage so the
-// binding round-trips it back to plain JSON for the handler. sequenceNumber identifies the record
-// in a batch-item-failure report (and rides on the synthesized stream ARN's table segment).
-func NewDynamoDBStreamEvent(t TB, eventName, tableName, sequenceNumber string, newImage any) json.RawMessage {
+// "{tableName}:{eventName}" (e.g. "orders:INSERT"); document is the plain row (a struct or map),
+// which this encodes into DynamoDB AttributeValue format so the binding round-trips it back to plain
+// JSON for the handler. It is placed under the image key that matches the change type - OldImage for
+// a REMOVE (a delete carries no new image), NewImage otherwise - so the helper reproduces the real
+// record shape and exercises the binding's NewImage-else-OldImage-else-Keys fallback.
+// sequenceNumber identifies the record in a batch-item-failure report.
+func NewDynamoDBStreamEvent(t TB, eventName, tableName, sequenceNumber string, document any) json.RawMessage {
 	t.Helper()
 	var fields map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(marshalBody(t, newImage)), &fields); err != nil {
-		t.Fatalf("benzenetest: NewDynamoDBStreamEvent newImage must be a JSON object: %v", err)
+	if err := json.Unmarshal([]byte(marshalBody(t, document)), &fields); err != nil {
+		t.Fatalf("benzenetest: NewDynamoDBStreamEvent document must be a JSON object: %v", err)
 	}
 	image := make(map[string]any, len(fields))
 	for name, value := range fields {
 		image[name] = jsonToAttributeValue(t, value)
+	}
+	imageKey := "NewImage"
+	if eventName == "REMOVE" {
+		imageKey = "OldImage"
 	}
 	arn := "arn:aws:dynamodb:us-east-1:000000000000:table/" + tableName + "/stream/2024-01-01T00:00:00.000"
 	event := map[string]any{
@@ -195,7 +203,7 @@ func NewDynamoDBStreamEvent(t TB, eventName, tableName, sequenceNumber string, n
 			"eventSourceARN": arn,
 			"awsRegion":      "us-east-1",
 			"dynamodb": map[string]any{
-				"NewImage":       image,
+				imageKey:         image,
 				"SequenceNumber": sequenceNumber,
 				"StreamViewType": "NEW_AND_OLD_IMAGES",
 			},
