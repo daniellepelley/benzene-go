@@ -19,6 +19,7 @@ cp path/to/Benzene/docs/specification/conformance/envelope-cases.json testdata/
 cp path/to/Benzene/docs/specification/conformance/mesh-descriptor-cases.json testdata/
 cp path/to/Benzene/docs/specification/conformance/mesh-trace-cases.json testdata/
 cp path/to/Benzene/docs/specification/conformance/mesh-collector-cases.json testdata/
+cp path/to/Benzene/docs/specification/conformance/transport-metadata-cases.json testdata/
 ```
 
 ## Canonical handlers
@@ -30,7 +31,7 @@ main repo's `conformance/README.md`:
 |---|---|
 | `conformance:greet` | Returns `Ok` with `{"greeting": "Hello <name>"}` |
 | `conformance:status` | Returns the given status verbatim, with `{"applied": "<status>"}` on success or the given errors on failure |
-| `conformance:panic` | (mesh trace cases only) Panics unconditionally - pins the panic→`ServiceUnavailable` trace rule |
+| `conformance:panic` | (mesh trace cases only) Panics unconditionally - pins the panic→`service-unavailable` trace rule |
 
 ## Mesh fixtures
 
@@ -43,3 +44,14 @@ invocation→semantic-status mapping; collector cases run ordered envelope seque
 fresh `meshd` collector per case. Mesh fixtures add one matching rule: arrays compare by
 exact length with per-element subset matching, and an expected `[]` matches an
 absent-or-empty actual array.
+
+## Transport metadata fixture
+
+`transport-metadata-cases.json` pins the native-metadata topic resolution of the main repo's
+`wire-contracts.md` §2 - the reserved `topic` key (tier A, configurable), the case-insensitive
+read, the remaining-metadata-becomes-headers rule, the "only the configured key routes" guard,
+and that an overridden key is honoured. `transport_metadata_conformance_test.go` runs it against
+`wire.ResolveMetadataTopic`, the shared primitive every native-metadata inbound binding
+(`awssqs`, `awssns`, `gcppubsub`) delegates to. The `version-travels-alongside-the-topic` case
+carries `requires: versioning` and is skipped: `benzene-version` is tier C (payload versioning),
+which this port does not implement (see `ROADMAP.md`).

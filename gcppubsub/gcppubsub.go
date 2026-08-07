@@ -27,7 +27,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strings"
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/envelope"
@@ -90,15 +89,7 @@ func Handler(builder *benzene.ApplicationBuilder) http.Handler {
 // topic, which RouterMiddleware maps to ValidationError - the message is nacked, never
 // silently dropped.
 func resolveRequest(message pushMessage, data string) wire.Request {
-	headers := make(map[string]string, len(message.Attributes))
-	var topic string
-	for name, value := range message.Attributes {
-		if strings.EqualFold(name, "topic") {
-			topic = value
-			continue
-		}
-		headers[name] = value
-	}
+	topic, headers := wire.ResolveMetadataTopic(message.Attributes, wire.DefaultTopicKey)
 
 	if topic != "" {
 		return wire.Request{Topic: topic, Headers: headers, Body: data}

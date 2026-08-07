@@ -79,15 +79,11 @@ func Handler(builder *benzene.ApplicationBuilder) awslambda.HandlerFunc {
 // request carries an empty topic, which RouterMiddleware maps to ValidationError (router.go),
 // surfaced as a Go error (see Handler) rather than a silently dropped notification.
 func resolveRequest(sns snsMessage) wire.Request {
-	headers := make(map[string]string, len(sns.MessageAttributes))
-	var topic string
+	metadata := make(map[string]string, len(sns.MessageAttributes))
 	for name, attr := range sns.MessageAttributes {
-		if strings.EqualFold(name, "topic") {
-			topic = attr.Value
-			continue
-		}
-		headers[name] = attr.Value
+		metadata[name] = attr.Value
 	}
+	topic, headers := wire.ResolveMetadataTopic(metadata, wire.DefaultTopicKey)
 
 	if topic != "" {
 		return wire.Request{Topic: topic, Headers: headers, Body: sns.Message}

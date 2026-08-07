@@ -12,7 +12,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/awslambda"
@@ -81,15 +80,11 @@ func Handler(builder *benzene.ApplicationBuilder) awslambda.HandlerFunc {
 // RouterMiddleware maps to ValidationError (see router.go) rather than silently dropping the
 // record - it's still reported as a batch item failure, not lost.
 func resolveRequest(record sqsRecord) wire.Request {
-	headers := make(map[string]string, len(record.MessageAttributes))
-	var topic string
+	metadata := make(map[string]string, len(record.MessageAttributes))
 	for name, attr := range record.MessageAttributes {
-		if strings.EqualFold(name, "topic") {
-			topic = attr.StringValue
-			continue
-		}
-		headers[name] = attr.StringValue
+		metadata[name] = attr.StringValue
 	}
+	topic, headers := wire.ResolveMetadataTopic(metadata, wire.DefaultTopicKey)
 
 	if topic != "" {
 		return wire.Request{Topic: topic, Headers: headers, Body: record.Body}
