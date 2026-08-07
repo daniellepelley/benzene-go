@@ -68,19 +68,30 @@ func TestTraceContextDecorator_NoSpanContextPassesThrough(t *testing.T) {
 	}
 }
 
-func TestTraceContextDecorator_DoesNotOverwriteExistingTraceparent(t *testing.T) {
+func TestTraceContextDecorator_ReplacesForwardedTraceparent(t *testing.T) {
+	// A handler forwarding its inbound headers carries the inbound traceparent; the active span
+	// context must still win, so the downstream call is parented to this service, not its caller.
 	for _, key := range []string{"traceparent", "TraceParent"} {
 		t.Run(key, func(t *testing.T) {
 			inner := &capturingSender{}
 			sender := TraceContextDecorator(inner)
 
-			ctx, _ := ctxWithSpan(t)
-			existing := "00-abcdefabcdefabcdefabcdefabcdefab-abcdefabcdefabcd-01"
+			ctx, traceID := ctxWithSpan(t)
+			forwarded := "00-abcdefabcdefabcdefabcdefabcdefab-abcdefabcdefabcd-01"
 
-			sender.Send(ctx, benzene.NewTopic("order:create"), map[string]string{key: existing}, []byte(`{}`))
+			sender.Send(ctx, benzene.NewTopic("order:create"), map[string]string{key: forwarded}, []byte(`{}`))
 
-			if got := inner.gotHeaders[key]; got != existing {
-				t.Errorf("a caller-set %q was overwritten: %q, want %q", key, got, existing)
+			got := inner.gotHeaders["traceparent"]
+			if got == forwarded {
+				t.Errorf("forwarded traceparent was not replaced by the active span's")
+			}
+			if !strings.Contains(got, traceID) {
+				t.Errorf("traceparent %q does not carry the active span's trace id %q", got, traceID)
+			}
+			if key != "traceparent" {
+				if _, present := inner.gotHeaders[key]; present {
+					t.Errorf("stale %q left in headers: %v", key, inner.gotHeaders)
+				}
 			}
 		})
 	}

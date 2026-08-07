@@ -57,19 +57,28 @@ func TestTraceContextDecorator_NoSpanPassesThrough(t *testing.T) {
 	}
 }
 
-func TestTraceContextDecorator_DoesNotOverwriteExistingTraceparent(t *testing.T) {
+func TestTraceContextDecorator_ReplacesForwardedTraceparent(t *testing.T) {
+	// A handler that forwards its inbound headers carries the *inbound* traceparent; this
+	// invocation's span must still win, or the downstream call is parented to this service's caller
+	// and the collector never sees this service in the path.
 	for _, key := range []string{"traceparent", "TraceParent"} {
 		t.Run(key, func(t *testing.T) {
 			inner := &capturingSender{result: benzene.Accepted[json.RawMessage](nil)}
 			sender := TraceContextDecorator(inner)
 
-			ctx := contextWithSpan(context.Background(), Span{TraceID: "aaaa", SpanID: "bbbb"})
-			existing := "00-caller-trace-caller-span-01"
+			span := Span{TraceID: "0123456789abcdef0123456789abcdef", SpanID: "0123456789abcdef"}
+			ctx := contextWithSpan(context.Background(), span)
 
-			sender.Send(ctx, benzene.NewTopic("order:create"), map[string]string{key: existing}, []byte(`{}`))
+			sender.Send(ctx, benzene.NewTopic("order:create"), map[string]string{key: "00-oldtraceoldtraceoldtraceoldtra-oldspanoldspan0-01"}, []byte(`{}`))
 
-			if got := inner.gotHeaders[key]; got != existing {
-				t.Errorf("a caller-set %q was overwritten: %q, want %q", key, got, existing)
+			if got := inner.gotHeaders["traceparent"]; got != span.Traceparent() {
+				t.Errorf("traceparent = %q, want this span's %q (the forwarded value must be replaced)", got, span.Traceparent())
+			}
+			// No stale mixed-case duplicate is left behind alongside the canonical lowercase key.
+			if key != "traceparent" {
+				if _, present := inner.gotHeaders[key]; present {
+					t.Errorf("stale %q left in headers: %v", key, inner.gotHeaders)
+				}
 			}
 		})
 	}

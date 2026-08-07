@@ -29,30 +29,35 @@ const headerTraceparent = "traceparent"
 //
 // Degradation is the package rule: with no trace middleware installed (no span on the context) the
 // decorator sends no traceparent and the call is otherwise untouched - an unmeshed hop loses trace
-// continuity, never the request. An existing `traceparent` in the outbound headers is left as-is
-// (matched case-insensitively and never overwritten), mirroring CorrelationDecorator, so a caller
-// that set one deliberately keeps control.
+// continuity, never the request.
+//
+// When a span IS present it always wins: any `traceparent` already in the outbound headers is
+// replaced (matched case-insensitively). This is deliberately UNLIKE CorrelationDecorator - a
+// correlation id propagates unchanged down a chain, but a traceparent must re-parent at every hop.
+// The case that makes this load-bearing: a handler that forwards its own inbound headers onto the
+// outbound call carries the *inbound* traceparent; leaving it would parent the downstream call to
+// this service's caller and hide this service from the derived who-calls-whom graph - the exact
+// thing the decorator exists to get right.
 func TraceContextDecorator(next client.Sender) client.Sender {
 	return client.SenderFunc(func(ctx context.Context, topic benzene.Topic, headers map[string]string, message []byte) benzene.Result[json.RawMessage] {
 		return next.Send(ctx, topic, withTraceparent(ctx, headers), message)
 	})
 }
 
-// withTraceparent returns headers with the current span's traceparent added, or headers unchanged
-// when there is no span (degrade) or one is already present (never overwrite).
+// withTraceparent returns headers with the current span's traceparent set (replacing any already
+// present, since this invocation's span is the correct parent for the outbound hop), or headers
+// unchanged when there is no span (degrade).
 func withTraceparent(ctx context.Context, headers map[string]string) map[string]string {
 	span, ok := SpanFromContext(ctx)
 	if !ok {
 		return headers // no trace context - degrade, don't fabricate one
 	}
-	for name := range headers {
-		if strings.EqualFold(name, headerTraceparent) {
-			return headers // already set - never overwrite
-		}
-	}
 	out := make(map[string]string, len(headers)+1)
-	for k, v := range headers {
-		out[k] = v
+	for name, value := range headers {
+		if strings.EqualFold(name, headerTraceparent) {
+			continue // drop any existing (possibly forwarded-inbound) traceparent - this span wins
+		}
+		out[name] = value
 	}
 	out[headerTraceparent] = span.Traceparent()
 	return out
