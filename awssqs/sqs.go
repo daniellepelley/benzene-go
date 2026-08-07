@@ -61,8 +61,8 @@ func Handler(builder *benzene.ApplicationBuilder) awslambda.HandlerFunc {
 		var failures []batchItemFailure
 		for _, record := range sqsEvt.Records {
 			req := resolveRequest(record)
-			resp := envelope.Dispatch(ctx, builder.Pipeline, builder.Container, req)
-			if benzene.Status(resp.StatusCode).IsFailure() {
+			_, successful := envelope.DispatchResult(ctx, builder.Pipeline, builder.Container, req)
+			if !successful {
 				failures = append(failures, batchItemFailure{ItemIdentifier: record.MessageID})
 			}
 		}

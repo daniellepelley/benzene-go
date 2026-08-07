@@ -90,8 +90,8 @@ func (c *Consumer) Run(ctx context.Context) error {
 			return fmt.Errorf("kafka: fetch failed: %w", err)
 		}
 
-		resp := envelope.Dispatch(ctx, c.Builder.Pipeline, c.Builder.Container, resolveRequest(msg))
-		if benzene.Status(resp.StatusCode).IsFailure() && c.OnFailure != nil {
+		resp, successful := envelope.DispatchResult(ctx, c.Builder.Pipeline, c.Builder.Container, resolveRequest(msg))
+		if !successful && c.OnFailure != nil {
 			c.OnFailure(ctx, msg, resp)
 		}
 

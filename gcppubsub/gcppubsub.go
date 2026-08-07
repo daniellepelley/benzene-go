@@ -72,8 +72,8 @@ func Handler(builder *benzene.ApplicationBuilder) http.Handler {
 			return
 		}
 
-		resp := envelope.Dispatch(r.Context(), builder.Pipeline, builder.Container, resolveRequest(push.Message, string(data)))
-		if benzene.Status(resp.StatusCode).IsFailure() {
+		resp, successful := envelope.DispatchResult(r.Context(), builder.Pipeline, builder.Container, resolveRequest(push.Message, string(data)))
+		if !successful {
 			w.Header().Set("content-type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
 			io.WriteString(w, resp.Body)
