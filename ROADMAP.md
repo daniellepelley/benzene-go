@@ -45,7 +45,10 @@ delivery order - just the current honest picture, kept up to date as things land
   programmatic dispatch to a named, possibly-versioned topic - distinct from reading a version
   header off an inbound message, which no binding does; see the versioning note below).
 - `client` - outbound-client decorators (`CorrelationDecorator`, `RetryDecorator`) over a
-  transport-agnostic `Sender` interface; `httpclient.Client` satisfies it structurally.
+  transport-agnostic `Sender` interface; `httpclient.Client` satisfies it structurally. The
+  spec's third cross-cutting client behavior, trace-context propagation, is
+  `mesh.TraceContextDecorator` - it lives in `mesh` (which owns the `Span` it forwards) so
+  `client` stays free of a mesh dependency.
 - `cors` - portable CORS middleware for HTTP-fronted services (origin/scheme/port matching,
   header wildcard, preflight handling), a Go port of the main repo's own portable CORS
   middleware.
@@ -65,7 +68,10 @@ delivery order - just the current honest picture, kept up to date as things land
 - `mesh` - Phases 1-2 of `docs/design/mesh.md`: the service `Descriptor` derived from the live
   `Registry` (topics + startup-derived JSON Schemas + `descriptorHash`),
   reserved-`benzene:mesh`-topic descriptor middleware, `TraceMiddleware` with W3C `traceparent`
-  propagation, the `LogExporter`/`PushExporter` trace feeds, and the issue feed's emitter
+  propagation (plus `TraceContextDecorator`, its outbound counterpart - the client decorator that
+  forwards the current span's `traceparent` onto outbound calls, so a collector derives
+  who-calls-whom without a declared edge), the `LogExporter`/`PushExporter` trace feeds, and the
+  issue feed's emitter
   (`IssueMiddleware` + `PushIssueExporter`: source-side classification, SHA-256 fingerprint, delta
   aggregation, liveness flush - mesh.md §4.1) - every feed independent and optional.
 - `meshd` - Phases 3-4 of `docs/design/mesh.md`: the collector (register/heartbeat/traces/issues

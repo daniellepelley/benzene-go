@@ -4,7 +4,10 @@
 // interface and therefore transport-agnostic." Sender is that one interface;
 // CorrelationDecorator and RetryDecorator are decorators over it - each wraps a Sender and
 // returns another Sender, so they compose freely and work over any transport's outbound client
-// (httpclient.Client already satisfies Sender structurally, with no changes needed there).
+// (httpclient.Client already satisfies Sender structurally, with no changes needed there). The
+// third behavior the spec names, trace-context propagation, is mesh.TraceContextDecorator - it
+// lives in the mesh package rather than here because the trace context it forwards is that
+// package's Span, and keeping it there leaves this package free of a mesh dependency.
 package client
 
 import (
