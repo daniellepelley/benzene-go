@@ -45,11 +45,12 @@ delivery order - just the current honest picture, kept up to date as things land
   no batch/partial-failure mechanism - `Handler` instead returns a Go error for a failed
   notification, triggering AWS's own async-invoke retry.
 - `mesh` - Phases 1-2 of `docs/design/mesh.md`: the service `Descriptor` derived from the live
-  `Registry` (topics + startup-derived JSON Schemas + `descriptorHash`), reserved-`mesh`-topic
-  descriptor middleware, `TraceMiddleware` with W3C `traceparent` propagation, and the
-  `LogExporter`/`PushExporter` trace feeds - every feed independent and optional.
+  `Registry` (topics + startup-derived JSON Schemas + `descriptorHash`),
+  reserved-`benzene:mesh`-topic descriptor middleware, `TraceMiddleware` with W3C `traceparent`
+  propagation, and the `LogExporter`/`PushExporter` trace feeds - every feed independent and
+  optional.
 - `meshd` - Phases 3-4 of `docs/design/mesh.md`: the collector (register/heartbeat/traces
-  ingest + `mesh:query:*` read models over an in-memory store with a bounded trace ring) and
+  ingest + `benzene:mesh:query:*` read models over an in-memory store with a bounded trace ring) and
   the Mesh View (one embedded self-contained page, no JS framework). The wire contract is
   promoted to the main repo's `docs/specification/mesh.md` and pinned by vendored
   `mesh-*.json` conformance fixtures.
@@ -174,4 +175,43 @@ equivalent to port, not gaps in this port:
   `Registry`, trace emission) are necessarily per-language, and this port ships them (`mesh`,
   `meshd` - see Done above). What stays true is that the *collector* is language-neutral: any
   implementation's collector can host any implementation's services over the shared
-  `mesh:*` wire contract.
+  `benzene:mesh:*` wire contract.
+
+## Partial / deferred (implemented enough to interoperate, with a known boundary)
+
+Honest record of where this port stops short of the .NET reference on purpose, so the boundary
+is a decision rather than a surprise:
+
+- **Inbound message versioning is not wired to the transports (tier C).** The data model is
+  present - `Topic{ID, Version}`, versioned registration (`Register` keys on `(id, version)`),
+  and the mesh descriptor carries a per-topic `version` - but no inbound binding reads the
+  `benzene-version` header (or an HTTP `/v{version}` segment) off the wire, so a versioned
+  handler is reachable only by explicit programmatic dispatch, not from an inbound message.
+  This is deliberate: `benzene-version` is tier C in `wire-contracts.md` §2 (only meaningful
+  for a service that opted into payload versioning), and the transport-metadata conformance
+  fixture skips its version case for a non-versioning port accordingly. Before implementing the
+  read path, one spec question needs resolving upstream: `core-concepts.md` §2 specifies
+  handler selection as **exact version match only**, while `versioning.md` §3 and the .NET
+  `VersionSelector` specify **exact match else highest available** - the two disagree, and a Go
+  implementation should follow whichever the spec settles on rather than pick unilaterally. A
+  read-path implementation must also stay non-regressive: a stray `benzene-version` on a message
+  to a service that registered only unversioned handlers must still route to the unversioned
+  handler, not fall to not-found.
+- **Transparent payload up/down-casting (`versioning.md` §4, "Mechanism B") is not
+  implemented.** It is explicitly opt-in in the spec (a topic without it "behaves exactly as an
+  unversioned topic"), a conforming service needs neither versioning axis, and the .NET
+  implementation leans on reflection-based property mapping this zero-dependency port avoids. If
+  pursued it should be its own package, like the other dependency-bearing extensions.
+- **The configurable reserved metadata key is exposed at the primitive, not yet through each
+  binding's public API.** `wire.ResolveMetadataTopic` takes the topic key as a parameter (the
+  injectable value `wire-contracts.md` §2 requires) and is conformance-tested with an override,
+  but the inbound `Handler`s and outbound `Client`s currently pass `wire.DefaultTopicKey`. The
+  remaining step is a public option on each native-metadata binding (`awssqs`, `awssns`,
+  `gcppubsub`) and its client so a service can rename the key end-to-end, applied to both
+  directions. The default key already carries the interop baseline, so this only matters for a
+  service that must avoid a colliding `topic` attribute.
+- **Mesh `benzene:mesh:issues` feed and produced-vs-consumed version reconciliation.** The
+  issue feed (`mesh.md` §4.1) is marked in the spec itself as optional with "Go reference parity
+  pending" and adds no Cloud Service Profile requirement; the aggregator-level
+  produced-vs-consumed version skew read model is an advanced mesh-UI feature, not a
+  message-conformance requirement. Both are additive follow-ups, not gaps in what ships.
