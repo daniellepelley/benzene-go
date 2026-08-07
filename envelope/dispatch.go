@@ -35,8 +35,20 @@ func Dispatch(ctx context.Context, pipeline *benzene.Pipeline, container *benzen
 // health-check "service-unavailable but successful" shape (SetResult), where classifying by the
 // status alone would nack a message the handler acked, or ack one it failed.
 func DispatchResult(ctx context.Context, pipeline *benzene.Pipeline, container *benzene.Container, req wire.Request) (wire.Response, bool) {
+	return DispatchTopicResult(ctx, pipeline, container, benzene.NewTopic(req.Topic), req.Headers, req.Body)
+}
+
+// DispatchTopicResult dispatches an explicit, already-resolved topic - including its version -
+// through the pipeline, and is the version-aware sibling of DispatchResult (which resolves an
+// id-only topic from a wire.Request, since a version travels as a header on the wire and no
+// inbound binding reads it yet - see the port's ROADMAP). It exists for fan-in / streaming-shaped
+// bindings (core-concepts.md §3, e.g. the Cosmos DB Change Feed trigger) that name their target
+// topic in application code rather than parsing it out of message metadata, so a developer can
+// fan a feed into a versioned handler by explicit programmatic dispatch. The wire.Response and
+// success flag are produced identically to DispatchResult.
+func DispatchTopicResult(ctx context.Context, pipeline *benzene.Pipeline, container *benzene.Container, topic benzene.Topic, headers map[string]string, body string) (wire.Response, bool) {
 	scope := container.NewScope()
-	ic := benzene.NewInvocationContext(benzene.NewTopic(req.Topic), req.Headers, json.RawMessage(req.Body), scope)
+	ic := benzene.NewInvocationContext(topic, headers, json.RawMessage(body), scope)
 
 	if err := pipeline.Run(ctx, ic); err != nil {
 		return withResponseHeaders(errorResponse(benzene.ServiceUnavailable[any](err.Error())), ic), false

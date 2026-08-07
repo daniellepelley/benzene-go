@@ -31,7 +31,19 @@ delivery order - just the current honest picture, kept up to date as things land
   REST/v1.0, and ALB target-group event shapes, detected per invocation).
 - `azurefunctions` - Azure Functions custom-handler binding: `Handler` for HTTP-triggered
   functions, `QueueHandler` for queue-shaped triggers (Storage Queue, Service Bus) with
-  wire-contracts §2 topic resolution and platform-native retry on failure.
+  wire-contracts §2 topic resolution and platform-native retry on failure, and `CosmosHandler`
+  for the Cosmos DB Change Feed trigger (the `Benzene.Azure.Function.CosmosDb` flavor of
+  `transport-bindings.md`'s "Cosmos DB Change Feed" entry). The change-feed binding is
+  **fan-in, not topic-routed** (core-concepts §3, streaming-shaped): the Functions host owns the
+  change-feed connection and lease container and forwards each delivered batch of changed
+  documents over the same Data/Metadata envelope, so the handler is zero-dependency; the whole
+  batch is one pipeline invocation (not one per document) dispatched to the topic the developer
+  names, whose handler receives the batch as a slice (`Handler[[]TDocument, TRes]`).
+  Checkpointing is batch-level and on successful return only, so a non-success dispatch answers
+  outer HTTP 500 and the host redelivers the entire batch - the same outer-status convention as
+  `QueueHandler`. The version-aware fan-in rides on `envelope.DispatchTopicResult` (explicit
+  programmatic dispatch to a named, possibly-versioned topic - distinct from reading a version
+  header off an inbound message, which no binding does; see the versioning note below).
 - `client` - outbound-client decorators (`CorrelationDecorator`, `RetryDecorator`) over a
   transport-agnostic `Sender` interface; `httpclient.Client` satisfies it structurally.
 - `cors` - portable CORS middleware for HTTP-fronted services (origin/scheme/port matching,
@@ -158,6 +170,12 @@ unilateral add:
   (`gcppubsub` - a push subscription is just HTTPS in). Publishing needs OAuth-signed API
   calls, i.e. `cloud.google.com/go/pubsub` - the same shape as `awssqs`/`awssns`'s outbound
   clients, and like them it would live in its own module so the dependency doesn't spread.
+- **Cosmos DB Change Feed self-hosted worker** (`Benzene.Azure.CosmosDb`, the non-Functions
+  flavor). The Azure Functions trigger flavor already ships zero-dependency (`azurefunctions.
+  CosmosHandler` - the Functions host owns the change-feed connection). A self-hosted worker
+  instead opens the change feed itself and owns the lease container + checkpoint hook, which
+  needs the Cosmos SDK (`github.com/Azure/azure-sdk-for-go/sdk/data/azcosmos`) - the same
+  own-module shape as `awssqs`/`awssns`'s outbound clients.
 - **Google Cloud Functions Gen2 (buildpack) deploy**, as opposed to the Cloud Run path already
   documented in `examples/gcp-cloudrun-helloworld` - needs
   `github.com/GoogleCloudPlatform/functions-framework-go`, the one Google-specific dependency

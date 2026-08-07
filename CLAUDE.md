@@ -77,7 +77,15 @@ alongside the shared spec.
   the Functions host forwards invocations over - Azure has no native Go worker): `Handler` for
   HTTP-triggered functions, `QueueHandler` for queue-shaped triggers (Storage Queue, Service
   Bus - failure is a non-2xx outer status, handing the message to the platform's own
-  redelivery/poison-queue machinery).
+  redelivery/poison-queue machinery), and `CosmosHandler` for the Cosmos DB Change Feed trigger.
+  The change-feed binding is **fan-in, not topic-routed** (core-concepts §3, streaming-shaped):
+  the whole delivered batch of changed documents is one pipeline invocation - not one per
+  document - dispatched to the topic named in code, whose handler takes the batch as a slice
+  (`Handler[[]TDocument, TRes]`). Checkpointing is batch-level and on success only, so a failed
+  dispatch is a non-2xx outer status that redelivers the entire batch (same convention as
+  `QueueHandler`); the version-aware fan-in uses `envelope.DispatchTopicResult`. The self-hosted
+  worker flavor (`Benzene.Azure.CosmosDb`) is deferred - it needs the Cosmos SDK (see
+  `ROADMAP.md`).
 - `awssqs/` - AWS SQS binding, in **its own Go module** (`awssqs/go.mod`) - one of the packages
   with a third-party dependency (`aws-sdk-go-v2/service/sqs`, needed for the outbound publish
   client; the inbound Lambda-trigger `Handler` is zero-dependency, like `awslambda`). See
