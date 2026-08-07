@@ -202,14 +202,19 @@ is a decision rather than a surprise:
   unversioned topic"), a conforming service needs neither versioning axis, and the .NET
   implementation leans on reflection-based property mapping this zero-dependency port avoids. If
   pursued it should be its own package, like the other dependency-bearing extensions.
-- **The configurable reserved metadata key is exposed at the primitive, not yet through each
-  binding's public API.** `wire.ResolveMetadataTopic` takes the topic key as a parameter (the
-  injectable value `wire-contracts.md` §2 requires) and is conformance-tested with an override,
-  but the inbound `Handler`s and outbound `Client`s currently pass `wire.DefaultTopicKey`. The
-  remaining step is a public option on each native-metadata binding (`awssqs`, `awssns`,
-  `gcppubsub`) and its client so a service can rename the key end-to-end, applied to both
-  directions. The default key already carries the interop baseline, so this only matters for a
-  service that must avoid a colliding `topic` attribute.
+- **The reserved metadata names are not yet a single service-wide injectable value.**
+  `wire-contracts.md` §2 ("Reserved names are defaults") requires an implementation to expose the
+  reserved key names - the `topic` metadata key and the `x-correlation-id` header - as a single
+  injectable value a service can override in one place, applied to both inbound bindings and
+  outbound clients. Today the defaults (which match the spec spellings and carry the interop
+  baseline) are correct, but the override seam is only partial: `wire.ResolveMetadataTopic` takes
+  the topic key as a parameter (and is conformance-tested with an override), yet the inbound
+  `Handler`s and outbound `Client`s pass `wire.DefaultTopicKey`, and `CorrelationDecorator`'s
+  header name is a fixed `x-correlation-id`. The remaining step is a shared reserved-names value
+  threaded through each native-metadata binding (`awssqs`, `awssns`, `gcppubsub`) and the client
+  decorators, so a service that must avoid a colliding `topic` or `x-correlation-id` name can
+  rename it once for both directions. This is a public-API shape worth settling deliberately
+  rather than piecemeal.
 - **Mesh `benzene:mesh:issues` feed and produced-vs-consumed version reconciliation.** The
   issue feed (`mesh.md` §4.1) is marked in the spec itself as optional with "Go reference parity
   pending" and adds no Cloud Service Profile requirement; the aggregator-level
