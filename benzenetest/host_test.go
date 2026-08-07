@@ -281,6 +281,20 @@ func withOrderBatchHandler() benzenetest.Option {
 	})
 }
 
+func TestSendAzureQueue_SuccessAcksAndNackOnFailure(t *testing.T) {
+	host := benzenetest.NewHost(newTestApp())
+
+	ack := benzenetest.SendAzureQueue(t, host, "queueItem", "/GreetQueue", benzene.NewTopic("greet"), greetRequest{Name: "Queue"}, nil)
+	if ack.StatusCode != http.StatusOK {
+		t.Fatalf("StatusCode = %d, want 200 (ack); body = %s", ack.StatusCode, ack.Body)
+	}
+
+	nack := benzenetest.SendAzureQueue(t, host, "queueItem", "/GreetQueue", benzene.NewTopic("greet"), greetRequest{Name: ""}, nil)
+	if nack.StatusCode != http.StatusInternalServerError {
+		t.Errorf("StatusCode = %d, want 500 (nack, redeliver)", nack.StatusCode)
+	}
+}
+
 func TestSendCosmosChangeFeed_BatchIsCheckpointedOnSuccess(t *testing.T) {
 	host := benzenetest.NewHost(newTestApp(), withOrderBatchHandler())
 
