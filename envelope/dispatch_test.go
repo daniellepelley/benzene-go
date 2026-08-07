@@ -89,6 +89,36 @@ func TestDispatch_ApplicationDefinedStatusCarriesPayload(t *testing.T) {
 	}
 }
 
+func TestDispatch_ExplicitlySuccessfulFailureStatusCarriesPayload(t *testing.T) {
+	// A result set explicitly successful (SetResult) with a failure status - the health-check
+	// 503-but-render-the-body shape - carries its payload rather than an error payload, and the
+	// envelope's statusCode is the failure status (which maps to HTTP 503 for a probe).
+	registry := benzene.NewRegistry()
+	if err := benzene.Register(registry, benzene.NewTopic("health"),
+		benzene.Handler[greetRequest, greetResponse](func(_ context.Context, _ greetRequest) benzene.Result[greetResponse] {
+			return benzene.SetResult(benzene.StatusServiceUnavailable, greetResponse{Greeting: "degraded"}, true)
+		})); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	container := benzene.NewContainer()
+	pipeline := benzene.NewPipeline(benzene.RouterMiddleware(registry))
+
+	resp := Dispatch(context.Background(), pipeline, container, wire.Request{
+		Topic: "health", Headers: map[string]string{}, Body: `{"name":"x"}`,
+	})
+
+	if resp.StatusCode != string(benzene.StatusServiceUnavailable) {
+		t.Errorf("StatusCode = %q, want %q", resp.StatusCode, benzene.StatusServiceUnavailable)
+	}
+	var payload greetResponse
+	if err := json.Unmarshal([]byte(resp.Body), &payload); err != nil {
+		t.Fatalf("body is not the payload (rendered as error?): %v; body = %s", err, resp.Body)
+	}
+	if payload.Greeting != "degraded" {
+		t.Errorf("Greeting = %q, want %q", payload.Greeting, "degraded")
+	}
+}
+
 func TestDispatch_MissingHandlerIsNotFound(t *testing.T) {
 	_, container, pipeline := newTestApp(t)
 

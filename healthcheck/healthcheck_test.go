@@ -72,6 +72,39 @@ func TestMiddleware_FailedCheckMakesResponseUnhealthy(t *testing.T) {
 	}
 }
 
+func TestMiddleware_ResultStatusReflectsHealth(t *testing.T) {
+	// Healthy -> ok (HTTP 200). Unhealthy -> service-unavailable (HTTP 503 to probes) but still
+	// carries the report body (the result is explicitly successful). A warning stays ok.
+	failing := CheckFunc{CheckName: "db", Fn: func(context.Context) CheckResult {
+		return CheckResult{Status: StatusFailed, Type: "database"}
+	}}
+	warning := CheckFunc{CheckName: "queue", Fn: func(context.Context) CheckResult {
+		return CheckResult{Status: StatusWarning, Type: "queue"}
+	}}
+
+	healthy, _ := runMiddleware(t, []Check{okCheck("db")}, "benzene:healthcheck")
+	if got := healthy.Result.ResultStatus(); got != benzene.StatusOk {
+		t.Errorf("healthy status = %q, want %q", got, benzene.StatusOk)
+	}
+
+	warned, _ := runMiddleware(t, []Check{okCheck("db"), warning}, "benzene:healthcheck")
+	if got := warned.Result.ResultStatus(); got != benzene.StatusOk {
+		t.Errorf("warning status = %q, want %q (a warning must not flip health)", got, benzene.StatusOk)
+	}
+
+	unhealthy, _ := runMiddleware(t, []Check{okCheck("cache"), failing}, "benzene:healthcheck")
+	if got := unhealthy.Result.ResultStatus(); got != benzene.StatusServiceUnavailable {
+		t.Errorf("unhealthy status = %q, want %q", got, benzene.StatusServiceUnavailable)
+	}
+	if !unhealthy.Result.(interface{ IsSuccessful() bool }).IsSuccessful() {
+		t.Error("unhealthy result must be explicitly successful so the report body renders, not an error payload")
+	}
+	// The report body is still present at 503.
+	if resp := resultPayload(t, unhealthy); resp.IsHealthy {
+		t.Error("IsHealthy = true in an unhealthy report body")
+	}
+}
+
 func TestMiddleware_WarningDoesNotFlipHealthy(t *testing.T) {
 	warning := CheckFunc{CheckName: "queue", Fn: func(ctx context.Context) CheckResult {
 		return CheckResult{Status: StatusWarning, Type: "queue"}

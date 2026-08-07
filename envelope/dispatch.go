@@ -55,8 +55,14 @@ func toResponse(result benzene.ResultInfo) wire.Response {
 	status := result.ResultStatus()
 	// A framework failure status renders as an error payload; a success status and an
 	// application-defined (unknown) status both carry their payload, matching .NET's
-	// IsSuccessful (= !IsFailure) so custom statuses flow through untouched.
-	if status.IsFailure() {
+	// IsSuccessful (= !IsFailure) so custom statuses flow through untouched. A result may also
+	// set its success flag explicitly (SetResult) - e.g. the health check returning
+	// service-unavailable but rendering its report body - which this honours over the status.
+	successful := !status.IsFailure()
+	if s, ok := result.(interface{ ResultIsSuccessful() bool }); ok {
+		successful = s.ResultIsSuccessful()
+	}
+	if !successful {
 		return errorResponse(result)
 	}
 

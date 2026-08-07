@@ -103,7 +103,15 @@ func Middleware(checks []Check, aliases ...string) benzene.Middleware {
 			}
 		}
 
-		ic.Result = benzene.Ok(response)
+		// Healthy -> ok (HTTP 200). Unhealthy -> service-unavailable so an HTTP probe sees 503
+		// and a load balancer drains the instance, but explicitly successful so the report body
+		// still renders instead of an error payload (wire-contracts.md §5; mirrors the .NET
+		// HealthCheckProcessor). A warning does not flip IsHealthy, so it stays 200.
+		if response.IsHealthy {
+			ic.Result = benzene.Ok(response)
+		} else {
+			ic.Result = benzene.SetResult(benzene.StatusServiceUnavailable, response, true)
+		}
 		return nil
 	}
 }
