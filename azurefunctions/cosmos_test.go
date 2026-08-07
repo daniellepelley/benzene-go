@@ -129,6 +129,21 @@ func TestCosmosHandler_AbsentBindingNameIsEmptyBatch(t *testing.T) {
 	}
 }
 
+func TestCosmosHandler_NullBindingValueIsEmptyBatch(t *testing.T) {
+	// A present-but-null payload must degrade to the same benign empty batch as an absent key -
+	// not an empty body that fails []changeDoc deserialization and loops on redelivery.
+	var seen [][]changeDoc
+	handler := CosmosHandler(newCosmosBuilder(t, &seen), benzene.NewTopic("orders:changed"), "documents")
+
+	rec := invokeCosmos(t, handler, `{"Data": {"documents": null}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("outer status = %d, want %d (benign empty batch); body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if len(seen) != 1 || len(seen[0]) != 0 {
+		t.Errorf("batch = %+v, want a single empty batch", seen)
+	}
+}
+
 func TestCosmosHandler_VersionedTopicFansInToVersionedHandler(t *testing.T) {
 	// A fan-in binding names its topic in code, so it can target a *versioned* handler by explicit
 	// programmatic dispatch (DispatchTopicResult) - distinct from reading a version header off an
@@ -207,6 +222,13 @@ func TestResolveCosmosBatch(t *testing.T) {
 		{
 			name:      "absent binding name is empty batch",
 			inv:       cosmosInvocationRequest{Data: map[string]json.RawMessage{}},
+			dataName:  "documents",
+			wantBody:  `[]`,
+			wantCount: "0",
+		},
+		{
+			name:      "present-but-null is normalized to empty batch",
+			inv:       cosmosInvocationRequest{Data: map[string]json.RawMessage{"documents": json.RawMessage(`null`)}},
 			dataName:  "documents",
 			wantBody:  `[]`,
 			wantCount: "0",

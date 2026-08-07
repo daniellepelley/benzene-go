@@ -92,6 +92,13 @@ func resolveCosmosBatch(inv cosmosInvocationRequest, dataName string) (map[strin
 			body = string(raw)
 		}
 	}
+	// A present-but-null (or empty-unwrapped) binding value is the absent case in disguise:
+	// unmarshalling JSON null into a string is a no-op that leaves the body empty, and an empty
+	// body would fail []TDocument deserialization and loop on redelivery. Normalize both to the
+	// same benign empty batch the absent key yields.
+	if body == "" || body == "null" {
+		body = "[]"
+	}
 
 	headers := map[string]string{}
 	// A document count is useful to logging/middleware without re-parsing the batch; skip it
