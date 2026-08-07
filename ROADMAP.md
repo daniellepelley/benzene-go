@@ -114,9 +114,11 @@ delivery order - just the current honest picture, kept up to date as things land
 - `diagnostics` - OpenTelemetry-based diagnostics middleware, in its **own Go module** (see
   `RELEASING.md`) - the Go equivalent of the main repo's `Benzene.Diagnostics`: one server
   span per invocation (topic-named, W3C traceparent join, `benzene.topic`/`benzene.status`
-  attributes) plus invocation count/duration metrics. Depends on the OpenTelemetry *API*
-  only (`go.opentelemetry.io/otel`); the application owns the SDK and exporter, and standard
-  OTLP export covers Datadog/Zipkin/etc. without vendor-specific packages (as promised
+  attributes) plus invocation count/duration metrics, and `TraceContextDecorator` - the OTel-path
+  outbound client decorator that injects the active span context as a W3C `traceparent`, the
+  sibling of `mesh.TraceContextDecorator` for services observed with OpenTelemetry. Depends on the
+  OpenTelemetry *API* only (`go.opentelemetry.io/otel`); the application owns the SDK and exporter,
+  and standard OTLP export covers Datadog/Zipkin/etc. without vendor-specific packages (as promised
   below).
 - `kafka` - Kafka binding, in its **own Go module** (see `RELEASING.md`), matching the main
   repo's `Benzene.Kafka.Core` / `transport-bindings.md` "Kafka" entry exactly: one Kafka
