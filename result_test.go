@@ -26,6 +26,22 @@ func TestOk(t *testing.T) {
 	}
 }
 
+func TestResult_ApplicationDefinedStatusIsSuccessful(t *testing.T) {
+	// An application-defined status is not a framework failure, so IsSuccessful is true and
+	// the payload is carried - the extensibility promise (design-principles.md), matching the
+	// .NET reference where IsSuccessful defaults to !IsFailure(status).
+	payload := greeting{Message: "partial"}
+	r := Result[greeting]{Status: Status("partial-success"), Payload: &payload}
+	if !r.IsSuccessful() {
+		t.Errorf("IsSuccessful() = false for an application-defined status, want true")
+	}
+	// A framework failure status, by contrast, is not successful.
+	f := Result[greeting]{Status: StatusServiceUnavailable}
+	if f.IsSuccessful() {
+		t.Errorf("IsSuccessful() = true for %q, want false", StatusServiceUnavailable)
+	}
+}
+
 func TestSuccessConstructors(t *testing.T) {
 	tests := []struct {
 		name       string

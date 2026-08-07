@@ -53,7 +53,10 @@ func withResponseHeaders(resp wire.Response, ic *benzene.InvocationContext) wire
 
 func toResponse(result benzene.ResultInfo) wire.Response {
 	status := result.ResultStatus()
-	if !status.IsSuccess() {
+	// A framework failure status renders as an error payload; a success status and an
+	// application-defined (unknown) status both carry their payload, matching .NET's
+	// IsSuccessful (= !IsFailure) so custom statuses flow through untouched.
+	if status.IsFailure() {
 		return errorResponse(result)
 	}
 

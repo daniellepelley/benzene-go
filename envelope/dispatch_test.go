@@ -56,6 +56,39 @@ func TestDispatch_SuccessWithPayload(t *testing.T) {
 	}
 }
 
+func TestDispatch_ApplicationDefinedStatusCarriesPayload(t *testing.T) {
+	// A handler returning an application-defined (non-framework) status with a payload must
+	// have that payload rendered as the body, not replaced by an error payload - the
+	// extensibility promise, matching .NET's IsSuccessful (= !IsFailure).
+	registry := benzene.NewRegistry()
+	if err := benzene.Register(registry, benzene.NewTopic("partial"),
+		benzene.Handler[greetRequest, greetResponse](func(_ context.Context, req greetRequest) benzene.Result[greetResponse] {
+			return benzene.Result[greetResponse]{
+				Status:  benzene.Status("partial-success"),
+				Payload: &greetResponse{Greeting: "Partly " + req.Name},
+			}
+		})); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	container := benzene.NewContainer()
+	pipeline := benzene.NewPipeline(benzene.RouterMiddleware(registry))
+
+	resp := Dispatch(context.Background(), pipeline, container, wire.Request{
+		Topic: "partial", Headers: map[string]string{}, Body: `{"name":"World"}`,
+	})
+
+	if resp.StatusCode != "partial-success" {
+		t.Errorf("StatusCode = %q, want %q", resp.StatusCode, "partial-success")
+	}
+	var payload greetResponse
+	if err := json.Unmarshal([]byte(resp.Body), &payload); err != nil {
+		t.Fatalf("body is not the payload (rendered as error?): %v; body = %s", err, resp.Body)
+	}
+	if payload.Greeting != "Partly World" {
+		t.Errorf("Greeting = %q, want %q", payload.Greeting, "Partly World")
+	}
+}
+
 func TestDispatch_MissingHandlerIsNotFound(t *testing.T) {
 	_, container, pipeline := newTestApp(t)
 

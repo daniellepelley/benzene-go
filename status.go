@@ -43,9 +43,42 @@ var successStatuses = map[Status]bool{
 	StatusIgnored:  true,
 }
 
-// IsSuccess reports whether status belongs to the success class. An application-defined
-// status not in the framework vocabulary is treated as a failure, matching every
-// per-protocol mapping table's "unknown -> generic error" default.
+var failureStatuses = map[Status]bool{
+	StatusBadRequest:         true,
+	StatusValidationError:    true,
+	StatusUnauthorized:       true,
+	StatusForbidden:          true,
+	StatusNotFound:           true,
+	StatusConflict:           true,
+	StatusTooManyRequests:    true,
+	StatusTimeout:            true,
+	StatusNotImplemented:     true,
+	StatusServiceUnavailable: true,
+	StatusUnexpectedError:    true,
+}
+
+// IsSuccess reports whether status is one of the framework-defined success statuses
+// (StatusOk, StatusCreated, StatusAccepted, StatusUpdated, StatusDeleted, StatusIgnored).
+// It is false for failure, unknown (application-defined), and empty statuses. This is the
+// narrow classifier the per-protocol mapping tables use for their generic-success row; for
+// deciding whether an invocation succeeded, prefer IsFailure/Result.IsSuccessful, which do
+// not treat an application-defined status as a failure (design-principles.md §"custom
+// statuses"). Mirrors BenzeneResultStatus.IsSuccess in the .NET reference.
 func (s Status) IsSuccess() bool {
 	return successStatuses[s]
+}
+
+// IsFailure reports whether status is one of the framework-defined failure statuses. It is
+// false for success, unknown (application-defined), and empty statuses - an application-defined
+// status is not assumed to be a failure, which is what keeps custom statuses flowing through
+// the pipeline, envelope, and mesh untouched (design-principles.md). Mirrors
+// BenzeneResultStatus.IsFailure in the .NET reference.
+func (s Status) IsFailure() bool {
+	return failureStatuses[s]
+}
+
+// IsKnown reports whether status is part of the framework-defined vocabulary (success or
+// failure). Mirrors BenzeneResultStatus.IsKnown in the .NET reference.
+func (s Status) IsKnown() bool {
+	return s.IsSuccess() || s.IsFailure()
 }

@@ -12,9 +12,14 @@ type Result[T any] struct {
 	Errors []string
 }
 
-// IsSuccessful reports whether Status belongs to the success class.
+// IsSuccessful reports whether this result should be treated as a success. It is derived
+// from the status class as "not a failure" (core-concepts.md §5), so a framework success
+// status and an application-defined status both count as successful and carry their payload,
+// while only a framework failure status does not - the extensibility promise that custom
+// statuses flow through untouched (design-principles.md). This mirrors the .NET reference's
+// ServiceBenzeneResult, whose IsSuccessful defaults to !BenzeneResultStatus.IsFailure(status).
 func (r Result[T]) IsSuccessful() bool {
-	return r.Status.IsSuccess()
+	return !r.Status.IsFailure()
 }
 
 // ResultInfo is the type-erased view of a Result[T], implemented by every instantiation.
@@ -63,8 +68,9 @@ func Deleted[T any](payload T) Result[T] { return success(StatusDeleted, payload
 func Ignored[T any](payload T) Result[T] { return success(StatusIgnored, payload) }
 
 // Fail returns a failed Result with the given status and error messages. Panics if status
-// is in the success class, since that would produce a self-contradictory Result (mirrors the
-// C# BenzeneResult's guard against the same mistake).
+// is in the framework success class, since that would produce a self-contradictory Result;
+// an application-defined status is allowed (it is not a framework success status). This is a
+// Go-side guard - it has no direct counterpart in the .NET reference.
 func Fail[T any](status Status, errors ...string) Result[T] {
 	if status.IsSuccess() {
 		panic("benzene: Fail called with a success-class status " + string(status))
