@@ -28,17 +28,17 @@ curl -s -X POST localhost:8082/relay   -d '{"name":"Mesh"}'     # the same flow 
 Everything the view shows is **derived** from the running services, nothing is declared:
 
 - **Descriptor + schemas + contract hash** (spec §2): each fully-meshed service's row comes
-  from its `mesh:register` descriptor - topics from the Registry, request/response JSON
+  from its `benzene:mesh:register` descriptor - topics from the Registry, request/response JSON
   Schemas derived at startup from the handler types, and the `descriptorHash`. Fetch one
   directly from the reserved `mesh` topic:
 
   ```
-  curl -s -X POST localhost:8080/benzene/invoke -d '{"topic":"mesh","headers":{},"body":""}'
+  curl -s -X POST localhost:8080/benzene/invoke -d '{"topic":"benzene:mesh","headers":{},"body":""}'
   ```
 
 - **Health from heartbeats** (spec §5): greeter and frontdoor turn *healthy* on their
   heartbeats (which carry the descriptor hash, so a redeployed instance with a changed
-  contract would show a hash mismatch in `mesh:query:service`).
+  contract would show a hash mismatch in `benzene:mesh:query:service`).
 - **Consumer edges from trace parentage** (spec §3-4): the `greet` topic shows
   *consumers: frontdoor, legacy-portal* because each caller forwards
   `mesh.SpanFromContext(ctx)` as a `traceparent` header (see `welcomeHandler`) - the only
@@ -50,9 +50,9 @@ Everything the view shows is **derived** from the running services, nothing is d
 - **Drill-downs** - the same read models the view uses:
 
   ```
-  curl -s -X POST localhost:8090/benzene/invoke -d '{"topic":"mesh:query:service","headers":{},"body":"{\"service\":\"greeter\"}"}'
-  curl -s -X POST localhost:8090/benzene/invoke -d '{"topic":"mesh:query:topic","headers":{},"body":"{\"topic\":\"greet\"}"}'
-  curl -s -X POST localhost:8090/benzene/invoke -d '{"topic":"mesh:query:trace","headers":{},"body":"{\"traceId\":\"<id from the view>\"}"}'
+  curl -s -X POST localhost:8090/benzene/invoke -d '{"topic":"benzene:mesh:query:service","headers":{},"body":"{\"service\":\"greeter\"}"}'
+  curl -s -X POST localhost:8090/benzene/invoke -d '{"topic":"benzene:mesh:query:topic","headers":{},"body":"{\"topic\":\"greet\"}"}'
+  curl -s -X POST localhost:8090/benzene/invoke -d '{"topic":"benzene:mesh:query:trace","headers":{},"body":"{\"traceId\":\"<id from the view>\"}"}'
   ```
 
 ## What is and isn't verified
