@@ -104,7 +104,7 @@ func newApp() benzene.App[struct{}] {
 func routes() []httpbinding.Route {
 	return []httpbinding.Route{
 		{Method: http.MethodPost, Path: "/greet", Topic: benzene.NewTopic("greet")},
-		{Method: http.MethodGet, Path: httpbinding.HealthPath, Topic: benzene.NewTopic("healthcheck")},
+		{Method: http.MethodGet, Path: httpbinding.HealthPath, Topic: benzene.NewTopic(healthcheck.ReservedTopic)},
 	}
 }
 

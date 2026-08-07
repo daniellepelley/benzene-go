@@ -1,7 +1,7 @@
 // Package healthcheck implements the health-check interception feature of
 // daniellepelley/Benzene's docs/specification/core-concepts.md §5 ("intercept the reserved
-// healthcheck topic (plus an app-chosen alias), run registered checks, respond with the
-// standard response format") and the response shape of wire-contracts.md §5.
+// benzene:healthcheck topic (plus an app-chosen alias), run registered checks, respond with
+// the standard response format") and the response shape of wire-contracts.md §5.
 package healthcheck
 
 import (
@@ -22,6 +22,13 @@ const (
 	StatusWarning Status = "warning"
 	StatusFailed  Status = "failed"
 )
+
+// ReservedTopic is the reserved health-check topic id every conforming service intercepts
+// (design-principles.md §5.1, cloud-service-profile.md R3). It is namespaced under the
+// benzene: default-service-standard prefix and matches the .NET reference's
+// BenzeneTopic.HealthCheck. The HTTP surface for it is httpbinding.HealthPath
+// ("/benzene/health"); this is the topic id, not the path.
+const ReservedTopic = "benzene:healthcheck"
 
 // CheckResult is one check's outcome (wire-contracts.md §5). Data is a free-form diagnostic
 // bag written verbatim - no naming policy applied.
@@ -56,7 +63,7 @@ type Response struct {
 	HealthChecks map[string]CheckResult `json:"healthChecks"`
 }
 
-// Middleware intercepts the reserved "healthcheck" topic (plus any additional aliases) and
+// Middleware intercepts the reserved benzene:healthcheck topic (plus any additional aliases) and
 // short-circuits the pipeline (core-concepts.md §5) with the aggregate Response, running
 // every check concurrently. A check that panics is recorded as StatusFailed rather than
 // crashing the invocation - a health check reporting its own failure is exactly the
@@ -65,7 +72,7 @@ type Response struct {
 // Any topic other than the reserved one(s) passes through to next unchanged.
 func Middleware(checks []Check, aliases ...string) benzene.Middleware {
 	topics := make(map[string]bool, len(aliases)+1)
-	topics["healthcheck"] = true
+	topics[ReservedTopic] = true
 	for _, alias := range aliases {
 		topics[alias] = true
 	}

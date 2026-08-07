@@ -203,7 +203,7 @@ func main() {
 		}
 	}, []httpbinding.Route{
 		{Method: http.MethodPost, Path: "/greet", Topic: benzene.NewTopic("greet")},
-		{Method: http.MethodGet, Path: httpbinding.HealthPath, Topic: benzene.NewTopic("healthcheck")},
+		{Method: http.MethodGet, Path: httpbinding.HealthPath, Topic: benzene.NewTopic(healthcheck.ReservedTopic)},
 	})
 	defer greeter.exporter.Close()
 	go func() { log.Fatal(http.ListenAndServe(":"+greeterPort, greeter.handler)) }()
@@ -215,7 +215,7 @@ func main() {
 		}
 	}, []httpbinding.Route{
 		{Method: http.MethodPost, Path: "/welcome", Topic: benzene.NewTopic("welcome")},
-		{Method: http.MethodGet, Path: httpbinding.HealthPath, Topic: benzene.NewTopic("healthcheck")},
+		{Method: http.MethodGet, Path: httpbinding.HealthPath, Topic: benzene.NewTopic(healthcheck.ReservedTopic)},
 	})
 	defer frontdoor.exporter.Close()
 	go func() { log.Fatal(http.ListenAndServe(":"+frontdoorPort, frontdoor.handler)) }()

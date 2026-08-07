@@ -40,7 +40,7 @@ func TestMiddleware_NonMatchingTopicPassesThrough(t *testing.T) {
 }
 
 func TestMiddleware_AllHealthyChecksAreHealthy(t *testing.T) {
-	ic, nextCalled := runMiddleware(t, []Check{okCheck("db"), okCheck("cache")}, "healthcheck")
+	ic, nextCalled := runMiddleware(t, []Check{okCheck("db"), okCheck("cache")}, "benzene:healthcheck")
 
 	if nextCalled {
 		t.Error("next should not be called - healthcheck must short-circuit")
@@ -61,7 +61,7 @@ func TestMiddleware_FailedCheckMakesResponseUnhealthy(t *testing.T) {
 	failing := CheckFunc{CheckName: "db", Fn: func(ctx context.Context) CheckResult {
 		return CheckResult{Status: StatusFailed, Type: "database", Data: map[string]any{"CanConnect": false}}
 	}}
-	ic, _ := runMiddleware(t, []Check{okCheck("cache"), failing}, "healthcheck")
+	ic, _ := runMiddleware(t, []Check{okCheck("cache"), failing}, "benzene:healthcheck")
 
 	resp := resultPayload(t, ic)
 	if resp.IsHealthy {
@@ -76,7 +76,7 @@ func TestMiddleware_WarningDoesNotFlipHealthy(t *testing.T) {
 	warning := CheckFunc{CheckName: "queue", Fn: func(ctx context.Context) CheckResult {
 		return CheckResult{Status: StatusWarning, Type: "queue"}
 	}}
-	ic, _ := runMiddleware(t, []Check{okCheck("db"), warning}, "healthcheck")
+	ic, _ := runMiddleware(t, []Check{okCheck("db"), warning}, "benzene:healthcheck")
 
 	resp := resultPayload(t, ic)
 	if !resp.IsHealthy {
@@ -88,7 +88,7 @@ func TestMiddleware_PanickingCheckIsRecordedAsFailed(t *testing.T) {
 	panicking := CheckFunc{CheckName: "broken", Fn: func(ctx context.Context) CheckResult {
 		panic("boom")
 	}}
-	ic, _ := runMiddleware(t, []Check{panicking}, "healthcheck")
+	ic, _ := runMiddleware(t, []Check{panicking}, "benzene:healthcheck")
 
 	resp := resultPayload(t, ic)
 	if resp.IsHealthy {
@@ -104,7 +104,7 @@ func TestMiddleware_PanickingCheckIsRecordedAsFailed(t *testing.T) {
 }
 
 func TestMiddleware_DuplicateNamesAreDeduplicated(t *testing.T) {
-	ic, _ := runMiddleware(t, []Check{okCheck("db"), okCheck("db"), okCheck("db")}, "healthcheck")
+	ic, _ := runMiddleware(t, []Check{okCheck("db"), okCheck("db"), okCheck("db")}, "benzene:healthcheck")
 
 	resp := resultPayload(t, ic)
 	if len(resp.HealthChecks) != 3 {
@@ -127,7 +127,7 @@ func TestMiddleware_AliasTopicIsAlsoIntercepted(t *testing.T) {
 }
 
 func TestMiddleware_NoChecksIsHealthyWithEmptyMap(t *testing.T) {
-	ic, _ := runMiddleware(t, nil, "healthcheck")
+	ic, _ := runMiddleware(t, nil, "benzene:healthcheck")
 
 	resp := resultPayload(t, ic)
 	if !resp.IsHealthy {
