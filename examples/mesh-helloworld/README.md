@@ -12,9 +12,9 @@ go run .
 | Port | Service | Mesh feeds provisioned |
 |---|---|---|
 | `8090` | meshd | the Mesh View at `/benzene/fleet-ui` (`/` redirects there), the collector's envelope endpoint at `/benzene/invoke` |
-| `8080` | greeter (`greet`) | **all**: descriptor endpoint, registration, heartbeats, traces |
+| `8080` | greeter (`greet`) | **all**: descriptor endpoint, registration, heartbeats, traces, issues |
 | `8081` | frontdoor (`welcome`, calls greeter) | **all** |
-| `8082` | legacy-portal (`legacy:relay`, calls greeter) | **traces only** - no descriptor endpoint, no registration, no heartbeats |
+| `8082` | legacy-portal (`legacy:relay`, calls greeter) | **traces + issues only** - no descriptor endpoint, no registration, no heartbeats |
 
 Open <http://localhost:8090/> and generate traffic:
 
@@ -43,7 +43,13 @@ Everything the view shows is **derived** from the running services, nothing is d
   *consumers: frontdoor, legacy-portal* because each caller forwards
   `mesh.SpanFromContext(ctx)` as a `traceparent` header (see `welcomeHandler`) - the only
   mesh-specific line an application handler ever writes.
-- **Degradation, live** (spec §6): legacy-portal provisions only the trace feed
+- **Issue feed** (spec §4.1): every service also runs `mesh.IssueMiddleware` with a
+  `mesh.PushIssueExporter`, so a failing invocation - e.g. `curl -X POST localhost:8081/welcome
+  -d '{"name":""}'`, where greeter answers `bad-request` - is classified and deduplicated by
+  fingerprint at the source and pushed to the collector, which merges it (delta counts) and
+  surfaces it on the fleet view. An empty batch flushes on the interval as the feed's liveness,
+  so a quiet wired service is distinguishable from an unwired one.
+- **Degradation, live** (spec §6): legacy-portal provisions only the trace and issue feeds
   (`provisionDescriptor=false` in `main.go`, never announces or heartbeats). It serves
   traffic like any other service, its calls still produce flows and consumer edges, and
   its row reads *reduced feeds: descriptor, health* - anonymous-but-live, never an error.

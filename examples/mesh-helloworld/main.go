@@ -96,10 +96,11 @@ func welcomeHandler(greeter *httpclient.Client) benzene.Handler[welcomeRequest, 
 
 // service is one meshed service, ready to serve and to announce itself.
 type service struct {
-	handler    http.Handler
-	exporter   *mesh.PushExporter // caller owns Close
-	descriptor mesh.Descriptor
-	meshd      *httpclient.Client
+	handler       http.Handler
+	exporter      *mesh.PushExporter      // caller owns Close
+	issueExporter *mesh.PushIssueExporter // caller owns Close
+	descriptor    mesh.Descriptor
+	meshd         *httpclient.Client
 }
 
 // newService assembles a meshed Benzene service: the caller's handlers, health-check
@@ -116,12 +117,13 @@ func newService(name, meshdEndpoint string, provisionDescriptor bool, registerHa
 	info := mesh.ServiceInfo{Service: name, ServiceVersion: "1.0.0", InstanceID: name + "-1", Binding: "http"}
 	descriptor := mesh.Describe(registry, info)
 	exporter := mesh.NewPushExporter(httpclient.NewClient(meshdEndpoint), mesh.PushExporterOptions{FlushInterval: time.Second})
+	issueExporter := mesh.NewPushIssueExporter(httpclient.NewClient(meshdEndpoint), name, mesh.PushIssueExporterOptions{FlushInterval: time.Second})
 
 	checks := []healthcheck.Check{healthcheck.CheckFunc{CheckName: "self", Fn: func(context.Context) healthcheck.CheckResult {
 		return healthcheck.CheckResult{Status: healthcheck.StatusOk, Type: "self"}
 	}}}
 
-	middlewares := []benzene.Middleware{mesh.TraceMiddleware(info, exporter)}
+	middlewares := []benzene.Middleware{mesh.TraceMiddleware(info, exporter), mesh.IssueMiddleware(info, issueExporter)}
 	if provisionDescriptor {
 		middlewares = append(middlewares, mesh.Middleware(descriptor))
 	}
@@ -137,10 +139,11 @@ func newService(name, meshdEndpoint string, provisionDescriptor bool, registerHa
 	mux.Handle(httpbinding.EnvelopePath, httpbinding.EnvelopeHandler(builder))
 	mux.Handle("/", httpbinding.Handler(builder, routes))
 	return &service{
-		handler:    mux,
-		exporter:   exporter,
-		descriptor: descriptor,
-		meshd:      httpclient.NewClient(meshdEndpoint),
+		handler:       mux,
+		exporter:      exporter,
+		issueExporter: issueExporter,
+		descriptor:    descriptor,
+		meshd:         httpclient.NewClient(meshdEndpoint),
 	}
 }
 
@@ -206,6 +209,7 @@ func main() {
 		{Method: http.MethodGet, Path: httpbinding.HealthPath, Topic: benzene.NewTopic(healthcheck.ReservedTopic)},
 	})
 	defer greeter.exporter.Close()
+	defer greeter.issueExporter.Close()
 	go func() { log.Fatal(http.ListenAndServe(":"+greeterPort, greeter.handler)) }()
 
 	frontdoor := newService("frontdoor", meshdEndpoint, true, func(registry *benzene.Registry) {
@@ -218,6 +222,7 @@ func main() {
 		{Method: http.MethodGet, Path: httpbinding.HealthPath, Topic: benzene.NewTopic(healthcheck.ReservedTopic)},
 	})
 	defer frontdoor.exporter.Close()
+	defer frontdoor.issueExporter.Close()
 	go func() { log.Fatal(http.ListenAndServe(":"+frontdoorPort, frontdoor.handler)) }()
 
 	// legacy-portal provisions ONLY the trace feed: no descriptor endpoint (false below),
@@ -233,6 +238,7 @@ func main() {
 		{Method: http.MethodPost, Path: "/relay", Topic: benzene.NewTopic("legacy:relay")},
 	})
 	defer legacy.exporter.Close()
+	defer legacy.issueExporter.Close()
 	go func() { log.Fatal(http.ListenAndServe(":"+legacyPort, legacy.handler)) }()
 
 	// Announce like the .NET example's StartAnnouncing: retry registration until the
