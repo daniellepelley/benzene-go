@@ -92,6 +92,16 @@ alongside the shared spec.
   the response status code), wire-contracts §2 topic resolution like `awssqs`/`awssns`. The
   outbound publish half needs the Pub/Sub SDK - a pending dependency decision (`ROADMAP.md`);
   if approved it gets its own module like `awssqs`/`awssns`.
+- `awsdynamodb/` - DynamoDB Streams inbound binding, zero-dependency in the root module: a
+  Lambda `Handler` for a stream event source mapping. Topic is `{tableName}:{eventName}` (table
+  parsed from the stream ARN + INSERT/MODIFY/REMOVE), body is the record's image unmarshalled
+  from DynamoDB AttributeValue format into plain JSON (NewImage, else OldImage, else Keys),
+  headers are `dynamodb-`-prefixed metadata (no `_benzeneHeaders` - these come from table writes,
+  not a Benzene publisher). No outbound half exists (writing to the table is the publish; the
+  stream is read-only), so no SDK and no separate module. Records are ordered CDC, so processing
+  is **sequential and stops at the first failure**, reporting that record's `SequenceNumber` for
+  Lambda to checkpoint and redeliver - deliberately not `awssqs`'s concurrent fan-out. Matches
+  `Benzene.Aws.Lambda.DynamoDb`.
 - `awssns/` - AWS SNS binding, in **its own Go module** (`awssns/go.mod`) - same shape and same
   reason as `awssqs` (`aws-sdk-go-v2/service/sns` for the outbound publish client; the inbound
   `Handler`, subscribed directly to an SNS topic, is zero-dependency). Unlike SQS, a direct

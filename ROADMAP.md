@@ -72,6 +72,16 @@ delivery order - just the current honest picture, kept up to date as things land
   for a push subscription's endpoint, with wire-contracts §2 topic resolution and ack/nack
   via the response status code. The outbound (publish) half needs the Pub/Sub SDK - see
   "Later" below.
+- `awsdynamodb` - DynamoDB Streams inbound binding (zero dependencies, root module), matching
+  `Benzene.Aws.Lambda.DynamoDb` and `transport-bindings.md`'s "DynamoDB Streams" entry: a Lambda
+  `Handler` for a stream event source mapping. Topic is `{tableName}:{eventName}` (table parsed
+  from the stream ARN + the change type); body is the record's image unmarshalled from DynamoDB
+  AttributeValue format into plain JSON (NewImage, else OldImage, else Keys) so handlers
+  deserialize ordinary structs; headers are `dynamodb-`-prefixed metadata. No outbound side
+  (writing the table is the publish; the stream is read-only), so no SDK and no separate module.
+  Records are ordered CDC, so processing is sequential and stops at the first failure, reporting
+  that record's `SequenceNumber` for Lambda to checkpoint and redeliver - deliberately not
+  `awssqs`'s concurrent fan-out.
 - `awseventbridge` - AWS EventBridge binding, in its **own Go module** (see `RELEASING.md`),
   matching the main repo's `transport-bindings.md` EventBridge entry exactly: an inbound
   `Handler` for a Lambda invoked by an EventBridge rule (zero dependencies; topic is
@@ -144,10 +154,6 @@ Per `CLAUDE.md`: no third-party dependency without asking first. These are real,
 extensions, but each needs an explicit yes on a specific dependency before starting, not a
 unilateral add:
 
-- **DynamoDB Streams binding.** EventBridge is now done (`awseventbridge`, see Done above);
-  a Streams-triggered Lambda is the same shape as `awssqs`'s inbound handler (a Records
-  batch with `batchItemFailures` support) - the inbound side is hand-rollable, and there is
-  no outbound side to need an SDK, so this could even be zero-dependency in the root module.
 - **Pub/Sub outbound (publish) client.** The inbound half is done with zero dependencies
   (`gcppubsub` - a push subscription is just HTTPS in). Publishing needs OAuth-signed API
   calls, i.e. `cloud.google.com/go/pubsub` - the same shape as `awssqs`/`awssns`'s outbound
