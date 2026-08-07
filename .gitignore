@@ -6,6 +6,17 @@
 coverage.txt
 coverage.html
 
+# Stray example binaries: `go build ./examples/<name>` run from the repo root drops an
+# extension-less binary named <name> here. These are build output, never source. Anchored to
+# the root so the examples/<name>/ source directories are unaffected.
+/helloworld
+/mesh-helloworld
+/aws-lambda-helloworld
+/aws-dynamodb-helloworld
+/azure-functions-helloworld
+/gcp-cloudrun-helloworld
+/gcp-pubsub-helloworld
+
 # IDE
 .idea/
 .vscode/
