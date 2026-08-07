@@ -1,0 +1,49 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  benzene-go aws-dynamodb-helloworld example - a DynamoDB `orders` table with a stream, and a
+  consumer Lambda triggered by that stream's change records.
+
+Globals:
+  Function:
+    Timeout: 5
+    MemorySize: 128
+    Architectures:
+      - arm64
+
+Resources:
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+
+  ConsumerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      Events:
+        OrdersStreamEvent:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt OrdersTable.StreamArn
+            StartingPosition: LATEST
+            BatchSize: 10
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+    Metadata:
+      DockerTag: aws-dynamodb-helloworld
+      DockerContext: ../..
+      Dockerfile: examples/aws-dynamodb-helloworld/Dockerfile
+
+Outputs:
+  OrdersTableName:
+    Description: The DynamoDB table to write orders to (each write is streamed to the consumer)
+    Value: !Ref OrdersTable

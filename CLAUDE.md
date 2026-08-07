@@ -149,14 +149,16 @@ alongside the shared spec.
 - `examples/` - runnable example services: `helloworld` (plain HTTP),
   `mesh-helloworld` (collector + two meshed services, the Phases 1-4 demo), and one
   `<provider>-helloworld` per cloud deployment target (`aws-lambda-helloworld`,
-  `azure-functions-helloworld`, `gcp-cloudrun-helloworld`, `aws-sqs-helloworld`,
-  `aws-sns-helloworld`, `gcp-pubsub-helloworld`) - each with its own README stating the concrete
-  deploy steps and exactly what was/wasn't verified without live cloud credentials. Plain Cloud
-  Run needs no dedicated package (see `gcp-cloudrun-helloworld/README.md`); `gcppubsub` exists
-  because the Pub/Sub push envelope is a concrete shape `httpbinding` alone can't cover - keep
-  applying that bar to any new platform package. `aws-sqs-helloworld` and
-  `aws-sns-helloworld` are each their own module (depends on both the root module and its
-  respective binding - would be a cycle inside either).
+  `aws-dynamodb-helloworld`, `azure-functions-helloworld`, `gcp-cloudrun-helloworld`,
+  `aws-sqs-helloworld`, `aws-sns-helloworld`, `gcp-pubsub-helloworld`) - each with its own README
+  stating the concrete deploy steps and exactly what was/wasn't verified without live cloud
+  credentials. Plain Cloud Run needs no dedicated package (see `gcp-cloudrun-helloworld/
+  README.md`); `gcppubsub` exists because the Pub/Sub push envelope is a concrete shape
+  `httpbinding` alone can't cover - keep applying that bar to any new platform package.
+  `aws-dynamodb-helloworld` is a consumer-only example in the **root** module (like
+  `aws-lambda-helloworld`), since the `awsdynamodb` binding is itself zero-dependency;
+  `aws-sqs-helloworld` and `aws-sns-helloworld` are each their own module (depends on both the
+  root module and its respective binding - would be a cycle inside either).
 - `go.work` - ties the root module, `awssqs/`, `awssns/`, `awseventbridge/`, `kafka/`,
   `diagnostics/`, `grpcbinding/`, `examples/aws-sqs-helloworld/`, and
   `examples/aws-sns-helloworld/` together for local development (see `RELEASING.md`). Its
