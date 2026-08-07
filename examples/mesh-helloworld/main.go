@@ -254,6 +254,6 @@ func main() {
 	log.Printf("mesh view      http://localhost:%s/", meshdPort)
 	log.Printf("meshed flow    curl -s -X POST localhost:%s/welcome -d '{\"name\":\"Mesh\"}'", frontdoorPort)
 	log.Printf("reduced flow   curl -s -X POST localhost:%s/relay -d '{\"name\":\"Mesh\"}'", legacyPort)
-	log.Printf("descriptor     curl -s -X POST localhost:%s%s -d '{\"topic\":\"mesh\",\"headers\":{},\"body\":\"\"}'", greeterPort, httpbinding.EnvelopePath)
+	log.Printf("descriptor     curl -s -X POST localhost:%s%s -d '{\"topic\":\"benzene:mesh\",\"headers\":{},\"body\":\"\"}'", greeterPort, httpbinding.EnvelopePath)
 	select {}
 }

@@ -181,8 +181,8 @@ func TestMiddleware(t *testing.T) {
 		aliases   []string
 		intercept bool
 	}{
-		{name: "intercepts the reserved topic", topic: benzene.NewTopic("mesh"), intercept: true},
-		{name: "intercepts by id regardless of version", topic: benzene.NewTopic("mesh").WithVersion("v9"), intercept: true},
+		{name: "intercepts the reserved topic", topic: benzene.NewTopic("benzene:mesh"), intercept: true},
+		{name: "intercepts by id regardless of version", topic: benzene.NewTopic("benzene:mesh").WithVersion("v9"), intercept: true},
 		{name: "intercepts a configured alias", topic: benzene.NewTopic("_mesh"), aliases: []string{"_mesh"}, intercept: true},
 		{name: "passes any other topic through", topic: benzene.NewTopic("order:create"), intercept: false},
 		{name: "does not intercept an unconfigured alias", topic: benzene.NewTopic("_mesh"), intercept: false},

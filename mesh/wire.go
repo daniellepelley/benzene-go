@@ -6,20 +6,21 @@ import (
 	"github.com/daniellepelley/benzene-go/healthcheck"
 )
 
-// The mesh wire-contract topics (mesh.md §4.2): what a service sends to a collector
+// The mesh wire-contract topics (mesh.md §4): what a service sends to a collector
 // (register/heartbeat/traces) and what a view reads back (query:*). The collector side is
 // implemented by the meshd package; the names live here because both sides of the wire
-// share them. Like every shape in this file, they are proposed for promotion to the main
-// repo's spec (mesh.md §8 Phase 5) so other language ports interoperate.
+// share them. They are namespaced under the benzene: default-service-standard prefix
+// (design-principles.md §5.1) and match the .NET reference's MeshTopics/BenzeneTopic, so
+// other language ports interoperate.
 const (
-	TopicRegister  = "mesh:register"
-	TopicHeartbeat = "mesh:heartbeat"
-	TopicTraces    = "mesh:traces"
+	TopicRegister  = "benzene:mesh:register"
+	TopicHeartbeat = "benzene:mesh:heartbeat"
+	TopicTraces    = "benzene:mesh:traces"
 
-	TopicQueryFleet   = "mesh:query:fleet"
-	TopicQueryService = "mesh:query:service"
-	TopicQueryTopic   = "mesh:query:topic"
-	TopicQueryTrace   = "mesh:query:trace"
+	TopicQueryFleet   = "benzene:mesh:query:fleet"
+	TopicQueryService = "benzene:mesh:query:service"
+	TopicQueryTopic   = "benzene:mesh:query:topic"
+	TopicQueryTrace   = "benzene:mesh:query:trace"
 )
 
 // TraceBatch is the body of a mesh:traces message: the events a PushExporter accumulated

@@ -168,7 +168,7 @@
     fetch(ENVELOPE_PATH, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ topic: "mesh:query:fleet", headers: {}, body: "{}" })
+      body: JSON.stringify({ topic: "benzene:mesh:query:fleet", headers: {}, body: "{}" })
     }).then(function (response) {
       if (!response.ok) throw new Error("HTTP " + response.status);
       return response.json();

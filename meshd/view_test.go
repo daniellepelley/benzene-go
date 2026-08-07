@@ -41,7 +41,7 @@ func TestViewHandler(t *testing.T) {
 			if strings.Contains(page, "__ENVELOPE_PATH__") {
 				t.Error("placeholder was not replaced")
 			}
-			if !strings.Contains(page, "mesh:query:fleet") {
+			if !strings.Contains(page, "benzene:mesh:query:fleet") {
 				t.Error("page does not query the fleet topic")
 			}
 		})
