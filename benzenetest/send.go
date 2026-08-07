@@ -150,6 +150,20 @@ func newAzureQueueEvent(t TB, dataName string, topic benzene.Topic, payload any,
 	return mustMarshal(t, event)
 }
 
+// SendCosmosChangeFeed pushes an Azure Functions custom-handler invocation for a Cosmos DB Change
+// Feed trigger through the azurefunctions CosmosHandler and returns the native HTTP
+// acknowledgement: 200 (success - the host checkpoints past this batch) or 500 (fail - the host
+// redelivers the whole batch). dataName is the trigger binding's function.json "name" (e.g.
+// "documents"), path is that function's local invocation path (e.g. "/OrdersChanged"), topic is the
+// fixed topic the feed fans into, and documents is the whole batch (typically a slice, delivered as
+// one invocation). Unlike SendAzureQueue there is no per-message header channel - the documents are
+// the payload.
+func SendCosmosChangeFeed(t TB, host *Host, dataName, path string, topic benzene.Topic, documents any) HTTPResponse {
+	t.Helper()
+	event := NewCosmosChangeFeedEvent(t, dataName, documents)
+	return serveHTTP(t, azurefunctions.CosmosHandler(host.builder, topic, dataName), http.MethodPost, path, event)
+}
+
 // serveHTTP drives an http.Handler binding with an in-memory request/response and returns the
 // outer HTTP response - the credential-free, network-free counterpart of a real cloud HTTP
 // delivery.

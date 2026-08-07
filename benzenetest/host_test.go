@@ -261,6 +261,48 @@ func TestSendAzureHTTP_ReturnsNativeResponse(t *testing.T) {
 	}
 }
 
+// withOrderBatchHandler registers a fan-in handler for the "orders:changed" topic whose request is
+// the whole change-feed batch (a slice) - the shape the Cosmos DB Change Feed trigger delivers. It
+// fails the batch if any document has an empty id, so a test can exercise both the checkpoint (200)
+// and the redeliver-whole-batch (500) paths.
+func withOrderBatchHandler() benzenetest.Option {
+	return benzenetest.WithServices(func(b *benzene.ApplicationBuilder) {
+		if err := benzene.Register(b.Registry, benzene.NewTopic("orders:changed"), benzene.Handler[[]orderRequest, struct{}](
+			func(_ context.Context, batch []orderRequest) benzene.Result[struct{}] {
+				for _, o := range batch {
+					if o.ID == "" {
+						return benzene.BadRequest[struct{}]("order id is required")
+					}
+				}
+				return benzene.Ok(struct{}{})
+			})); err != nil {
+			panic(err)
+		}
+	})
+}
+
+func TestSendCosmosChangeFeed_BatchIsCheckpointedOnSuccess(t *testing.T) {
+	host := benzenetest.NewHost(newTestApp(), withOrderBatchHandler())
+
+	resp := benzenetest.SendCosmosChangeFeed(t, host, "documents", "/OrdersChanged", benzene.NewTopic("orders:changed"),
+		[]orderRequest{{ID: "order-1"}, {ID: "order-2"}})
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("StatusCode = %d, want 200 (checkpoint); body = %s", resp.StatusCode, resp.Body)
+	}
+}
+
+func TestSendCosmosChangeFeed_FailedBatchIsRedelivered(t *testing.T) {
+	host := benzenetest.NewHost(newTestApp(), withOrderBatchHandler())
+
+	resp := benzenetest.SendCosmosChangeFeed(t, host, "documents", "/OrdersChanged", benzene.NewTopic("orders:changed"),
+		[]orderRequest{{ID: "order-1"}, {ID: ""}})
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("StatusCode = %d, want 500 (redeliver whole batch)", resp.StatusCode)
+	}
+}
+
 // WithServices must land before Configure builds the pipeline; a failure result from the faked
 // sender must reach the handler's publish-failure branch, proving the override is what the
 // handler actually resolves.

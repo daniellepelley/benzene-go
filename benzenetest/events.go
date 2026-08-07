@@ -156,6 +156,19 @@ func NewAzureHTTPEvent(t TB, method string, payload any, headers map[string]stri
 	return mustMarshal(t, event)
 }
 
+// NewCosmosChangeFeedEvent builds the Azure Functions custom-handler invocation payload for a
+// Cosmos DB Change Feed trigger: the batch of changed documents under Data[dataName] as a JSON
+// array - the shape azurefunctions.CosmosHandler parses. documents is the whole batch (typically a
+// slice); the change feed is fan-in, so it is one event, not one per document, and there is no
+// topic or header channel (the documents are the payload).
+func NewCosmosChangeFeedEvent(t TB, dataName string, documents any) json.RawMessage {
+	t.Helper()
+	event := map[string]any{
+		"Data": map[string]json.RawMessage{dataName: json.RawMessage(marshalBody(t, documents))},
+	}
+	return mustMarshal(t, event)
+}
+
 func mustMarshal(t TB, v any) json.RawMessage {
 	t.Helper()
 	data, err := json.Marshal(v)
