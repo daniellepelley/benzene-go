@@ -23,6 +23,12 @@ delivery order - just the current honest picture, kept up to date as things land
 - `httpbinding` - native REST-style HTTP binding + envelope-over-HTTP.
 - `httpclient` - the HTTP outbound client (one `Send` method).
 - `healthcheck` - reserved-topic health-check interception middleware.
+- `validation` - request-validation building block (zero dependencies): `Validated(validator,
+  handler)` wraps a handler so an invalid request short-circuits to a `validation-error` result
+  before the handler runs, plus `Validator[T]`/`ValidatorFunc[T]` and a `Combine` composer. The
+  Go-idiomatic form of `Benzene.DataAnnotations`/`Benzene.FluentValidation`'s ValidationMiddleware -
+  a typed handler wrapper rather than a pipeline middleware, because this port's pipeline is
+  type-erased until dispatch (no reflection, no struct-tag DSL).
 - `logging` - basic request logging/timing middleware using only `log/slog`: one structured
   line per invocation (topic/version, Benzene status, duration; Info/Warn/Error by outcome).
   The dependency-free visibility option alongside the `diagnostics` module's full OTel feed.

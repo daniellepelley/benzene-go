@@ -49,6 +49,13 @@ alongside the shared spec.
 - `httpbinding/` - the HTTP transport binding (native + envelope-over-HTTP entry points).
 - `httpclient/` - the HTTP outbound client.
 - `healthcheck/` - reserved-topic health-check interception middleware.
+- `validation/` - request-validation building block: `Validated(validator, handler)` wraps a
+  handler so an invalid request short-circuits to a `validation-error` result before the handler
+  runs. The Go-idiomatic form of `Benzene.DataAnnotations`/`Benzene.FluentValidation`'s
+  `ValidationMiddleware` - those are pipeline middleware because .NET's message-handler pipeline is
+  typed; this port's pipeline is type-erased until the router dispatches, so validation composes at
+  the **typed handler** as a plain wrapper at registration (no reflection, no struct-tag DSL, no
+  dependency - the service writes an ordinary `Validate` function).
 - `mesh/` - Phases 1-2 of `docs/design/mesh.md`: service `Descriptor` derived from the
   `Registry` (topics + JSON Schemas derived at startup from the `TReq`/`TRes` types the
   Registry captures at `Register` time, plus the contract `descriptorHash`),
