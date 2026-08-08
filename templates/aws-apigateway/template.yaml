@@ -1,0 +1,33 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  A Benzene service on AWS Lambda, triggered by API Gateway HTTP requests. Generated from the
+  benzene-go aws-apigateway template. Hand-checked against the AWS SAM shape, not deployed from
+  the template itself - review before production use.
+
+Globals:
+  Function:
+    Timeout: 5
+    MemorySize: 128
+    Architectures:
+      - arm64
+
+Resources:
+  GreetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      Events:
+        # API Gateway HTTP API (v2) proxy - every route reaches the same Lambda, which routes by
+        # path internally (see routes() in main.go).
+        HttpApi:
+          Type: HttpApi
+    Metadata:
+      DockerTag: aws-apigateway
+      DockerContext: .
+      Dockerfile: Dockerfile
+
+Outputs:
+  ApiUrl:
+    Description: The API Gateway base URL - POST /greet to it.
+    Value: !Sub "https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com"
