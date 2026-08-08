@@ -15,7 +15,12 @@
 //   - Topic: the record's Kafka topic (one Kafka topic = one Benzene topic, verbatim - no envelope).
 //   - Body: the record's value, base64-decoded into the raw bytes the producer wrote (typically JSON).
 //   - Headers: the Kafka headers, passed through verbatim (their byte-array values UTF-8 decoded),
-//     matching the self-hosted binding.
+//     matching the self-hosted binding. The record's own metadata (partition, offset, timestamp,
+//     key) is deliberately NOT surfaced as headers - unlike the `kinesis-`/`dynamodb-`-prefixed
+//     metadata the stream siblings synthesize, because those records carry no real headers whereas
+//     a Kafka record does. Matching Benzene.Aws.Lambda.Kafka, which documents that fabricating a
+//     synthetic header (e.g. a `topic` one) is an infinite-loop trap when a handler forwards the
+//     inbound headers onto an outbound send.
 //   - Batching: records within a partition are ordered, so each partition is processed sequentially
 //     and STOPS at its first failure, reporting {partition, offset} - the offset AWS resumes that
 //     partition from. Partitions are independent (a failure in one does not stop another). This is
@@ -58,7 +63,12 @@ type kafkaRecord struct {
 
 // batchResponse is the Kafka/MSK event source mapping's partial-batch-failure report. Its
 // itemIdentifier is an OBJECT {partition, offset} - the Kafka shape - not the string identifier the
-// SQS/Kinesis/DynamoDB mappings use.
+// SQS/Kinesis/DynamoDB mappings use. The `partition` field is the "{topic}-{partition}" group key
+// string (e.g. "orders-0"), NOT a bare numeric partition; `offset` is the resume offset. This shape
+// matches Benzene.Aws.Lambda.Kafka's KafkaBatchResponse, verified there against AWS's "Configuring
+// error handling controls for Kafka event sources" documentation. AWS honors it only when the
+// mapping sets FunctionResponseTypes: [ReportBatchItemFailures] (see the example's template.yaml);
+// without that toggle AWS ignores the body and treats the invocation as all-or-nothing.
 type batchResponse struct {
 	BatchItemFailures []batchItemFailure `json:"batchItemFailures"`
 }

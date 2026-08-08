@@ -35,6 +35,12 @@ Resources:
             Topics:
               - orders
             StartingPosition: LATEST
+            # Required for AWS to READ the {partition, offset} batchItemFailures the binding returns.
+            # Without it, AWS ignores the response body and treats the whole invocation as all-or-
+            # nothing - so a single failed record would be silently committed past (matches the
+            # Kinesis example, and Benzene.Aws.Lambda.Kafka's documented KafkaBatchFailureMode).
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
     Metadata:
       DockerTag: aws-kafka-helloworld
       DockerContext: ../..

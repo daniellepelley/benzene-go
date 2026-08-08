@@ -22,7 +22,8 @@ func record(topic string, partition int, offset int64, value string) kafkaRecord
 
 func TestResolveRequest_TopicBodyHeaders(t *testing.T) {
 	r := record("orders", 0, 5, `{"id":"a"}`)
-	// "traceparent" -> its bytes as a JSON int array (the Kafka header wire form).
+	// Each header is a single-entry map of name -> its bytes as a JSON int array (the Kafka header
+	// wire form AWS delivers).
 	r.Headers = []map[string][]int{{"h1": bytesToInts([]byte("v1"))}, {"h2": bytesToInts([]byte("v2"))}}
 
 	req, err := resolveRequest(r)

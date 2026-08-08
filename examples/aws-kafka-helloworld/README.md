@@ -41,8 +41,10 @@ sam deploy --guided --parameter-overrides MskClusterArn=arn:aws:kafka:REGION:ACC
 
 That wires the consumer Lambda to the cluster's `orders` topic. The mapping reports partial batch
 failures as `{partition, offset}` objects (the Kafka shape), so AWS resumes a partition from the
-failing offset rather than committing past it — the binding always emits that shape, and MSK
-mappings read it without any extra `FunctionResponseTypes` toggle.
+failing offset rather than committing past it. This requires `FunctionResponseTypes:
+[ReportBatchItemFailures]` on the event source mapping (set in `template.yaml`, exactly as the
+Kinesis example does): **without** it AWS ignores the returned body and treats the whole invocation
+as all-or-nothing, which would silently commit past a failed record — so the toggle is not optional.
 
 ### Self-managed Kafka
 
