@@ -9,6 +9,14 @@ message through the whole pipeline, and the deployment files for its target.
 a template module and rewriting its module path** to the one you choose. So generating a project is
 one command — no template engine, no placeholders to fill in beyond the module path.
 
+## Templates vs. examples
+
+A **template** (this folder) is where you **start** a real service: vanilla and minimal, with nothing
+to delete before you write your handlers. An [**example**](../examples) is where you **learn a
+technique** — a contrived, feature-rich service showing off one thing (gRPC, Kafka, OpenTelemetry, a
+mesh, …). If the first thing you'd do with an example is strip its boilerplate, you wanted a template.
+Start from a template; borrow techniques from the examples.
+
 ## Templates
 
 | Template | Trigger | `gonew` command |
