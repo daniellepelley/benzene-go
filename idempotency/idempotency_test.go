@@ -106,8 +106,8 @@ type inProgressStore struct{}
 func (inProgressStore) Claim(context.Context, string) (ClaimResult, error) {
 	return ClaimResult{Won: false, Existing: Record{Status: InProgress}}, nil
 }
-func (inProgressStore) Complete(context.Context, string, bool) error { return nil }
-func (inProgressStore) Release(context.Context, string) error        { return nil }
+func (inProgressStore) Complete(context.Context, string) error { return nil }
+func (inProgressStore) Release(context.Context, string) error  { return nil }
 
 func TestMiddleware_InProgressDuplicateIsConflict(t *testing.T) {
 	r := newRunner(inProgressStore{})
@@ -126,8 +126,8 @@ type erroringStore struct{}
 func (erroringStore) Claim(context.Context, string) (ClaimResult, error) {
 	return ClaimResult{}, errors.New("store unavailable")
 }
-func (erroringStore) Complete(context.Context, string, bool) error { return nil }
-func (erroringStore) Release(context.Context, string) error        { return nil }
+func (erroringStore) Complete(context.Context, string) error { return nil }
+func (erroringStore) Release(context.Context, string) error  { return nil }
 
 func TestMiddleware_StoreErrorFailsOpen(t *testing.T) {
 	r := newRunner(erroringStore{})
@@ -200,8 +200,8 @@ func TestMiddleware_ForeignResultUsesStatusClass(t *testing.T) {
 	}
 	// The foreign ok result is successful via the status-class fallback, so it is recorded completed.
 	rec, _ := store.Claim(context.Background(), benzene.NewTopic("t").String()+"\x00k1")
-	if rec.Won || rec.Existing.Status != Completed || !rec.Existing.Successful {
-		t.Errorf("foreign ok result should record completed+successful via the fallback; got %+v", rec)
+	if rec.Won || rec.Existing.Status != Completed {
+		t.Errorf("foreign ok result should record completed via the fallback; got %+v", rec)
 	}
 }
 

@@ -43,8 +43,12 @@ func (f ValidatorFunc[T]) Validate(request T) []string { return f(request) }
 // messages, handler is NOT called and a benzene.ValidationError result carrying those messages is
 // returned (the short-circuit); otherwise the wrapped handler runs unchanged and its result is
 // returned as-is. The wrapped value is an ordinary benzene.Handler[TReq, TRes], so it registers and
-// composes exactly like any other handler.
+// composes exactly like any other handler. A nil validator wraps nothing - handler is returned
+// as-is (the same nil-tolerance as Combine), rather than panicking at dispatch.
 func Validated[TReq, TRes any](validator Validator[TReq], handler benzene.Handler[TReq, TRes]) benzene.Handler[TReq, TRes] {
+	if validator == nil {
+		return handler
+	}
 	return func(ctx context.Context, request TReq) benzene.Result[TRes] {
 		if errors := validator.Validate(request); len(errors) > 0 {
 			return benzene.ValidationError[TRes](errors...)

@@ -66,6 +66,22 @@ func TestValidated_InvalidRequestShortCircuits(t *testing.T) {
 	}
 }
 
+func TestValidated_NilValidatorReturnsHandlerUnchanged(t *testing.T) {
+	// A nil validator wraps nothing: the handler runs and its result is returned as-is (no panic).
+	ran := false
+	handler := Validated[createOrder, string](nil, func(context.Context, createOrder) benzene.Result[string] {
+		ran = true
+		return benzene.Ok("created")
+	})
+	result := handler(context.Background(), createOrder{}) // an "invalid" order, but no validator
+	if !ran {
+		t.Error("handler did not run with a nil validator")
+	}
+	if result.Status != benzene.StatusOk {
+		t.Errorf("status = %q, want ok (nil validator applies no validation)", result.Status)
+	}
+}
+
 func TestValidatorFunc_Validate(t *testing.T) {
 	v := ValidatorFunc[createOrder](orderValidator)
 	if got := v.Validate(createOrder{ID: "x", Amount: 1}); got != nil {

@@ -37,11 +37,11 @@ const (
 	Completed
 )
 
-// Record is the stored state of a claimed key.
+// Record is the stored state of a claimed key. A Completed record is only ever written for a
+// successful first attempt - the middleware releases the claim on failure rather than recording it -
+// so a Completed record always means "already done successfully" and needs no success flag.
 type Record struct {
 	Status Status
-	// Successful is whether the first attempt succeeded; meaningful only when Status is Completed.
-	Successful bool
 }
 
 // ClaimResult is the outcome of Store.Claim.
@@ -61,8 +61,8 @@ type Store interface {
 	// Claim atomically claims key for first-time processing: it records a new InProgress entry and
 	// returns Won when no live entry exists, or returns the existing record (Won false) otherwise.
 	Claim(ctx context.Context, key string) (ClaimResult, error)
-	// Complete promotes a claimed key to Completed, recording whether the first attempt succeeded.
-	Complete(ctx context.Context, key string, successful bool) error
+	// Complete promotes a claimed key to Completed (called only for a successful first attempt).
+	Complete(ctx context.Context, key string) error
 	// Release removes a claim so a redelivery can reprocess the message (called on failure).
 	Release(ctx context.Context, key string) error
 }
@@ -74,18 +74,33 @@ type KeyFunc func(ic *benzene.InvocationContext) string
 // DefaultKeyHeader is the header HeaderKey reads unless another is named.
 const DefaultKeyHeader = "idempotency-key"
 
-// HeaderKey returns a KeyFunc that reads the idempotency key from the named header
-// (case-insensitive), scoped by topic so the same key value on two different topics does not
-// collide. An absent or empty header opts the message out of de-duplication.
+// HeaderKey returns a KeyFunc that reads the idempotency key from the named header, scoped by topic
+// so the same key value on two different topics does not collide. An absent or empty header opts the
+// message out of de-duplication. The exact header name is matched first (deterministic), falling
+// back to a case-insensitive match; headers are expected to be normalized to a single case (every
+// binding in this repo lower-cases inbound headers), so the fallback is only a convenience for a
+// caller-supplied name in a different case, not a way to reconcile duplicate case-variant entries.
 func HeaderKey(header string) KeyFunc {
 	return func(ic *benzene.InvocationContext) string {
-		for name, value := range ic.Headers {
-			if value != "" && strings.EqualFold(name, header) {
-				return ic.Topic.String() + "\x00" + value
-			}
+		value := headerValue(ic.Headers, header)
+		if value == "" {
+			return ""
 		}
-		return ""
+		return ic.Topic.String() + "\x00" + value
 	}
+}
+
+// headerValue looks name up exactly first, then case-insensitively.
+func headerValue(headers map[string]string, name string) string {
+	if value, ok := headers[name]; ok {
+		return value
+	}
+	for key, value := range headers {
+		if strings.EqualFold(key, name) {
+			return value
+		}
+	}
+	return ""
 }
 
 // Middleware returns the de-duplication middleware described in the package doc, deriving each
@@ -114,14 +129,18 @@ func Middleware(store Store, key KeyFunc) benzene.Middleware {
 		}
 
 		if err := next(ctx); err != nil {
-			_ = store.Release(ctx, k) // a pipeline-level error must not leave the key claimed
+			// A pipeline-level error must not leave the key claimed. Settle on a cancellation-
+			// detached context: the error is frequently a deadline/timeout, so ctx is often already
+			// cancelled, and a real (e.g. Redis) store's Release would then fail and leak the claim.
+			_ = store.Release(context.WithoutCancel(ctx), k)
 			return err
 		}
 
+		settleCtx := context.WithoutCancel(ctx)
 		if resultSuccessful(ic.Result) {
-			_ = store.Complete(ctx, k, true)
+			_ = store.Complete(settleCtx, k)
 		} else {
-			_ = store.Release(ctx, k) // the handler reported failure - let a redelivery retry
+			_ = store.Release(settleCtx, k) // the handler reported failure - let a redelivery retry
 		}
 		return nil
 	}

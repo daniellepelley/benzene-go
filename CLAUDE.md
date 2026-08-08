@@ -62,8 +62,11 @@ alongside the shared spec.
   atomically claims the key in a pluggable `Store` and runs the handler only the first time - a
   completed duplicate short-circuits to `ignored` (ack), an in-progress one to `conflict` (retry),
   and the winning attempt records `Complete` on success / `Release` on failure so a failure is never
-  permanently suppressed. `InMemoryStore` (TTL + injectable clock, thread-safe) is the zero-dep
-  default; a shared store (Redis) would be a separate module. A store outage fails open.
+  permanently suppressed. `InMemoryStore` (thread-safe, with **separate** short in-progress-lease and
+  long completed-dedup TTLs so a crashed worker's key frees quickly instead of stalling every
+  redelivery, + injectable clock) is the zero-dep default; a shared store (Redis) would be a separate
+  module and must mirror that two-window design. Settlement runs on a cancellation-detached context;
+  a store outage fails open.
 - `ratelimiting/` - best-effort per-instance rate limiting, matching `Benzene.RateLimiting`. A
   pipeline `Middleware(limiter, cost)` that acquires each message's permit cost from a `Limiter`
   without queuing and short-circuits a rejected message to `too-many-requests`; the lease is held

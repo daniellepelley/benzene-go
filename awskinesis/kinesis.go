@@ -9,7 +9,11 @@
 //   - Topic: the stream name, parsed from the record's stream ARN. Unlike a DynamoDB stream record
 //     (which carries an INSERT/MODIFY/REMOVE change type that makes a natural "{table}:{event}"
 //     topic), a Kinesis record is just bytes on a stream, so the stream itself is the routing key.
-//     Falls back to the bare event name when the ARN carries no stream name.
+//     Falls back to the bare event name when the ARN carries no stream name. Note the blast radius:
+//     because the whole stream maps to one topic, a single mismatched Register name makes every
+//     record not-found (a failure) and, with the stop-at-first-failure contract below, stalls the
+//     shard at record 0 until the records age out (Kinesis has no built-in dead-letter queue) - so
+//     the registered topic must match the stream name exactly.
 //   - Body: the record's data, base64-decoded from the wire form Lambda delivers into the raw bytes
 //     the producer wrote (typically JSON), so handlers deserialize ordinary structs.
 //   - Headers: envelope metadata under kinesis-prefixed keys (partition key, sequence number, ...).
