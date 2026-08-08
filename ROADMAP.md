@@ -41,6 +41,13 @@ delivery order - just the current honest picture, kept up to date as things land
   `System.Threading.RateLimiting`; this stays dependency-free with a `Limiter` interface + a
   standard-library `TokenBucket` default (plug a different algorithm behind the interface). Per
   instance, so a fleet of N admits up to N× the rate - authoritative limiting belongs at the gateway.
+- `auth` - authentication/authorization building block (zero dependencies), matching
+  `Benzene.Auth.Core`+`.Basic`: a `Principal` (name/roles/claims) threaded on the context,
+  `BasicAuth(validate, realm)` RFC 7617 authentication middleware (validates via an app-supplied
+  `BasicValidator` - no default credential - and short-circuits `unauthorized` with a
+  `WWW-Authenticate` challenge, or sets the principal), and `Authorize(predicate)`/`RequireRole(role)`
+  authorization middleware (`forbidden` when not permitted). Header-based; authentication is for
+  HTTP-fronted pipelines.
 - `logging` - basic request logging/timing middleware using only `log/slog`: one structured
   line per invocation (topic/version, Benzene status, duration; Info/Warn/Error by outcome).
   The dependency-free visibility option alongside the `diagnostics` module's full OTel feed.

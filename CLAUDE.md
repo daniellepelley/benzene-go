@@ -76,6 +76,16 @@ alongside the shared spec.
   different algorithm - e.g. a `golang.org/x/time/rate` adapter - behind the interface). Per-instance
   only: a fleet of N instances admits up to N× the rate - authoritative limiting belongs at the
   gateway.
+- `auth/` - authentication/authorization building block, matching `Benzene.Auth.Core`+`.Basic`
+  (zero-dep). Go has no `ClaimsPrincipal`, so a `Principal` (name/roles/claims) is a plain value
+  threaded on the context (`ContextWithPrincipal`/`PrincipalFromContext`). `BasicAuth(validate,
+  realm)` is the RFC 7617 authentication middleware (reads `Authorization: Basic`, validates via a
+  `BasicValidator` the app supplies - no default, no hardcoded-credential footgun - and either sets
+  the principal + calls next, or short-circuits `unauthorized` with a `WWW-Authenticate` challenge;
+  splits on the first `:` so a password may contain one). `Authorize(predicate)` /
+  `RequireRole(role)` are the authorization middleware (`forbidden` when the principal is present
+  but not permitted, `unauthorized` when absent). Header-based, so authentication is for
+  HTTP-fronted pipelines.
 - `mesh/` - Phases 1-2 of `docs/design/mesh.md`: service `Descriptor` derived from the
   `Registry` (topics + JSON Schemas derived at startup from the `TReq`/`TRes` types the
   Registry captures at `Register` time, plus the contract `descriptorHash`),
