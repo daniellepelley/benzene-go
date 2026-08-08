@@ -140,6 +140,17 @@ alongside the shared spec.
   descriptor derivation is the introspection path); `Mapping.Covers` is kept for a future diagnostic.
   Reflect-free nil-payload check (dispatch path), so a *typed*-nil pointer payload publishes JSON
   `null` - a documented divergence from .NET's reference-null semantics.
+- `cloudserviceprobe/` - the external, black-box conformance checker for the Cloud Service Profile
+  (`docs/specification/cloud-service-profile.md` §2, §5), matching `Benzene.CloudService.Probe`
+  (zero-dep: `net/http`+`encoding/json`+`crypto/rand`). `Run(ctx, client, baseURL, opts...)` hits a
+  running service over HTTP and returns a **tri-state** `Report` (`Satisfied`/`NotSatisfied`/
+  `Inconclusive`) for R1-R8 - never a bool, never a panic, never an error (unreachability and shape
+  mismatches are verdicts). R8 (trace propagation) and half of R6 (register/heartbeat) are
+  structurally unobservable from one service and stay `Inconclusive` by design; R7 goes
+  `Inconclusive` the moment non-default paths are used. Deliberately **independent** of
+  `httpbinding`/`healthcheck`/`mesh` - it keeps its own `/benzene/*` path constants and parses the
+  wire shapes itself, because the profile is language-neutral and this tool must audit ANY Benzene
+  Cloud Service over HTTP (a non-Go port included); do not couple it back to this port's models.
 - `mesh/` - Phases 1-2 of `docs/design/mesh.md`: service `Descriptor` derived from the
   `Registry` (topics + JSON Schemas derived at startup from the `TReq`/`TRes` types the
   Registry captures at `Register` time, plus the contract `descriptorHash`),

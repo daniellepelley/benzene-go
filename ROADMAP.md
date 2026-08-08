@@ -100,6 +100,21 @@ delivery order - just the current honest picture, kept up to date as things land
   descriptor derivation is this port's introspection path (`Mapping.Covers` is kept for a future
   diagnostic). The nil-payload check is reflect-free (dispatch path), so a successful *typed*-nil
   pointer payload publishes JSON `null` - a documented divergence from .NET's reference-null semantics.
+- `cloudserviceprobe` - the external, black-box conformance checker for the Cloud Service Profile
+  (`docs/specification/cloud-service-profile.md` §2, §5), matching `Benzene.CloudService.Probe`
+  (zero dependencies - `net/http`/`encoding/json`/`crypto/rand`). `Run(ctx, client, baseURL, opts...)`
+  hits a running service over real HTTP and returns a tri-state `Report`
+  (`Satisfied`/`NotSatisfied`/`Inconclusive`) for R1-R8 - never a bool (which would overclaim), never
+  a panic or error (unreachability and shape mismatches are verdicts, matching the "never throws"
+  contract). The honesty rule is load-bearing: R8 (trace propagation) and half of R6
+  (register/heartbeat delivery to a collector) are inherently unobservable by a single-service HTTP
+  probe and stay `Inconclusive`; R7 goes `Inconclusive` the moment the caller points the probe at
+  non-default paths. Deliberately independent of `httpbinding`/`healthcheck`/`mesh` - it keeps its
+  own `/benzene/*` path constants and parses the checked wire shapes (health `isHealthy`, the
+  `{statusCode,headers,body}` envelope, the descriptor `service`/`topics`) itself, because the
+  profile is language-neutral and this tool must be able to audit ANY Benzene Cloud Service reachable
+  over HTTP, a non-Go port included (the same rationale, and the same deliberate duplication, as the
+  .NET package's `CloudServiceProbePaths`).
 - `logging` - basic request logging/timing middleware using only `log/slog`: one structured
   line per invocation (topic/version, Benzene status, duration; Info/Warn/Error by outcome).
   The dependency-free visibility option alongside the `diagnostics` module's full OTel feed.
