@@ -120,6 +120,10 @@ func Middleware(publisher Publisher, mappings []Mapping, opts ...Option) benzene
 			return nil
 		}
 
+		// Mappings are resolved-then-published in one pass (rather than resolving all first, as .NET
+		// does). The set of published events is identical; the only observable difference is that after
+		// a FailMessage stop, a later mapping's When/Project is not evaluated - so those closures must
+		// be side-effect-free (they are pure predicates/projections by contract).
 		for _, mapping := range mappings {
 			publication := mapping.Resolve(ic.Topic, ic.Result)
 			if publication == nil {

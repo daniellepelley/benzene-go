@@ -1,6 +1,7 @@
 package responseevents
 
 import (
+	"reflect"
 	"testing"
 
 	benzene "github.com/daniellepelley/benzene-go"
@@ -145,6 +146,7 @@ func TestCrudConvention_Resolve(t *testing.T) {
 		{"create with Created publishes created", "order:create", benzene.CreatedResult(order), &Publication{EventTopic: benzene.NewTopic("order:created"), Payload: order}},
 		{"update with Updated publishes updated", "order:update", benzene.Updated(order), &Publication{EventTopic: benzene.NewTopic("order:updated"), Payload: order}},
 		{"delete with Deleted publishes deleted", "order:delete", benzene.Deleted(order), &Publication{EventTopic: benzene.NewTopic("order:deleted"), Payload: order}},
+		{"verb match is case-insensitive", "order:Create", benzene.CreatedResult(order), &Publication{EventTopic: benzene.NewTopic("order:Created"), Payload: order}},
 		{"create with wrong status does not fire", "order:create", benzene.Ok(order), nil},
 		{"non-crud verb does not fire", "order:get", benzene.Ok(order), nil},
 		{"crud verb but nil payload does not fire", "order:create", benzene.CreatedResult[any](nil), nil},
@@ -188,7 +190,7 @@ func assertPublication(t *testing.T, got, want *Publication) {
 	if got.EventTopic != want.EventTopic {
 		t.Errorf("EventTopic = %v, want %v", got.EventTopic, want.EventTopic)
 	}
-	if got.Payload != want.Payload {
+	if !reflect.DeepEqual(got.Payload, want.Payload) {
 		t.Errorf("Payload = %+v, want %+v", got.Payload, want.Payload)
 	}
 }

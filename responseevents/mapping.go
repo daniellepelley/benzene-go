@@ -60,7 +60,9 @@ func When(predicate func(benzene.ResultInfo) bool) MapOption {
 }
 
 // Project reshapes the response payload into the event payload before publishing. Returning nil
-// from the projection skips the publish for that message.
+// from the projection skips the publish for that message. The payload arrives as the raw handler
+// response value (an `any`); a projector that type-asserts it owns that assertion - unlike .NET's
+// generic Map<TPayload>, there is no compile-time payload type here to guard a mismatch against.
 func Project(project func(payload any) any) MapOption {
 	return func(m *explicitMapping) { m.project = project }
 }
@@ -136,7 +138,10 @@ func CrudConvention() Mapping { return crudMapping{} }
 type crudMapping struct{}
 
 func (crudMapping) Resolve(sourceTopic benzene.Topic, result benzene.ResultInfo) *Publication {
-	requiredStatus, ok := crudVerbToStatus[crudVerb(sourceTopic)]
+	// The verb is matched case-insensitively (like the explicit mapping's source, and like .NET's
+	// OrdinalIgnoreCase verb table) - but the status comparison stays exact, since Benzene status wire
+	// strings are canonically lower-case.
+	requiredStatus, ok := crudVerbToStatus[strings.ToLower(crudVerb(sourceTopic))]
 	if !ok || result.ResultStatus() != requiredStatus {
 		return nil
 	}
@@ -149,7 +154,7 @@ func (crudMapping) Resolve(sourceTopic benzene.Topic, result benzene.ResultInfo)
 }
 
 func (crudMapping) Covers(sourceTopic benzene.Topic) bool {
-	_, ok := crudVerbToStatus[crudVerb(sourceTopic)]
+	_, ok := crudVerbToStatus[strings.ToLower(crudVerb(sourceTopic))]
 	return ok
 }
 
