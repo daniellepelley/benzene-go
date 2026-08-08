@@ -35,6 +35,12 @@ delivery order - just the current honest picture, kept up to date as things land
   completed duplicate is `ignored` (ack), an in-progress one is `conflict` (retry), and the winning
   attempt records completion on success or releases on failure (a failure is never permanently
   suppressed). `InMemoryStore` (TTL + injectable clock) is the default; a store outage fails open.
+- `ratelimiting` - best-effort per-instance rate-limiting middleware (zero dependencies), matching
+  `Benzene.RateLimiting`: `Middleware(limiter, cost)` acquires each message's permit cost from a
+  `Limiter` and short-circuits a rejected message to `too-many-requests`. The .NET package uses
+  `System.Threading.RateLimiting`; this stays dependency-free with a `Limiter` interface + a
+  standard-library `TokenBucket` default (plug a different algorithm behind the interface). Per
+  instance, so a fleet of N admits up to N× the rate - authoritative limiting belongs at the gateway.
 - `logging` - basic request logging/timing middleware using only `log/slog`: one structured
   line per invocation (topic/version, Benzene status, duration; Info/Warn/Error by outcome).
   The dependency-free visibility option alongside the `diagnostics` module's full OTel feed.

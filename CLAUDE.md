@@ -64,6 +64,15 @@ alongside the shared spec.
   and the winning attempt records `Complete` on success / `Release` on failure so a failure is never
   permanently suppressed. `InMemoryStore` (TTL + injectable clock, thread-safe) is the zero-dep
   default; a shared store (Redis) would be a separate module. A store outage fails open.
+- `ratelimiting/` - best-effort per-instance rate limiting, matching `Benzene.RateLimiting`. A
+  pipeline `Middleware(limiter, cost)` that acquires each message's permit cost from a `Limiter`
+  without queuing and short-circuits a rejected message to `too-many-requests`; the lease is held
+  across the handler so a concurrency-style limiter releases correctly. The .NET package uses
+  `System.Threading.RateLimiting` (a dependency); this keeps the root module dependency-free with a
+  `Limiter` interface + a standard-library thread-safe `TokenBucket` default (an app plugs a
+  different algorithm - e.g. a `golang.org/x/time/rate` adapter - behind the interface). Per-instance
+  only: a fleet of N instances admits up to N× the rate - authoritative limiting belongs at the
+  gateway.
 - `mesh/` - Phases 1-2 of `docs/design/mesh.md`: service `Descriptor` derived from the
   `Registry` (topics + JSON Schemas derived at startup from the `TReq`/`TRes` types the
   Registry captures at `Register` time, plus the contract `descriptorHash`),
