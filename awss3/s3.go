@@ -12,8 +12,12 @@
 //     local routing concern, not a wire contract (an S3 event is not a Benzene envelope), so this
 //     divergence is safe. Falls back to the bare event name when the record carries no bucket.
 //   - Body: an s3Notification JSON object - eventName, awsRegion, bucketName, key, size, etag - the
-//     object metadata the event carries, so handlers deserialize an ordinary struct.
-//   - Headers: s3-prefixed metadata (bucket, key, event name, region, ...).
+//     object metadata the event carries, so handlers deserialize an ordinary struct. The object key
+//     is URL-DECODED here: S3 delivers the key URL-encoded in an event notification (a space as "+",
+//     other characters percent-encoded), so a handler that used the raw value with an S3 client
+//     would miss any object whose name has a space or special character; the key a handler receives
+//     is the real, decoded key.
+//   - Headers: s3-prefixed metadata (bucket, decoded key, event name, region, ...).
 //   - Failure: an S3-to-Lambda notification is an ASYNCHRONOUS invocation (no batch-item-failure
 //     mechanism, unlike the SQS/Kinesis/DynamoDB event source mappings), so a failed record returns
 //     a Go error - triggering AWS's own async-invoke retry (2 attempts then the optional
@@ -28,6 +32,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strconv"
 
 	benzene "github.com/daniellepelley/benzene-go"
@@ -107,32 +112,45 @@ func resolveRequest(record s3EventRecord) wire.Request {
 		topic = record.S3.Bucket.Name + ":" + record.EventName
 	}
 
+	key := decodeKey(record.S3.Object.Key)
+
 	// s3Notification is a struct of scalars; json.Marshal cannot fail on it, so the error is ignored
 	// (an empty body would be the only degradation, and it cannot occur here).
 	body, _ := json.Marshal(s3Notification{
 		EventName:  record.EventName,
 		AwsRegion:  record.AwsRegion,
 		BucketName: record.S3.Bucket.Name,
-		Key:        record.S3.Object.Key,
+		Key:        key,
 		Size:       record.S3.Object.Size,
 		ETag:       record.S3.Object.ETag,
 	})
 
-	return wire.Request{Topic: topic, Headers: recordHeaders(record), Body: string(body)}
+	return wire.Request{Topic: topic, Headers: recordHeaders(record, key), Body: string(body)}
 }
 
-// recordHeaders exposes the S3 record's metadata as s3-prefixed headers, omitting any that are empty.
-func recordHeaders(record s3EventRecord) map[string]string {
+// decodeKey URL-decodes an S3 object key, which arrives URL-encoded in an event notification (a
+// space as "+", other characters percent-encoded). It falls back to the raw value if the key is not
+// valid encoding - S3 always sends a valid encoding, so that path is defensive, not a real case.
+func decodeKey(raw string) string {
+	if decoded, err := url.QueryUnescape(raw); err == nil {
+		return decoded
+	}
+	return raw
+}
+
+// recordHeaders exposes the S3 record's metadata as s3-prefixed headers (key already URL-decoded),
+// omitting any that are empty.
+func recordHeaders(record s3EventRecord, key string) map[string]string {
 	headers := map[string]string{}
-	add := func(key, value string) {
+	add := func(name, value string) {
 		if value != "" {
-			headers[key] = value
+			headers[name] = value
 		}
 	}
 	add("s3-event-name", record.EventName)
 	add("s3-aws-region", record.AwsRegion)
 	add("s3-bucket", record.S3.Bucket.Name)
-	add("s3-key", record.S3.Object.Key)
+	add("s3-key", key)
 	if record.S3.Object.Size > 0 {
 		add("s3-size", strconv.FormatInt(record.S3.Object.Size, 10))
 	}

@@ -64,6 +64,34 @@ func TestResolveRequest_Headers(t *testing.T) {
 	}
 }
 
+func TestResolveRequest_URLDecodesKey(t *testing.T) {
+	// S3 delivers the key URL-encoded (space as "+", specials percent-encoded); the handler must
+	// receive the real key so it can GetObject with it.
+	req := resolveRequest(record("uploads", "ObjectCreated:Put", "my+photo%20final.jpg"))
+	var n s3Notification
+	if err := json.Unmarshal([]byte(req.Body), &n); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if n.Key != "my photo final.jpg" {
+		t.Errorf("body Key = %q, want the URL-decoded %q", n.Key, "my photo final.jpg")
+	}
+	if req.Headers["s3-key"] != "my photo final.jpg" {
+		t.Errorf("s3-key header = %q, want the URL-decoded key", req.Headers["s3-key"])
+	}
+}
+
+func TestResolveRequest_UndecodableKeyFallsBackToRaw(t *testing.T) {
+	// Invalid percent-encoding (S3 never sends this) falls back to the raw value rather than failing.
+	req := resolveRequest(record("uploads", "ObjectCreated:Put", "bad%zzkey"))
+	var n s3Notification
+	if err := json.Unmarshal([]byte(req.Body), &n); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if n.Key != "bad%zzkey" {
+		t.Errorf("body Key = %q, want the raw value on decode failure", n.Key)
+	}
+}
+
 func TestResolveRequest_ZeroSizeOmitsSizeHeader(t *testing.T) {
 	r := record("uploads", "ObjectRemoved:Delete", "gone.txt")
 	r.S3.Object.Size = 0
