@@ -8,6 +8,9 @@ use (
 	./diagnostics
 	./examples/aws-sns-helloworld
 	./examples/aws-sqs-helloworld
+	./examples/grpc-helloworld
+	./examples/kafka-helloworld
+	./examples/opentelemetry-helloworld
 	./grpcbinding
 	./kafka
 	./templates/aws-apigateway

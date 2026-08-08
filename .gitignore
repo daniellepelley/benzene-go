@@ -16,6 +16,14 @@ coverage.html
 /azure-functions-helloworld
 /gcp-cloudrun-helloworld
 /gcp-pubsub-helloworld
+/http-helloworld
+
+# Stray example binaries for the own-module examples: `go build` run inside examples/<id>/ drops
+# an extension-less binary named <id> in that dir (the module boundary keeps it out of the
+# root-anchored ignores above). Build output, never source.
+/examples/grpc-helloworld/grpc-helloworld
+/examples/kafka-helloworld/kafka-helloworld
+/examples/opentelemetry-helloworld/opentelemetry-helloworld
 
 # Stray template binaries: `go build` run inside templates/<id>/ drops an extension-less
 # binary named <id> in that dir. Build output, never source.
