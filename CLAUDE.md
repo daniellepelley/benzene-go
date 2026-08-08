@@ -133,10 +133,17 @@ alongside the shared spec.
   the Functions host forwards invocations over - Azure has no native Go worker): `Handler` for
   HTTP-triggered functions, `QueueHandler` for queue-shaped triggers (Storage Queue, Service
   Bus - failure is a non-2xx outer status, handing the message to the platform's own
-  redelivery/poison-queue machinery), `CosmosHandler` for the Cosmos DB Change Feed trigger, and
+  redelivery/poison-queue machinery), `CosmosHandler` for the Cosmos DB Change Feed trigger,
   `TimerHandler` for the Timer trigger (a scheduled tick carries no message, so it is fan-in like
   `CosmosHandler` - the topic is the scheduled job's identity named in code, the body is the tick's
-  schedule info, and the outer 200/500 is for the host's monitoring since a timer has no redelivery).
+  schedule info, and the outer 200/500 is for the host's monitoring since a timer has no redelivery),
+  and `EventGridHandler` for the Event Grid trigger (matching `Benzene.Azure.Function.EventGrid`):
+  one event per invocation (the host de-batches), the topic is the event **type** (Event Grid
+  schema `eventType` or CloudEvents 1.0 `type`, told apart by `specversion`), the body is the
+  event's `data`, and headers are the envelope's `id`/`subject`/`source`; a non-success dispatch is
+  outer 500 so Event Grid's own retry + dead-letter machinery takes over (same fire-and-forget
+  outer-200/500 as `QueueHandler`). Event Grid trigger only - the SDK-typed BlobStorage/EventHub
+  triggers are deferred (isolated-worker shapes, see `ROADMAP.md`).
   The change-feed binding is **fan-in, not topic-routed** (core-concepts §3, streaming-shaped):
   the whole delivered batch of changed documents is one pipeline invocation - not one per
   document - dispatched to the topic named in code, whose handler takes the batch as a slice

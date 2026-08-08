@@ -121,7 +121,7 @@ a type that can't actually fail to marshal). Run `go test ./... -cover` to see c
 | AWS | Lambda triggered by a Kinesis data stream | `awskinesis` (inbound only, zero deps) - the stream delivers records as plain JSON (data base64-encoded), no SDK needed |
 | AWS | Lambda triggered by an MSK / self-managed Kafka topic | `awskafka` (inbound only, zero deps) - the managed event source mapping delivers records as plain JSON (value base64-encoded), no SDK needed; distinct from the self-hosted `kafka` module |
 | AWS | Lambda invoked by S3 event notifications | `awss3` (inbound only, zero deps) - S3 delivers the notification (object metadata) as plain JSON, no SDK needed |
-| Azure | Azure Functions custom handler (HTTP, queue, or Cosmos DB Change Feed trigger) | `azurefunctions` - Azure has no native Go worker |
+| Azure | Azure Functions custom handler (HTTP, queue, Cosmos DB Change Feed, Timer, or Event Grid trigger) | `azurefunctions` - Azure has no native Go worker |
 | Google Cloud | Cloud Run | None - Cloud Run's contract is "listen on `$PORT`", which `httpbinding` + `net/http` already satisfies |
 | Google Cloud | Cloud Run consuming a Pub/Sub push subscription | `gcppubsub` (inbound only, zero deps) - the push envelope's base64/attributes/ack contract is the one GCP shape `httpbinding` can't cover |
 

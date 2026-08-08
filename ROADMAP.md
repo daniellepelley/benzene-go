@@ -85,6 +85,12 @@ delivery order - just the current honest picture, kept up to date as things land
   `QueueHandler`. The version-aware fan-in rides on `envelope.DispatchTopicResult` (explicit
   programmatic dispatch to a named, possibly-versioned topic - distinct from reading a version
   header off an inbound message, which no binding does; see the versioning note below).
+  `EventGridHandler` covers the Event Grid trigger (the `Benzene.Azure.Function.EventGrid` flavor):
+  one event per invocation (the host de-batches), the topic is the event **type** (Event Grid schema
+  `eventType` or CloudEvents 1.0 `type`, told apart by `specversion`), the body is the event's
+  `data`, headers are the envelope's `id`/`subject`/`source`; a non-success dispatch is outer 500 so
+  Event Grid's own retry + dead-letter machinery takes over. Only the Event Grid trigger is in scope
+  here - the SDK-typed BlobStorage/EventHub function triggers stay deferred (see below).
 - `client` - outbound-client decorators (`CorrelationDecorator`, `RetryDecorator`) over a
   transport-agnostic `Sender` interface; `httpclient.Client` satisfies it structurally. The
   spec's third cross-cutting client behavior, trace-context propagation, is
@@ -259,6 +265,15 @@ unilateral add:
   documented in `examples/gcp-cloudrun-helloworld` - needs
   `github.com/GoogleCloudPlatform/functions-framework-go`, the one Google-specific dependency
   this port has avoided by targeting Cloud Run instead.
+- **SDK-typed Azure Function triggers - Blob Storage and Event Hub** (`Benzene.Azure.Function.
+  BlobStorage`/`.EventHub`). Unlike the HTTP/Queue/Cosmos/Timer/Event Grid triggers - whose
+  custom-handler `Data`/`Metadata` JSON shape is a documented, verifiable contract this port already
+  covers zero-dependency - the Blob and Event Hub triggers in .NET use the isolated-worker SDK
+  binding types (`BlobClient`, `EventData`), not a plain JSON/string the custom handler forwards. A
+  faithful Go port would open the blob container / Event Hub itself (owning the checkpoint/lease),
+  which needs the Azure SDK (`azblob` / `azeventhubs`) - the same own-module shape as `awssqs`. Not
+  started, and deliberately not faked: this repo has no way to verify a fabricated custom-handler
+  shape for them (see the no-fabricated-deployment-config rule).
 - **Richer resilience** (circuit breaker, timeout, bulkhead, hedging, fallback), the equivalent of
   `Benzene.Resilience.Polly`. The retry piece already ships zero-dependency (`resilience` - see
   Done). The rest is what .NET delegates to Polly; the Go analogue would wrap a library such as

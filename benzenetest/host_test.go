@@ -505,6 +505,35 @@ func TestSendTimer_SuccessAndFailure(t *testing.T) {
 	}
 }
 
+func TestSendEventGrid_SuccessAndFailure(t *testing.T) {
+	// The event's type is the topic ("com.example.orderPlaced"); a handler failure surfaces as outer
+	// 500 (Event Grid then retries / dead-letters - fire-and-forget from the handler's view).
+	type order struct {
+		ID string `json:"id"`
+	}
+	withOrders := benzenetest.WithServices(func(b *benzene.ApplicationBuilder) {
+		if err := benzene.Register(b.Registry, benzene.NewTopic("com.example.orderPlaced"), benzene.Handler[order, struct{}](
+			func(_ context.Context, o order) benzene.Result[struct{}] {
+				if o.ID == "" {
+					return benzene.BadRequest[struct{}]("order id is required")
+				}
+				return benzene.Ok(struct{}{})
+			})); err != nil {
+			panic(err)
+		}
+	})
+
+	ok := benzenetest.SendEventGrid(t, benzenetest.NewHost(newTestApp(), withOrders), "eventGridEvent", "/OrderPlaced", "com.example.orderPlaced", order{ID: "o-1"})
+	if ok.StatusCode != http.StatusOK {
+		t.Fatalf("StatusCode = %d, want 200; body = %s", ok.StatusCode, ok.Body)
+	}
+
+	bad := benzenetest.SendEventGrid(t, benzenetest.NewHost(newTestApp(), withOrders), "eventGridEvent", "/OrderPlaced", "com.example.orderPlaced", order{ID: ""})
+	if bad.StatusCode != http.StatusInternalServerError {
+		t.Errorf("StatusCode = %d, want 500 (failed event -> Event Grid retry)", bad.StatusCode)
+	}
+}
+
 func TestSendCosmosChangeFeed_BatchIsCheckpointedOnSuccess(t *testing.T) {
 	host := benzenetest.NewHost(newTestApp(), withOrderBatchHandler())
 

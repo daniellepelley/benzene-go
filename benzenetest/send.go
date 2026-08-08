@@ -276,6 +276,19 @@ func SendKafkaEvent(t TB, host *Host, topic string, partition int, offset int64,
 	return failures
 }
 
+// SendEventGrid pushes an Azure Functions custom-handler invocation for an Event Grid trigger
+// through the azurefunctions EventGridHandler and returns the native HTTP acknowledgement: 200
+// (success - Event Grid considers the event delivered) or 500 (fail - Event Grid's own retry +
+// dead-letter machinery takes over). dataName is the trigger binding's function.json "name" (e.g.
+// "eventGridEvent"), path is that function's local invocation path (e.g. "/OrderPlaced"), eventType
+// is the event's type (which the binding resolves as the Benzene topic), and payload is the event's
+// data. The Azure single-event analogue of SendPubSub, for an Event Grid-triggered consumer.
+func SendEventGrid(t TB, host *Host, dataName, path, eventType string, payload any) HTTPResponse {
+	t.Helper()
+	event := NewEventGridEvent(t, dataName, eventType, payload)
+	return serveHTTP(t, azurefunctions.EventGridHandler(host.builder, dataName), http.MethodPost, path, event)
+}
+
 // serveHTTP drives an http.Handler binding with an in-memory request/response and returns the
 // outer HTTP response - the credential-free, network-free counterpart of a real cloud HTTP
 // delivery.

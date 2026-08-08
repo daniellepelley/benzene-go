@@ -338,6 +338,24 @@ func NewKafkaEvent(t TB, topic string, partition int, offset int64, payload any)
 	return mustMarshal(t, event)
 }
 
+// NewEventGridEvent builds the Azure Functions custom-handler invocation payload for an Event Grid
+// trigger: one Event Grid-schema event under Data[dataName] - the shape azurefunctions.EventGridHandler
+// parses. eventType is the event's type (which the binding resolves as the Benzene topic); payload is
+// the event's data. The event is delivered as a JSON object (the way the host forwards a structured
+// trigger input); the binding also accepts a string-wrapped object, exercised in its own tests.
+func NewEventGridEvent(t TB, dataName, eventType string, payload any) json.RawMessage {
+	t.Helper()
+	event := map[string]any{
+		"id":        "evt-1",
+		"eventType": eventType,
+		"subject":   eventType,
+		"topic":     "/subscriptions/test/resourceGroups/test",
+		"eventTime": "2024-01-01T00:00:00Z",
+		"data":      json.RawMessage(marshalBody(t, payload)),
+	}
+	return mustMarshal(t, map[string]any{"Data": map[string]any{dataName: event}})
+}
+
 func mustMarshal(t TB, v any) json.RawMessage {
 	t.Helper()
 	data, err := json.Marshal(v)
