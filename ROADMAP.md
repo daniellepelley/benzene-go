@@ -29,6 +29,12 @@ delivery order - just the current honest picture, kept up to date as things land
   Go-idiomatic form of `Benzene.DataAnnotations`/`Benzene.FluentValidation`'s ValidationMiddleware -
   a typed handler wrapper rather than a pipeline middleware, because this port's pipeline is
   type-erased until dispatch (no reflection, no struct-tag DSL).
+- `idempotency` - de-duplicates redelivered messages on an at-least-once transport (zero
+  dependencies), matching `Benzene.Idempotency`: a pipeline `Middleware(store, key)` that atomically
+  claims a header-derived key in a pluggable `Store` and runs the handler only the first time - a
+  completed duplicate is `ignored` (ack), an in-progress one is `conflict` (retry), and the winning
+  attempt records completion on success or releases on failure (a failure is never permanently
+  suppressed). `InMemoryStore` (TTL + injectable clock) is the default; a store outage fails open.
 - `logging` - basic request logging/timing middleware using only `log/slog`: one structured
   line per invocation (topic/version, Benzene status, duration; Info/Warn/Error by outcome).
   The dependency-free visibility option alongside the `diagnostics` module's full OTel feed.

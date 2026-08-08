@@ -56,6 +56,14 @@ alongside the shared spec.
   typed; this port's pipeline is type-erased until the router dispatches, so validation composes at
   the **typed handler** as a plain wrapper at registration (no reflection, no struct-tag DSL, no
   dependency - the service writes an ordinary `Validate` function).
+- `idempotency/` - de-duplicates redelivered messages on an at-least-once transport, matching
+  `Benzene.Idempotency`. A **pipeline middleware** (unlike `validation`: it keys on a header, which
+  is on the type-erased `InvocationContext`, so it needs no typed request): `Middleware(store, key)`
+  atomically claims the key in a pluggable `Store` and runs the handler only the first time - a
+  completed duplicate short-circuits to `ignored` (ack), an in-progress one to `conflict` (retry),
+  and the winning attempt records `Complete` on success / `Release` on failure so a failure is never
+  permanently suppressed. `InMemoryStore` (TTL + injectable clock, thread-safe) is the zero-dep
+  default; a shared store (Redis) would be a separate module. A store outage fails open.
 - `mesh/` - Phases 1-2 of `docs/design/mesh.md`: service `Descriptor` derived from the
   `Registry` (topics + JSON Schemas derived at startup from the `TReq`/`TRes` types the
   Registry captures at `Register` time, plus the contract `descriptorHash`),
