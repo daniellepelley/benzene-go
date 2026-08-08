@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -144,14 +145,40 @@ func errorCategory(err error) string {
 }
 
 // stripUserInfo removes any userinfo (basic-auth credentials) from a URL before it is reported, so a
-// "https://user:pass@host" dependency URL does not leak its credentials to a health-check caller. A
-// URL that does not parse is returned unchanged (there is nothing better to do, and it matches the
-// .NET binding); the request itself always uses the original URL.
+// "https://user:pass@host" dependency URL does not leak its credentials to a health-check caller. The
+// request itself always uses the original URL. A URL that does not parse still gets a manual
+// authority strip (below) rather than being echoed verbatim - credential-stripping is a security
+// property, so the fail-safe must never surface the raw credential-bearing string.
 func stripUserInfo(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil || u.User == nil {
+	if u, err := url.Parse(rawURL); err == nil {
+		if u.User == nil {
+			return rawURL
+		}
+		u.User = nil
+		return u.String()
+	}
+	return stripUserInfoFallback(rawURL)
+}
+
+// stripUserInfoFallback removes a "userinfo@" prefix from the authority of a URL that url.Parse
+// rejected (e.g. an invalid port), operating only on the text between "://" and the first "/","?" or
+// "#". It uses the LAST "@" in the authority (a host cannot contain one), so credentials are dropped
+// even when the rest of the URL is malformed; a URL with no authority or no userinfo is returned
+// unchanged.
+func stripUserInfoFallback(rawURL string) string {
+	scheme := strings.Index(rawURL, "://")
+	if scheme < 0 {
 		return rawURL
 	}
-	u.User = nil
-	return u.String()
+	start := scheme + len("://")
+	end := start + strings.IndexAny(rawURL[start:], "/?#")
+	if end < start {
+		end = len(rawURL)
+	}
+	authority := rawURL[start:end]
+	at := strings.LastIndex(authority, "@")
+	if at < 0 {
+		return rawURL
+	}
+	return rawURL[:start] + authority[at+1:] + rawURL[end:]
 }

@@ -138,6 +138,11 @@ func TestStripUserInfo(t *testing.T) {
 		{"strips bare username", "https://user@host/path", "https://host/path"},
 		{"leaves credential-free url", "https://host/path?q=1", "https://host/path?q=1"},
 		{"returns unparseable url unchanged", "://not a url", "://not a url"},
+		// url.Parse rejects the non-numeric port, so the fallback strip must still drop credentials
+		// rather than echo them - the security property must hold even for a malformed URL.
+		{"strips credentials from an unparseable url", "https://user:pass@host:abc/health", "https://host:abc/health"},
+		{"unparseable url without credentials is unchanged", "https://host:abc/health", "https://host:abc/health"},
+		{"unparseable url with no authority is unchanged", "ht!tp:garbage", "ht!tp:garbage"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
