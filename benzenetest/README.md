@@ -46,6 +46,7 @@ are identical - that parallelism is the point.
 | Azure Functions HTTP | `benzenetest.SendAzureHTTP(t, host, method, path, payload, headers)` | `HTTPResponse` |
 | Azure Functions queue | `benzenetest.SendAzureQueue(t, host, dataName, path, topic, payload, headers)` | `HTTPResponse` |
 | Azure Cosmos DB Change Feed | `benzenetest.SendCosmosChangeFeed(t, host, dataName, path, topic, documents)` | `HTTPResponse` (200 checkpoint / 500 redeliver) |
+| Azure Functions Timer | `benzenetest.SendTimer(t, host, dataName, path, topic, tick)` | `HTTPResponse` (200 ok / 500 failed) |
 
 `SendSQS`/`SendSNS` live in the `awssqs`/`awssns` modules (which carry the AWS SDK) rather than in
 `benzenetest`, so the neutral package stays free of cloud SDK dependencies; the naming, argument

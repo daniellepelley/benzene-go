@@ -56,7 +56,9 @@ delivery order - just the current honest picture, kept up to date as things land
   change-feed connection and lease container and forwards each delivered batch of changed
   documents over the same Data/Metadata envelope, so the handler is zero-dependency; the whole
   batch is one pipeline invocation (not one per document) dispatched to the topic the developer
-  names, whose handler receives the batch as a slice (`Handler[[]TDocument, TRes]`).
+  names, whose handler receives the batch as a slice (`Handler[[]TDocument, TRes]`). A
+  `TimerHandler` covers the Timer trigger the same fan-in way (a scheduled tick has no message, so
+  the topic is named in code, the body is the tick's schedule info, outer 200/500, no redelivery).
   Checkpointing is batch-level and on successful return only, so a non-success dispatch answers
   outer HTTP 500 and the host redelivers the entire batch - the same outer-status convention as
   `QueueHandler`. The version-aware fan-in rides on `envelope.DispatchTopicResult` (explicit

@@ -232,6 +232,19 @@ func SendS3Event(t TB, host *Host, bucket, eventName, key string) error {
 	return err
 }
 
+// SendTimer pushes an Azure Functions custom-handler invocation for a Timer trigger tick through the
+// azurefunctions TimerHandler and returns the native HTTP acknowledgement: 200 (the tick was handled
+// successfully) or 500 (it failed - recorded for the host's monitoring; a timer has no redelivery).
+// dataName is the trigger binding's function.json "name" (e.g. "myTimer"), path is that function's
+// local invocation path (e.g. "/NightlyCleanup"), topic is the scheduled job's topic the tick fans
+// into, and tick is the schedule info (or nil for a handler that ignores it). The Azure fan-in
+// analogue of SendCosmosChangeFeed for a scheduled trigger.
+func SendTimer(t TB, host *Host, dataName, path string, topic benzene.Topic, tick any) HTTPResponse {
+	t.Helper()
+	event := NewTimerEvent(t, dataName, tick)
+	return serveHTTP(t, azurefunctions.TimerHandler(host.builder, topic, dataName), http.MethodPost, path, event)
+}
+
 // serveHTTP drives an http.Handler binding with an in-memory request/response and returns the
 // outer HTTP response - the credential-free, network-free counterpart of a real cloud HTTP
 // delivery.

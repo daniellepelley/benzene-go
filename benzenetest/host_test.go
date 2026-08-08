@@ -448,6 +448,37 @@ func TestSendAzureQueue_SuccessAcksAndNackOnFailure(t *testing.T) {
 	}
 }
 
+func TestSendTimer_SuccessAndFailure(t *testing.T) {
+	// A timer tick fans into the "nightly-cleanup" topic; a handler failure surfaces as outer 500
+	// (recorded for the host's monitoring - a timer has no redelivery).
+	type tick struct {
+		IsPastDue bool `json:"IsPastDue"`
+	}
+	withCleanup := func(fail bool) benzenetest.Option {
+		return benzenetest.WithServices(func(b *benzene.ApplicationBuilder) {
+			if err := benzene.Register(b.Registry, benzene.NewTopic("nightly-cleanup"), benzene.Handler[tick, struct{}](
+				func(context.Context, tick) benzene.Result[struct{}] {
+					if fail {
+						return benzene.ServiceUnavailable[struct{}]("cleanup failed")
+					}
+					return benzene.Ok(struct{}{})
+				})); err != nil {
+				panic(err)
+			}
+		})
+	}
+
+	ok := benzenetest.SendTimer(t, benzenetest.NewHost(newTestApp(), withCleanup(false)), "myTimer", "/NightlyCleanup", benzene.NewTopic("nightly-cleanup"), tick{IsPastDue: true})
+	if ok.StatusCode != http.StatusOK {
+		t.Fatalf("StatusCode = %d, want 200; body = %s", ok.StatusCode, ok.Body)
+	}
+
+	bad := benzenetest.SendTimer(t, benzenetest.NewHost(newTestApp(), withCleanup(true)), "myTimer", "/NightlyCleanup", benzene.NewTopic("nightly-cleanup"), tick{})
+	if bad.StatusCode != http.StatusInternalServerError {
+		t.Errorf("StatusCode = %d, want 500 (failed tick)", bad.StatusCode)
+	}
+}
+
 func TestSendCosmosChangeFeed_BatchIsCheckpointedOnSuccess(t *testing.T) {
 	host := benzenetest.NewHost(newTestApp(), withOrderBatchHandler())
 

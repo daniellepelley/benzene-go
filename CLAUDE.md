@@ -104,7 +104,10 @@ alongside the shared spec.
   the Functions host forwards invocations over - Azure has no native Go worker): `Handler` for
   HTTP-triggered functions, `QueueHandler` for queue-shaped triggers (Storage Queue, Service
   Bus - failure is a non-2xx outer status, handing the message to the platform's own
-  redelivery/poison-queue machinery), and `CosmosHandler` for the Cosmos DB Change Feed trigger.
+  redelivery/poison-queue machinery), `CosmosHandler` for the Cosmos DB Change Feed trigger, and
+  `TimerHandler` for the Timer trigger (a scheduled tick carries no message, so it is fan-in like
+  `CosmosHandler` - the topic is the scheduled job's identity named in code, the body is the tick's
+  schedule info, and the outer 200/500 is for the host's monitoring since a timer has no redelivery).
   The change-feed binding is **fan-in, not topic-routed** (core-concepts §3, streaming-shaped):
   the whole delivered batch of changed documents is one pipeline invocation - not one per
   document - dispatched to the topic named in code, whose handler takes the batch as a slice

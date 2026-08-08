@@ -303,6 +303,19 @@ func NewS3Event(t TB, bucket, eventName, key string) json.RawMessage {
 	return mustMarshal(t, event)
 }
 
+// NewTimerEvent builds the Azure Functions custom-handler invocation payload for a Timer trigger
+// tick: the tick's schedule info under Data[dataName] - the shape azurefunctions.TimerHandler
+// parses. tick is the schedule info (e.g. a struct with IsPastDue), or nil for a handler that
+// ignores it. It is delivered as a JSON string wrapping the object, the same double-encoding the
+// Functions host applies to a trigger input (and that NewCosmosChangeFeedEvent reproduces).
+func NewTimerEvent(t TB, dataName string, tick any) json.RawMessage {
+	t.Helper()
+	event := map[string]any{
+		"Data": map[string]json.RawMessage{dataName: mustMarshal(t, marshalBody(t, tick))},
+	}
+	return mustMarshal(t, event)
+}
+
 func mustMarshal(t TB, v any) json.RawMessage {
 	t.Helper()
 	data, err := json.Marshal(v)
