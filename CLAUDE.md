@@ -76,6 +76,18 @@ alongside the shared spec.
   different algorithm - e.g. a `golang.org/x/time/rate` adapter - behind the interface). Per-instance
   only: a fleet of N instances admits up to N× the rate - authoritative limiting belongs at the
   gateway.
+- `resilience/` - retry middleware, matching `Benzene.Resilience` (retry-ONLY, zero-dep; circuit
+  breaker/timeout/hedging/fallback are the Polly package's job in .NET, deferred here pending a
+  dependency decision). `Middleware(opts...)` re-invokes the downstream pipeline with exponential
+  backoff. Because the Go router funnels application failures onto `ic.Result` (not a Go error),
+  retry has two triggers mirroring .NET's `shouldRetry`/`shouldRetryContext`: `WithRetryOnError`
+  (default: any error except context cancellation) for a `next()` error, and `WithRetryOnResult`
+  (default: never - the lever services actually set: `RetryUnsuccessful` or
+  `RetryOnStatus(...)`) for an unsuccessful `ic.Result`. Backoff is `sleep = jitter(min(maxDelay,
+  initialDelay*factor^attempt))` with the cap/jitter on the sleep only (the growth curve stays
+  uncapped - AWS "full jitter", `FullJitter` helper provided), a context-cancellable sleep, and an
+  injectable `WithSleep` for tests. Re-invokes the whole downstream pipeline, so place it above
+  idempotent outbound/port calls, never on an inbound step that already wrote a response.
 - `auth/` - authentication/authorization building block, matching `Benzene.Auth.Core`+`.Basic`
   (zero-dep). Go has no `ClaimsPrincipal`, so a `Principal` (name/roles/claims) is a plain value
   threaded on the context (`ContextWithPrincipal`/`PrincipalFromContext`). `BasicAuth(validate,

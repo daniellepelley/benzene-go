@@ -41,6 +41,15 @@ delivery order - just the current honest picture, kept up to date as things land
   `System.Threading.RateLimiting`; this stays dependency-free with a `Limiter` interface + a
   standard-library `TokenBucket` default (plug a different algorithm behind the interface). Per
   instance, so a fleet of N admits up to N× the rate - authoritative limiting belongs at the gateway.
+- `resilience` - retry middleware (zero dependencies), matching `Benzene.Resilience` (which is
+  retry-ONLY: circuit breaker/timeout/hedging/fallback live in the Polly-backed sibling, deferred
+  here pending a dependency decision). `Middleware(opts...)` re-invokes the downstream pipeline with
+  exponential backoff. The Go router funnels application failures onto `ic.Result` (not a Go error),
+  so retry has two triggers mirroring .NET's `shouldRetry`/`shouldRetryContext`: `WithRetryOnError`
+  (default: any error except context cancellation) and `WithRetryOnResult` (default: never; the lever
+  services set - `RetryUnsuccessful` / `RetryOnStatus(...)`). Backoff caps and jitters the sleep while
+  growing the exponential curve uncapped (AWS "full jitter", `FullJitter` helper), with a
+  context-cancellable sleep and an injectable `WithSleep` for tests.
 - `auth` - authentication/authorization building block (zero dependencies), matching
   `Benzene.Auth.Core`+`.Basic`: a `Principal` (name/roles/claims) threaded on the context,
   `BasicAuth(validate, realm)` RFC 7617 authentication middleware (validates via an app-supplied
@@ -250,6 +259,13 @@ unilateral add:
   documented in `examples/gcp-cloudrun-helloworld` - needs
   `github.com/GoogleCloudPlatform/functions-framework-go`, the one Google-specific dependency
   this port has avoided by targeting Cloud Run instead.
+- **Richer resilience** (circuit breaker, timeout, bulkhead, hedging, fallback), the equivalent of
+  `Benzene.Resilience.Polly`. The retry piece already ships zero-dependency (`resilience` - see
+  Done). The rest is what .NET delegates to Polly; the Go analogue would wrap a library such as
+  `github.com/sony/gobreaker` (or `failsafe-go`) behind the same middleware surface, in its own
+  module so the dependency doesn't spread - the same shape as `awssqs`/`awssns`. A plain
+  timeout/deadline needs no dependency at all (`context.WithTimeout`), so that slice could land in
+  the root `resilience` package first if wanted.
 
 ## Deliberately out of scope (not a "later" - a "no, and here's why")
 
