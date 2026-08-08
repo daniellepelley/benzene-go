@@ -10,6 +10,8 @@ use (
 	./examples/aws-sqs-helloworld
 	./grpcbinding
 	./kafka
+	./templates/aws-apigateway
+	./templates/aws-sqs
 )
 
 // Scoped to this workspace only - never affects real external consumers of either module

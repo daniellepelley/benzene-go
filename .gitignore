@@ -17,6 +17,11 @@ coverage.html
 /gcp-cloudrun-helloworld
 /gcp-pubsub-helloworld
 
+# Stray template binaries: `go build` run inside templates/<id>/ drops an extension-less
+# binary named <id> in that dir. Build output, never source.
+/templates/aws-apigateway/aws-apigateway
+/templates/aws-sqs/aws-sqs
+
 # IDE
 .idea/
 .vscode/
