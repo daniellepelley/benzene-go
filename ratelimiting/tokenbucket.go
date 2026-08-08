@@ -27,11 +27,17 @@ func WithClock(now func() time.Time) TokenBucketOption {
 }
 
 // NewTokenBucket returns a token bucket that refills at ratePerSecond tokens per second up to burst
-// tokens, starting full. A burst below 1 is raised to 1 so a cost-1 message can ever be admitted.
+// tokens, starting full. A burst below 1 is raised to 1 so a cost-1 message can ever be admitted. A
+// negative rate is clamped to 0 (a fixed quota of burst, no refill): a negative refill would drive
+// the token count unbounded-negative and wedge the bucket into permanent rejection, even for the
+// always-free zero-cost path. A rate of exactly 0 is a valid fixed quota.
 func NewTokenBucket(ratePerSecond float64, burst int, opts ...TokenBucketOption) *TokenBucket {
 	capacity := float64(burst)
 	if capacity < 1 {
 		capacity = 1
+	}
+	if ratePerSecond < 0 {
+		ratePerSecond = 0
 	}
 	b := &TokenBucket{rate: ratePerSecond, burst: capacity, tokens: capacity, now: time.Now}
 	for _, opt := range opts {

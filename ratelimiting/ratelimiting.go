@@ -55,7 +55,9 @@ func Middleware(limiter Limiter, cost CostFunc) benzene.Middleware {
 			ic.Result = benzene.TooManyRequests[any]("rate limit exceeded")
 			return nil // short-circuit: the router/handler downstream do not run
 		}
-		defer release()
+		if release != nil { // a well-behaved Limiter returns non-nil on ok; guard a misbehaving one
+			defer release()
+		}
 		return next(ctx)
 	}
 }

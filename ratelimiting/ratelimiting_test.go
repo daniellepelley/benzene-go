@@ -92,6 +92,26 @@ func TestMiddleware_CostFuncValueIsPassedThrough(t *testing.T) {
 	}
 }
 
+// nilReleaseLimiter grants but returns a nil release, to prove the middleware guards against a
+// misbehaving Limiter rather than panicking during the deferred unwind.
+type nilReleaseLimiter struct{}
+
+func (nilReleaseLimiter) Allow(int) (func(), bool) { return nil, true }
+
+func TestMiddleware_NilReleaseFromLimiterDoesNotPanic(t *testing.T) {
+	ran := false
+	ic := runMiddleware(t, nilReleaseLimiter{}, OnePerMessage, func(context.Context) error {
+		ran = true
+		return nil
+	})
+	if !ran {
+		t.Error("handler did not run")
+	}
+	if ic.Result != nil {
+		t.Errorf("result = %+v, want nil (allowed)", ic.Result)
+	}
+}
+
 func TestOnePerMessage(t *testing.T) {
 	if got := OnePerMessage(nil); got != 1 {
 		t.Errorf("OnePerMessage = %d, want 1", got)

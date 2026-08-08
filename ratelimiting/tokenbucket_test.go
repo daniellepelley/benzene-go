@@ -79,6 +79,24 @@ func TestNewTokenBucket_BurstBelowOneRaisedToOne(t *testing.T) {
 	}
 }
 
+func TestNewTokenBucket_NegativeRateClampedToFixedQuota(t *testing.T) {
+	// A negative rate must be clamped to 0 (a fixed quota of burst), not drive tokens negative and
+	// wedge the bucket into permanent rejection.
+	now := time.Unix(0, 0)
+	b := NewTokenBucket(-5, 2, WithClock(func() time.Time { return now }))
+
+	if _, ok := b.Allow(2); !ok {
+		t.Fatal("the initial burst was not granted with a negative (clamped) rate")
+	}
+	now = now.Add(time.Hour) // time passes; a negative rate would have subtracted tokens
+	if _, ok := b.Allow(0); !ok {
+		t.Error("zero-cost rejected after a negative-rate config - the clamp did not hold the floor")
+	}
+	if _, ok := b.Allow(1); ok {
+		t.Error("granted a permit with no refill - a clamped negative rate must not refill")
+	}
+}
+
 func TestTokenBucket_ReleaseIsNoop(t *testing.T) {
 	b := NewTokenBucket(1, 1)
 	release, ok := b.Allow(1)
