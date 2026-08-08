@@ -5,18 +5,18 @@
 //
 // # Model
 //
-//	Saga  ── ordered ──▶  Stage  ── concurrent ──▶  Step (forward + compensation)
+//		Saga  ── ordered ──▶  Stage  ── concurrent ──▶  Step (forward + compensation)
 //
-//   - Step (NewStep[T]) - a forward action producing a T result, paired with an optional
-//     compensation that undoes the effect using that result. Success is the result's IsSuccessful.
-//     A forward that panics is recovered and treated as a failed step. Compensation runs during
-//     rollback ONLY if the step succeeded; a succeeded step with no compensation is "nothing to undo".
-//   - Stage (NewStage) - steps run concurrently; the stage succeeds only if every step succeeds. On
-//     failure it compensates its concurrently-succeeded steps.
-//   - Saga (New) - runs stages in order, threading each stage's published results into a shared
-//     SagaContext so a later stage can read an earlier stage's output. On the first stage failure it
-//     compensates every completed effect in reverse (LIFO) order - the failed stage's succeeded steps
-//     first, then each completed stage newest-first - then returns a Result.
+//	  - Step (NewStep[T]) - a forward action producing a T result, paired with an optional
+//	    compensation that undoes the effect using that result. Success is the result's IsSuccessful.
+//	    A forward that panics is recovered and treated as a failed step. Compensation runs during
+//	    rollback ONLY if the step succeeded; a succeeded step with no compensation is "nothing to undo".
+//	  - Stage (NewStage) - steps run concurrently; the stage succeeds only if every step succeeds. On
+//	    failure it compensates its concurrently-succeeded steps.
+//	  - Saga (New) - runs stages in order, threading each stage's published results into a shared
+//	    SagaContext so a later stage can read an earlier stage's output. On the first stage failure it
+//	    compensates every completed effect in reverse (LIFO) order - the failed stage's succeeded steps
+//	    first, then each completed stage newest-first - then returns a Result.
 //
 // # Capability boundary - in-process only, NO durable crash-resume
 //

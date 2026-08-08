@@ -70,6 +70,20 @@ delivery order - just the current honest picture, kept up to date as things land
   Go form of `CacheEntry.LazyLoad`). `InMemoryStore` (thread-safe, TTL + clock) is the default; a
   shared store is its own module. Degrades safely (read error = miss, write error ignored, load
   error returned and not cached).
+- `saga` - in-code saga orchestrator (zero dependencies, in-process), matching `Benzene.Saga`:
+  `New(stages)` runs `NewStage(steps)` in order, steps within a stage concurrently, each
+  `NewStep[T](forward, compensate)` a forward action producing a `T` result + an optional
+  compensation. On the first stage failure it compensates every completed effect in reverse (LIFO)
+  order and returns a `Result` (`OutcomeSucceeded`/`RolledBack`/`PartiallyRolledBack`, with
+  `CompensationFailures` for orphaned effects an operator must attend to). A `SagaContext` threads a
+  stage's published results into later stages (`Set`/`Get[T]`, typed or keyed - the .NET fluent
+  generic builder becomes free constructors + free functions, since Go methods can't be generic; the
+  type key uses `reflect.TypeFor` off the dispatch path). `Run(ctx)` is the zero-overhead default;
+  `RunWith(ctx, RunOptions)` adds an observability `StateStore` (`InMemoryStateStore` - records
+  progress, does NOT resume a crashed saga) and a `RetryPolicy` (re-runs only a CLEAN rollback, never
+  a partial one, with exponential backoff). Deliberately in-process only - steps are closures that
+  can't be rehydrated, so there is no durable crash-resume (that's a durable workflow engine's job:
+  Step Functions, Durable Functions, Temporal); this matches `Benzene.Saga`'s own capability boundary.
 - `logging` - basic request logging/timing middleware using only `log/slog`: one structured
   line per invocation (topic/version, Benzene status, duration; Info/Warn/Error by outcome).
   The dependency-free visibility option alongside the `diagnostics` module's full OTel feed.

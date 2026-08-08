@@ -111,6 +111,19 @@ alongside the shared spec.
   clock) is the default; a shared store (Redis) implements the same interface in its own module.
   Degrades safely: a store read error is a miss, a write error is ignored, a `load` error is
   returned and not cached. Caching is a handler-level concern, so it's a helper, not a middleware.
+- `saga/` - in-code saga orchestrator, matching `Benzene.Saga` (zero-dep, in-process): `New(stages)`
+  runs `NewStage(steps)` in order; steps within a stage run concurrently; each `NewStep[T](forward,
+  compensate)` pairs a forward action producing a `T` result with an optional compensation. On the
+  first stage failure it compensates every completed effect in **reverse (LIFO) order** and returns a
+  `Result` (`OutcomeSucceeded`/`RolledBack`/`PartiallyRolledBack`, `CompensationFailures` for orphaned
+  effects). A `SagaContext` threads a stage's published results to later stages (`Set`/`Get[T]`, typed
+  or keyed). `Run(ctx)` is the zero-overhead default; `RunWith(ctx, RunOptions{...})` adds an
+  observability `StateStore` (`InMemoryStateStore`; records progress, does **not** resume a crashed
+  saga) and a `RetryPolicy` (re-runs only a **clean** rollback, never a partial one, with exponential
+  backoff). Go methods can't be generic, so the .NET fluent builder becomes free constructors and
+  `Set`/`Get[T]` free functions; type-keyed context uses `reflect.TypeFor` at set/get time (off the
+  message dispatch path, like `registry.go`). **In-process only, no durable crash-resume** - steps are
+  closures that can't be rehydrated; for that, use Step Functions/Durable Functions/Temporal.
 - `mesh/` - Phases 1-2 of `docs/design/mesh.md`: service `Descriptor` derived from the
   `Registry` (topics + JSON Schemas derived at startup from the `TReq`/`TRes` types the
   Registry captures at `Register` time, plus the contract `descriptorHash`),
