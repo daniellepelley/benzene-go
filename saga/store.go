@@ -13,7 +13,9 @@ import (
 // that cannot be rehydrated (see the package doc). The engine calls the methods in order -
 // RecordStarted, then RecordStageCompleted per completed stage, then RecordFinished - once per
 // attempt, threading the run's ctx through. Recording is best-effort observability: a store method
-// returns nothing, so a store outage never fails the saga (a durable adapter logs its own errors).
+// returns nothing, so a store that surfaces its own errors by logging/returning never fails the saga.
+// The engine does not recover a store call, so an adapter MUST NOT panic - handle a backend outage
+// internally (log and move on), never with a panic that would escape Run/RunWith to the caller.
 type StateStore interface {
 	// RecordStarted records that a saga run attempt has started.
 	RecordStarted(ctx context.Context, run RunInfo)

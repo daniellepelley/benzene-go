@@ -227,13 +227,17 @@ func rollBack(ctx context.Context, sc *SagaContext, completed []Stage, failed St
 // whose compensation itself failed - the orphaned effects surfaced on the Result.
 func collectCompensationFailures(completed []Stage, failed Stage) []Step {
 	var failures []Step
-	for _, stage := range append(completed, failed) {
+	collect := func(stage Stage) {
 		for _, st := range stage.steps {
 			if st.State() == StepCompensationFailed {
 				failures = append(failures, st)
 			}
 		}
 	}
+	for _, stage := range completed {
+		collect(stage)
+	}
+	collect(failed) // kept separate: appending it onto `completed` would alias that slice's backing array
 	return failures
 }
 

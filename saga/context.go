@@ -37,26 +37,27 @@ import (
 // SagaContext carries the results of completed saga steps so that a later stage can read what an
 // earlier stage produced (e.g. a stage-2 step using the tenant id a stage-1 step created). A
 // succeeded step publishes its result here after its stage completes, keyed by the value's type (via
-// Set) or by an explicit key when a stage produces more than one value of the same type.
+// Set) or by an explicit string key when a stage produces more than one value of the same type.
 //
 // Steps within a single stage run concurrently but only ever READ earlier stages' values during that
 // concurrent phase; writes (Publish) happen single-threaded after each stage's barrier. The RWMutex
 // makes that safe even if a step's forward writes a value directly, so misuse cannot data-race.
 type SagaContext struct {
 	mu    sync.RWMutex
-	items map[string]any
+	items map[any]any
 }
 
-func newSagaContext() *SagaContext { return &SagaContext{items: map[string]any{}} }
+func newSagaContext() *SagaContext { return &SagaContext{items: map[any]any{}} }
 
-// keyFor derives the context key: the explicit key when a non-empty one is given, else the fully
-// qualified name of T (so a value is retrievable by its type alone). Type identity is resolved via
-// reflect at set/get time, off the message dispatch path - the same use registry.go makes of it.
-func keyFor[T any](key []string) string {
+// keyFor derives the context key: an explicit string key when a non-empty one is given, else the
+// reflect.Type of T itself. Using the Type value (identity-unique, resolved at set/get time off the
+// message dispatch path) rather than its name means two same-named types in different packages never
+// collide, and a type key can never be confused with a caller's explicit string key.
+func keyFor[T any](key []string) any {
 	if len(key) > 0 && key[0] != "" {
 		return key[0]
 	}
-	return reflect.TypeFor[T]().String()
+	return reflect.TypeFor[T]()
 }
 
 // Set stores value in sc, keyed by an explicit key or, with none, by T's type. Used by a step's
