@@ -175,7 +175,9 @@ func RetryOnStatus(statuses ...benzene.Status) func(benzene.ResultInfo) bool {
 // [0, delay). Pass it to WithJitter to spread out retries from many callers that backed off at the
 // same moment, instead of them all retrying in lockstep (the "thundering herd" problem plain
 // exponential backoff does not address). r may be nil, in which case the (concurrency-safe) global
-// source is used.
+// source is used. A NON-nil r must not be shared across concurrent invocations: *rand.Rand is not
+// safe for concurrent use (like .NET's Random), so pass nil for the shared/global case or give each
+// caller its own r.
 func FullJitter(r *rand.Rand) func(time.Duration) time.Duration {
 	return func(delay time.Duration) time.Duration {
 		if delay <= 0 {
@@ -212,6 +214,11 @@ func growDelay(d time.Duration, factor float64) time.Duration {
 
 // contextSleep waits for d, or returns early with the context's error if it is cancelled first. A
 // non-positive d does not wait but still honors an already-cancelled context.
+//
+// Unlike .NET's RetryMiddleware, there is no clamp on the sleep magnitude: .NET must cap at
+// int.MaxValue ms because Task.Delay throws above that, but Go's timer guards nanotime()+d overflow
+// internally (a huge duration just waits at the runtime's max deadline), so even a MaxInt64 delay is
+// safe here and needs no MaxSleep equivalent.
 func contextSleep(ctx context.Context, d time.Duration) error {
 	if d <= 0 {
 		select {
