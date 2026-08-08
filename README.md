@@ -54,6 +54,53 @@ func main() {
 See `examples/helloworld/` for a complete version of this with dependency injection, a health
 check, and both HTTP entry points wired through the three-phase `App` lifecycle.
 
+## Scaffold a new service
+
+The `templates/` directory holds starter projects - the `dotnet new` equivalent for the Go port,
+driven by [`gonew`](https://pkg.go.dev/golang.org/x/tools/cmd/gonew)
+(`golang.org/x/tools/cmd/gonew`). `gonew` instantiates a project by copying a template module and
+rewriting its module path to the one you choose - no template engine, no placeholders to fill in
+beyond the module path.
+
+```bash
+# API Gateway-fronted Lambda
+go run golang.org/x/tools/cmd/gonew@latest \
+  github.com/daniellepelley/benzene-go/templates/aws-apigateway example.com/myservice
+
+# SQS-triggered Lambda
+go run golang.org/x/tools/cmd/gonew@latest \
+  github.com/daniellepelley/benzene-go/templates/aws-sqs example.com/myservice
+
+cd myservice && go test ./...
+```
+
+Replace `example.com/myservice` with your own module path (its last segment becomes the new
+directory name).
+
+| Starter | Hosts |
+|---|---|
+| `aws-apigateway` | AWS Lambda fronted by API Gateway HTTP requests (plus direct wire-envelope invokes) |
+| `aws-sqs` | AWS Lambda triggered by an SQS event source mapping |
+
+Each starter generates a complete, buildable module: a composition root (`newApp` in `main.go`) +
+a demo greet handler behind a `Greeter` port + the transport host + a `benzenetest` component test
+that drives a real message through the whole pipeline + an AWS SAM `template.yaml` + a `Dockerfile`.
+
+**Module resolution caveat:** the templates require `github.com/daniellepelley/benzene-go` (and, for
+`aws-sqs`, the `awssqs` module) at their published version with **no `replace` directive** - a
+shipped `replace` would break the moment `gonew` copies the module out of this repo. Until those
+modules are tagged and published, a freshly generated project needs a `replace` **you** add pointing
+at a local checkout:
+
+```bash
+# in the generated project, while benzene-go is not yet published:
+go mod edit -replace github.com/daniellepelley/benzene-go=/path/to/benzene-go
+go mod tidy
+```
+
+See [`templates/README.md`](templates/README.md) for the full model, per-template detail, and the
+maintainer verification steps.
+
 ## Packages
 
 | Package | Coverage | What it is |
@@ -93,6 +140,10 @@ check, and both HTTP entry points wired through the three-phase `App` lifecycle.
 | `examples/aws-sns-helloworld` ([own module](RELEASING.md)) | - | A publisher Lambda (Function URL) forwarding to SNS + a consumer Lambda subscribed to that topic |
 | `examples/aws-dynamodb-helloworld` | - | A consumer Lambda triggered by a DynamoDB table's stream via `awsdynamodb.Handler` - write to the table to drive it, no publisher code |
 | `examples/mesh-helloworld` | - | The whole mesh story in one process: a `meshd` collector + two meshed services with a cross-service traced call - open the Mesh View and watch the derived fleet |
+| `examples/http-helloworld` | - | The greet handler on a standalone `net/http` server via `httpbinding` - a net/http middleware wrapping the binding, plus graceful shutdown (the analog of the .NET `Asp` example) |
+| `examples/grpc-helloworld` ([own module](RELEASING.md)) | - | The greet handler over a gRPC unary RPC via `grpcbinding` (protoc-free `structpb` stand-in messages) + an outbound `grpcbinding.Client` round trip |
+| `examples/kafka-helloworld` ([own module](RELEASING.md)) | - | A Kafka consumer group running the greet handler via the `kafka` module + an outbound `kafka.Client` publish path |
+| `examples/opentelemetry-helloworld` ([own module](RELEASING.md)) | - | The greet handler wrapped in `diagnostics` tracing middleware - one OTel span per invocation plus a nested adapter span, exported to stdout |
 
 Every non-test-only package sits at 100% coverage, or just under it where the gap is a
 defensively-unreachable branch (documented at the call site - e.g. a `json.Marshal` failure on
@@ -124,7 +175,8 @@ This is a multi-module repo - see `RELEASING.md` for the full explanation (and f
 decentralized module distribution works at all, if you're coming from an ecosystem with a
 central package registry like NuGet). Short version: everything is one module except `awssqs`,
 `awssns`, `awseventbridge`, `kafka`, `diagnostics`, `grpcbinding`, `examples/aws-sqs-helloworld`,
-and `examples/aws-sns-helloworld`, which have their own `go.mod` because they need real
+`examples/aws-sns-helloworld`, `examples/grpc-helloworld`, `examples/kafka-helloworld`, and
+`examples/opentelemetry-helloworld`, which have their own `go.mod` because they need real
 third-party dependencies the rest of the repo shouldn't carry. `go.work` ties them together for
 local development.
 
