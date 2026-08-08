@@ -325,6 +325,55 @@ func TestSendDynamoDBStream_FailedRecordIsReportedBySequenceNumber(t *testing.T)
 	}
 }
 
+func TestSendS3Event_SuccessAndFailure(t *testing.T) {
+	// The topic resolves to "{bucket}:{eventName}"; a handler failure surfaces as a Go error (which
+	// would trigger AWS's async-invoke retry), not a silent drop.
+	withUploads := benzenetest.WithServices(func(b *benzene.ApplicationBuilder) {
+		if err := benzene.Register(b.Registry, benzene.NewTopic("uploads:ObjectCreated:Put"), benzene.Handler[map[string]any, struct{}](
+			func(_ context.Context, n map[string]any) benzene.Result[struct{}] {
+				if n["key"] == "bad.jpg" {
+					return benzene.ServiceUnavailable[struct{}]("processing failed")
+				}
+				return benzene.Ok(struct{}{})
+			})); err != nil {
+			panic(err)
+		}
+	})
+
+	if err := benzenetest.SendS3Event(t, benzenetest.NewHost(newTestApp(), withUploads), "uploads", "ObjectCreated:Put", "good.jpg"); err != nil {
+		t.Errorf("SendS3Event(valid) error = %v, want nil", err)
+	}
+	if err := benzenetest.SendS3Event(t, benzenetest.NewHost(newTestApp(), withUploads), "uploads", "ObjectCreated:Put", "bad.jpg"); err == nil {
+		t.Error("SendS3Event(failing) error = nil, want a Go error for async-invoke retry")
+	}
+}
+
+func TestSendKinesisStream_SuccessAndFailure(t *testing.T) {
+	// The topic resolves to the stream name ("orders"); a handler failure is reported by the
+	// record's sequence number for redelivery.
+	withOrders := benzenetest.WithServices(func(b *benzene.ApplicationBuilder) {
+		if err := benzene.Register(b.Registry, benzene.NewTopic("orders"), benzene.Handler[orderDoc, struct{}](
+			func(_ context.Context, o orderDoc) benzene.Result[struct{}] {
+				if o.ID == "" {
+					return benzene.BadRequest[struct{}]("order id is required")
+				}
+				return benzene.Ok(struct{}{})
+			})); err != nil {
+			panic(err)
+		}
+	})
+
+	ok := benzenetest.SendKinesisStream(t, benzenetest.NewHost(newTestApp(), withOrders), "orders", "seq-1", orderDoc{ID: "o-1", Amount: 9.99})
+	if len(ok) != 0 {
+		t.Errorf("failures = %v, want none for a valid record", ok)
+	}
+
+	bad := benzenetest.SendKinesisStream(t, benzenetest.NewHost(newTestApp(), withOrders), "orders", "seq-2", orderDoc{ID: "", Amount: 1})
+	if len(bad) != 1 || bad[0] != "seq-2" {
+		t.Errorf("failures = %v, want [seq-2] (reported for redelivery)", bad)
+	}
+}
+
 func TestSendDynamoDBStream_RemoveUsesOldImage(t *testing.T) {
 	// A REMOVE carries no NewImage; the helper must place the row under OldImage and the binding's
 	// NewImage-else-OldImage-else-Keys fallback must still deliver it to the handler.
@@ -396,6 +445,37 @@ func TestSendAzureQueue_SuccessAcksAndNackOnFailure(t *testing.T) {
 	nack := benzenetest.SendAzureQueue(t, host, "queueItem", "/GreetQueue", benzene.NewTopic("greet"), greetRequest{Name: ""}, nil)
 	if nack.StatusCode != http.StatusInternalServerError {
 		t.Errorf("StatusCode = %d, want 500 (nack, redeliver)", nack.StatusCode)
+	}
+}
+
+func TestSendTimer_SuccessAndFailure(t *testing.T) {
+	// A timer tick fans into the "nightly-cleanup" topic; a handler failure surfaces as outer 500
+	// (recorded for the host's monitoring - a timer has no redelivery).
+	type tick struct {
+		IsPastDue bool `json:"IsPastDue"`
+	}
+	withCleanup := func(fail bool) benzenetest.Option {
+		return benzenetest.WithServices(func(b *benzene.ApplicationBuilder) {
+			if err := benzene.Register(b.Registry, benzene.NewTopic("nightly-cleanup"), benzene.Handler[tick, struct{}](
+				func(context.Context, tick) benzene.Result[struct{}] {
+					if fail {
+						return benzene.ServiceUnavailable[struct{}]("cleanup failed")
+					}
+					return benzene.Ok(struct{}{})
+				})); err != nil {
+				panic(err)
+			}
+		})
+	}
+
+	ok := benzenetest.SendTimer(t, benzenetest.NewHost(newTestApp(), withCleanup(false)), "myTimer", "/NightlyCleanup", benzene.NewTopic("nightly-cleanup"), tick{IsPastDue: true})
+	if ok.StatusCode != http.StatusOK {
+		t.Fatalf("StatusCode = %d, want 200; body = %s", ok.StatusCode, ok.Body)
+	}
+
+	bad := benzenetest.SendTimer(t, benzenetest.NewHost(newTestApp(), withCleanup(true)), "myTimer", "/NightlyCleanup", benzene.NewTopic("nightly-cleanup"), tick{})
+	if bad.StatusCode != http.StatusInternalServerError {
+		t.Errorf("StatusCode = %d, want 500 (failed tick)", bad.StatusCode)
 	}
 }
 

@@ -23,6 +23,36 @@ delivery order - just the current honest picture, kept up to date as things land
 - `httpbinding` - native REST-style HTTP binding + envelope-over-HTTP.
 - `httpclient` - the HTTP outbound client (one `Send` method).
 - `healthcheck` - reserved-topic health-check interception middleware.
+- `validation` - request-validation building block (zero dependencies): `Validated(validator,
+  handler)` wraps a handler so an invalid request short-circuits to a `validation-error` result
+  before the handler runs, plus `Validator[T]`/`ValidatorFunc[T]` and a `Combine` composer. The
+  Go-idiomatic form of `Benzene.DataAnnotations`/`Benzene.FluentValidation`'s ValidationMiddleware -
+  a typed handler wrapper rather than a pipeline middleware, because this port's pipeline is
+  type-erased until dispatch (no reflection, no struct-tag DSL).
+- `idempotency` - de-duplicates redelivered messages on an at-least-once transport (zero
+  dependencies), matching `Benzene.Idempotency`: a pipeline `Middleware(store, key)` that atomically
+  claims a header-derived key in a pluggable `Store` and runs the handler only the first time - a
+  completed duplicate is `ignored` (ack), an in-progress one is `conflict` (retry), and the winning
+  attempt records completion on success or releases on failure (a failure is never permanently
+  suppressed). `InMemoryStore` (TTL + injectable clock) is the default; a store outage fails open.
+- `ratelimiting` - best-effort per-instance rate-limiting middleware (zero dependencies), matching
+  `Benzene.RateLimiting`: `Middleware(limiter, cost)` acquires each message's permit cost from a
+  `Limiter` and short-circuits a rejected message to `too-many-requests`. The .NET package uses
+  `System.Threading.RateLimiting`; this stays dependency-free with a `Limiter` interface + a
+  standard-library `TokenBucket` default (plug a different algorithm behind the interface). Per
+  instance, so a fleet of N admits up to N× the rate - authoritative limiting belongs at the gateway.
+- `auth` - authentication/authorization building block (zero dependencies), matching
+  `Benzene.Auth.Core`+`.Basic`: a `Principal` (name/roles/claims) threaded on the context,
+  `BasicAuth(validate, realm)` RFC 7617 authentication middleware (validates via an app-supplied
+  `BasicValidator` - no default credential - and short-circuits `unauthorized` with a
+  `WWW-Authenticate` challenge, or sets the principal), and `Authorize(predicate)`/`RequireRole(role)`
+  authorization middleware (`forbidden` when not permitted). Header-based; authentication is for
+  HTTP-fronted pipelines.
+- `cache` - caching building block (zero dependencies), matching the essence of `Benzene.Cache.Core`:
+  a pluggable `Store` (Get/Set/Delete with TTL) + a generic read-through helper `GetOrLoad[T]` (the
+  Go form of `CacheEntry.LazyLoad`). `InMemoryStore` (thread-safe, TTL + clock) is the default; a
+  shared store is its own module. Degrades safely (read error = miss, write error ignored, load
+  error returned and not cached).
 - `logging` - basic request logging/timing middleware using only `log/slog`: one structured
   line per invocation (topic/version, Benzene status, duration; Info/Warn/Error by outcome).
   The dependency-free visibility option alongside the `diagnostics` module's full OTel feed.
@@ -38,7 +68,9 @@ delivery order - just the current honest picture, kept up to date as things land
   change-feed connection and lease container and forwards each delivered batch of changed
   documents over the same Data/Metadata envelope, so the handler is zero-dependency; the whole
   batch is one pipeline invocation (not one per document) dispatched to the topic the developer
-  names, whose handler receives the batch as a slice (`Handler[[]TDocument, TRes]`).
+  names, whose handler receives the batch as a slice (`Handler[[]TDocument, TRes]`). A
+  `TimerHandler` covers the Timer trigger the same fan-in way (a scheduled tick has no message, so
+  the topic is named in code, the body is the tick's schedule info, outer 200/500, no redelivery).
   Checkpointing is batch-level and on successful return only, so a non-success dispatch answers
   outer HTTP 500 and the host redelivers the entire batch - the same outer-status convention as
   `QueueHandler`. The version-aware fan-in rides on `envelope.DispatchTopicResult` (explicit
@@ -100,6 +132,22 @@ delivery order - just the current honest picture, kept up to date as things land
   Records are ordered CDC, so processing is sequential and stops at the first failure, reporting
   that record's `SequenceNumber` for Lambda to checkpoint and redeliver - deliberately not
   `awssqs`'s concurrent fan-out.
+- `awskinesis` - Kinesis Data Streams inbound binding (zero dependencies, root module), the direct
+  sibling of `awsdynamodb` and matching `Benzene.Aws.Lambda.Kinesis`: a Lambda `Handler` for a
+  stream event source mapping. Topic is the stream name parsed from the record's stream ARN (a
+  Kinesis record has no per-record event type, so the stream is the routing key); body is the
+  record's `data` base64-decoded into the producer's bytes (typically JSON); headers are
+  `kinesis-`-prefixed metadata. No outbound side (writing the stream is the publish), so no SDK and
+  no separate module. Same ordered stop-at-first-failure + first-`SequenceNumber` checkpointing as
+  `awsdynamodb`.
+- `awss3` - S3 event-notification inbound binding (zero dependencies, root module), matching
+  `Benzene.Aws.Lambda.S3`: a Lambda `Handler` invoked by S3 on object create/remove. Topic is
+  `{bucketName}:{eventName}` (bucket-qualified for consistency with `awsdynamodb`/`awskinesis`; .NET
+  routes on the bare event name - the S3 topic is a local routing concern, not a wire contract);
+  body is the object metadata (bucket/key/size/etag, not the contents); headers are `s3-`-prefixed.
+  An S3 notification is an async invocation, so a failed record returns a Go error (async-invoke
+  retry, like `awssns`) rather than a batch-item report - and deliberately not the .NET binding's
+  fire-and-forget swallow, per the no-silent-drop rule. Handlers must be idempotent (at-least-once).
 - `awseventbridge` - AWS EventBridge binding, in its **own Go module** (see `RELEASING.md`),
   matching the main repo's `transport-bindings.md` EventBridge entry exactly: an inbound
   `Handler` for a Lambda invoked by an EventBridge rule (zero dependencies; topic is
@@ -152,8 +200,9 @@ delivery order - just the current honest picture, kept up to date as things land
   in the Go standard library) and `google.golang.org/protobuf` (proto3-JSON).
 - `conformance` - runs this port against the main repo's vendored language-neutral fixtures.
 - Examples: `helloworld` (plain HTTP + DI + health check), `aws-lambda-helloworld`,
-  `azure-functions-helloworld`, `gcp-cloudrun-helloworld` (no new package needed for GCP - see
-  its README), `aws-sqs-helloworld` (publisher + consumer Lambdas, its own module),
+  `aws-dynamodb-helloworld`, `aws-kinesis-helloworld`, and `aws-s3-helloworld` (consumer-only
+  event/stream Lambdas, root module), `azure-functions-helloworld`, `gcp-cloudrun-helloworld` (no new package needed for GCP -
+  see its README), `aws-sqs-helloworld` (publisher + consumer Lambdas, its own module),
   `aws-sns-helloworld` (publisher + consumer Lambdas, its own module),
   `gcp-pubsub-helloworld` (a Cloud Run service consuming a Pub/Sub push subscription),
   `mesh-helloworld` (collector + two meshed services, local-only) - each cloud example with a

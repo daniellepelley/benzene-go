@@ -40,10 +40,13 @@ are identical - that parallelism is the point.
 | AWS SQS | `awssqs.SendSQS(t, host, topic, payload, headers)` | `awssqs.SQSResponse` |
 | AWS SNS | `awssns.SendSNS(t, host, topic, payload, headers)` | `error` |
 | AWS DynamoDB Streams | `benzenetest.SendDynamoDBStream(t, host, eventName, tableName, sequenceNumber, newImage)` | `[]string` (failed sequence numbers) |
+| AWS Kinesis Data Streams | `benzenetest.SendKinesisStream(t, host, streamName, sequenceNumber, payload)` | `[]string` (failed sequence numbers) |
+| AWS S3 event notification | `benzenetest.SendS3Event(t, host, bucket, eventName, key)` | `error` (nil ok; non-nil triggers async retry) |
 | GCP Pub/Sub | `benzenetest.SendPubSub(t, host, topic, payload, headers)` | `HTTPResponse` (204 ack / 500 nack) |
 | Azure Functions HTTP | `benzenetest.SendAzureHTTP(t, host, method, path, payload, headers)` | `HTTPResponse` |
 | Azure Functions queue | `benzenetest.SendAzureQueue(t, host, dataName, path, topic, payload, headers)` | `HTTPResponse` |
 | Azure Cosmos DB Change Feed | `benzenetest.SendCosmosChangeFeed(t, host, dataName, path, topic, documents)` | `HTTPResponse` (200 checkpoint / 500 redeliver) |
+| Azure Functions Timer | `benzenetest.SendTimer(t, host, dataName, path, topic, tick)` | `HTTPResponse` (200 ok / 500 failed) |
 
 `SendSQS`/`SendSNS` live in the `awssqs`/`awssns` modules (which carry the AWS SDK) rather than in
 `benzenetest`, so the neutral package stays free of cloud SDK dependencies; the naming, argument

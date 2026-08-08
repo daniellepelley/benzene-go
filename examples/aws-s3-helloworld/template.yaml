@@ -1,0 +1,38 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  benzene-go aws-s3-helloworld example - an `uploads` S3 bucket, and a consumer Lambda invoked by
+  that bucket's ObjectCreated notifications.
+
+Globals:
+  Function:
+    Timeout: 5
+    MemorySize: 128
+    Architectures:
+      - arm64
+
+Resources:
+  ConsumerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      Events:
+        UploadEvent:
+          Type: S3
+          Properties:
+            Bucket: !Ref UploadsBucket
+            Events: s3:ObjectCreated:Put
+    Metadata:
+      DockerTag: aws-s3-helloworld
+      DockerContext: ../..
+      Dockerfile: examples/aws-s3-helloworld/Dockerfile
+
+  # SAM wires the S3 notification to the function and creates the bucket. The bucket is declared here
+  # (rather than implicitly) so its name is an output; SAM adds the Lambda invoke permission.
+  UploadsBucket:
+    Type: AWS::S3::Bucket
+
+Outputs:
+  UploadsBucketName:
+    Description: The S3 bucket to upload objects to (each ObjectCreated:Put invokes the consumer)
+    Value: !Ref UploadsBucket

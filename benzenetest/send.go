@@ -10,7 +10,9 @@ import (
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/awsdynamodb"
+	"github.com/daniellepelley/benzene-go/awskinesis"
 	"github.com/daniellepelley/benzene-go/awslambda"
+	"github.com/daniellepelley/benzene-go/awss3"
 	"github.com/daniellepelley/benzene-go/azurefunctions"
 	"github.com/daniellepelley/benzene-go/gcppubsub"
 	"github.com/daniellepelley/benzene-go/httpbinding"
@@ -190,6 +192,57 @@ func SendDynamoDBStream(t TB, host *Host, eventName, tableName, sequenceNumber s
 		failures[i] = f.ItemIdentifier
 	}
 	return failures
+}
+
+// SendKinesisStream pushes a Lambda Kinesis stream delivery for one record through the awskinesis
+// binding and returns the reported batch-item failures (each entry the failing record's sequence
+// number) - empty when the record was handled successfully. The topic resolves to the stream name
+// and payload is the plain record body (marshaled and base64-encoded by the builder). The Kinesis
+// analogue of SendDynamoDBStream, for a stream-triggered consumer.
+func SendKinesisStream(t TB, host *Host, streamName, sequenceNumber string, payload any) []string {
+	t.Helper()
+	event := NewKinesisStreamEvent(t, streamName, sequenceNumber, payload)
+	raw, err := awskinesis.Handler(host.builder)(context.Background(), event)
+	if err != nil {
+		t.Fatalf("benzenetest: SendKinesisStream dispatch error: %v", err)
+	}
+	var resp struct {
+		BatchItemFailures []struct {
+			ItemIdentifier string `json:"itemIdentifier"`
+		} `json:"batchItemFailures"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		t.Fatalf("benzenetest: decode Kinesis batch response: %v; response = %s", err, raw)
+	}
+	failures := make([]string, len(resp.BatchItemFailures))
+	for i, f := range resp.BatchItemFailures {
+		failures[i] = f.ItemIdentifier
+	}
+	return failures
+}
+
+// SendS3Event pushes a Lambda S3 event notification for one record through the awss3 binding and
+// returns the outcome as a Go error: nil when the record was handled successfully, or the error the
+// binding returns to the Lambda runtime (which triggers AWS's async-invoke retry) when it was not.
+// The topic resolves to "{bucket}:{eventName}". The S3 analogue of awssns.SendSNS, for an
+// async-invoked notification consumer.
+func SendS3Event(t TB, host *Host, bucket, eventName, key string) error {
+	t.Helper()
+	_, err := awss3.Handler(host.builder)(context.Background(), NewS3Event(t, bucket, eventName, key))
+	return err
+}
+
+// SendTimer pushes an Azure Functions custom-handler invocation for a Timer trigger tick through the
+// azurefunctions TimerHandler and returns the native HTTP acknowledgement: 200 (the tick was handled
+// successfully) or 500 (it failed - recorded for the host's monitoring; a timer has no redelivery).
+// dataName is the trigger binding's function.json "name" (e.g. "myTimer"), path is that function's
+// local invocation path (e.g. "/NightlyCleanup"), topic is the scheduled job's topic the tick fans
+// into, and tick is the schedule info (or nil for a handler that ignores it). The Azure fan-in
+// analogue of SendCosmosChangeFeed for a scheduled trigger.
+func SendTimer(t TB, host *Host, dataName, path string, topic benzene.Topic, tick any) HTTPResponse {
+	t.Helper()
+	event := NewTimerEvent(t, dataName, tick)
+	return serveHTTP(t, azurefunctions.TimerHandler(host.builder, topic, dataName), http.MethodPost, path, event)
 }
 
 // serveHTTP drives an http.Handler binding with an in-memory request/response and returns the

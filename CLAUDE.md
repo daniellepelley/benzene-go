@@ -49,6 +49,50 @@ alongside the shared spec.
 - `httpbinding/` - the HTTP transport binding (native + envelope-over-HTTP entry points).
 - `httpclient/` - the HTTP outbound client.
 - `healthcheck/` - reserved-topic health-check interception middleware.
+- `validation/` - request-validation building block: `Validated(validator, handler)` wraps a
+  handler so an invalid request short-circuits to a `validation-error` result before the handler
+  runs. The Go-idiomatic form of `Benzene.DataAnnotations`/`Benzene.FluentValidation`'s
+  `ValidationMiddleware` - those are pipeline middleware because .NET's message-handler pipeline is
+  typed; this port's pipeline is type-erased until the router dispatches, so validation composes at
+  the **typed handler** as a plain wrapper at registration (no reflection, no struct-tag DSL, no
+  dependency - the service writes an ordinary `Validate` function).
+- `idempotency/` - de-duplicates redelivered messages on an at-least-once transport, matching
+  `Benzene.Idempotency`. A **pipeline middleware** (unlike `validation`: it keys on a header, which
+  is on the type-erased `InvocationContext`, so it needs no typed request): `Middleware(store, key)`
+  atomically claims the key in a pluggable `Store` and runs the handler only the first time - a
+  completed duplicate short-circuits to `ignored` (ack), an in-progress one to `conflict` (retry),
+  and the winning attempt records `Complete` on success / `Release` on failure so a failure is never
+  permanently suppressed. `InMemoryStore` (thread-safe, with **separate** short in-progress-lease and
+  long completed-dedup TTLs so a crashed worker's key frees quickly instead of stalling every
+  redelivery, + injectable clock) is the zero-dep default; a shared store (Redis) would be a separate
+  module and must mirror that two-window design. Settlement runs on a cancellation-detached context;
+  a store outage fails open.
+- `ratelimiting/` - best-effort per-instance rate limiting, matching `Benzene.RateLimiting`. A
+  pipeline `Middleware(limiter, cost)` that acquires each message's permit cost from a `Limiter`
+  without queuing and short-circuits a rejected message to `too-many-requests`; the lease is held
+  across the handler so a concurrency-style limiter releases correctly. The .NET package uses
+  `System.Threading.RateLimiting` (a dependency); this keeps the root module dependency-free with a
+  `Limiter` interface + a standard-library thread-safe `TokenBucket` default (an app plugs a
+  different algorithm - e.g. a `golang.org/x/time/rate` adapter - behind the interface). Per-instance
+  only: a fleet of N instances admits up to N× the rate - authoritative limiting belongs at the
+  gateway.
+- `auth/` - authentication/authorization building block, matching `Benzene.Auth.Core`+`.Basic`
+  (zero-dep). Go has no `ClaimsPrincipal`, so a `Principal` (name/roles/claims) is a plain value
+  threaded on the context (`ContextWithPrincipal`/`PrincipalFromContext`). `BasicAuth(validate,
+  realm)` is the RFC 7617 authentication middleware (reads `Authorization: Basic`, validates via a
+  `BasicValidator` the app supplies - no default, no hardcoded-credential footgun - and either sets
+  the principal + calls next, or short-circuits `unauthorized` with a `WWW-Authenticate` challenge;
+  splits on the first `:` so a password may contain one). `Authorize(predicate)` /
+  `RequireRole(role)` are the authorization middleware (`forbidden` when the principal is present
+  but not permitted, `unauthorized` when absent). Header-based, so authentication is for
+  HTTP-fronted pipelines.
+- `cache/` - caching building block, matching the essence of `Benzene.Cache.Core` (zero-dep): a
+  pluggable `Store` (Get/Set/Delete with per-entry TTL) + a generic read-through helper
+  `GetOrLoad[T](ctx, store, key, ttl, load)` (the Go form of `CacheEntry.LazyLoad` - returns the
+  cached value or calls `load` once and caches it). `InMemoryStore` (thread-safe, TTL + injectable
+  clock) is the default; a shared store (Redis) implements the same interface in its own module.
+  Degrades safely: a store read error is a miss, a write error is ignored, a `load` error is
+  returned and not cached. Caching is a handler-level concern, so it's a helper, not a middleware.
 - `mesh/` - Phases 1-2 of `docs/design/mesh.md`: service `Descriptor` derived from the
   `Registry` (topics + JSON Schemas derived at startup from the `TReq`/`TRes` types the
   Registry captures at `Register` time, plus the contract `descriptorHash`),
@@ -77,7 +121,10 @@ alongside the shared spec.
   the Functions host forwards invocations over - Azure has no native Go worker): `Handler` for
   HTTP-triggered functions, `QueueHandler` for queue-shaped triggers (Storage Queue, Service
   Bus - failure is a non-2xx outer status, handing the message to the platform's own
-  redelivery/poison-queue machinery), and `CosmosHandler` for the Cosmos DB Change Feed trigger.
+  redelivery/poison-queue machinery), `CosmosHandler` for the Cosmos DB Change Feed trigger, and
+  `TimerHandler` for the Timer trigger (a scheduled tick carries no message, so it is fan-in like
+  `CosmosHandler` - the topic is the scheduled job's identity named in code, the body is the tick's
+  schedule info, and the outer 200/500 is for the host's monitoring since a timer has no redelivery).
   The change-feed binding is **fan-in, not topic-routed** (core-concepts §3, streaming-shaped):
   the whole delivered batch of changed documents is one pipeline invocation - not one per
   document - dispatched to the topic named in code, whose handler takes the batch as a slice
@@ -110,6 +157,26 @@ alongside the shared spec.
   is **sequential and stops at the first failure**, reporting that record's `SequenceNumber` for
   Lambda to checkpoint and redeliver - deliberately not `awssqs`'s concurrent fan-out. Matches
   `Benzene.Aws.Lambda.DynamoDb`.
+- `awskinesis/` - Kinesis Data Streams inbound binding, zero-dependency in the root module and the
+  direct sibling of `awsdynamodb`: a Lambda `Handler` for a stream event source mapping. Topic is
+  the **stream name** parsed from the record's stream ARN (a Kinesis record has no per-record event
+  type, so the stream itself is the routing key - unlike DynamoDB's `{tableName}:{eventName}`); body
+  is the record's `data` base64-decoded into the raw bytes the producer wrote (typically JSON);
+  headers are `kinesis-`-prefixed metadata (partition key, sequence number, ...). No outbound half
+  (writing to the stream is the publish; the trigger is read-only), so no SDK and no separate module.
+  Same ordered stop-at-first-failure + `SequenceNumber` checkpointing as `awsdynamodb` (AWS reads
+  only the first reported failure for a Kinesis mapping). Matches `Benzene.Aws.Lambda.Kinesis`.
+- `awss3/` - S3 event-notification inbound binding, zero-dependency in the root module: a Lambda
+  `Handler` invoked by S3 when an object is created/removed. Topic is `{bucketName}:{eventName}`
+  (bucket-qualified for consistency with `awsdynamodb`/`awskinesis`; the .NET binding routes on the
+  bare event name - the S3 topic is a local routing concern, not a wire contract, so this diverges
+  deliberately); body is the object **metadata** (bucket/key/size/etag - S3 doesn't deliver the
+  object's contents); headers are `s3-`-prefixed. **Failure model differs from the stream siblings**:
+  an S3-to-Lambda notification is an *async* invocation (no batch-item-failure mechanism), so a
+  failed record returns a **Go error** - triggering AWS's async-invoke retry, the same posture as
+  `awssns` - rather than a partial-batch report. This deliberately does NOT mirror the .NET binding's
+  fire-and-forget swallow (which drops a failed event), per this port's no-silent-drop rule; S3 is
+  at-least-once, so handlers must be idempotent. Matches `Benzene.Aws.Lambda.S3`.
 - `awssns/` - AWS SNS binding, in **its own Go module** (`awssns/go.mod`) - same shape and same
   reason as `awssqs` (`aws-sdk-go-v2/service/sns` for the outbound publish client; the inbound
   `Handler`, subscribed directly to an SNS topic, is zero-dependency). Unlike SQS, a direct
@@ -157,16 +224,17 @@ alongside the shared spec.
 - `examples/` - runnable example services: `helloworld` (plain HTTP),
   `mesh-helloworld` (collector + two meshed services, the Phases 1-4 demo), and one
   `<provider>-helloworld` per cloud deployment target (`aws-lambda-helloworld`,
-  `aws-dynamodb-helloworld`, `azure-functions-helloworld`, `gcp-cloudrun-helloworld`,
-  `aws-sqs-helloworld`, `aws-sns-helloworld`, `gcp-pubsub-helloworld`) - each with its own README
-  stating the concrete deploy steps and exactly what was/wasn't verified without live cloud
-  credentials. Plain Cloud Run needs no dedicated package (see `gcp-cloudrun-helloworld/
-  README.md`); `gcppubsub` exists because the Pub/Sub push envelope is a concrete shape
-  `httpbinding` alone can't cover - keep applying that bar to any new platform package.
-  `aws-dynamodb-helloworld` is a consumer-only example in the **root** module (like
-  `aws-lambda-helloworld`), since the `awsdynamodb` binding is itself zero-dependency;
-  `aws-sqs-helloworld` and `aws-sns-helloworld` are each their own module (depends on both the
-  root module and its respective binding - would be a cycle inside either).
+  `aws-dynamodb-helloworld`, `aws-kinesis-helloworld`, `aws-s3-helloworld`,
+  `azure-functions-helloworld`,
+  `gcp-cloudrun-helloworld`, `aws-sqs-helloworld`, `aws-sns-helloworld`, `gcp-pubsub-helloworld`) -
+  each with its own README stating the concrete deploy steps and exactly what was/wasn't verified
+  without live cloud credentials. Plain Cloud Run needs no dedicated package (see
+  `gcp-cloudrun-helloworld/README.md`); `gcppubsub` exists because the Pub/Sub push envelope is a
+  concrete shape `httpbinding` alone can't cover - keep applying that bar to any new platform
+  package. `aws-dynamodb-helloworld`, `aws-kinesis-helloworld`, and `aws-s3-helloworld` are consumer-only
+  examples in the **root** module (like `aws-lambda-helloworld`), since the `awsdynamodb`/`awskinesis`/`awss3` bindings are
+  themselves zero-dependency; `aws-sqs-helloworld` and `aws-sns-helloworld` are each their own module
+  (depends on both the root module and its respective binding - would be a cycle inside either).
 - `go.work` - ties the root module, `awssqs/`, `awssns/`, `awseventbridge/`, `kafka/`,
   `diagnostics/`, `grpcbinding/`, `examples/aws-sqs-helloworld/`, and
   `examples/aws-sns-helloworld/` together for local development (see `RELEASING.md`). Its
