@@ -48,7 +48,13 @@ alongside the shared spec.
   `httpclient`, and `conformance`.
 - `httpbinding/` - the HTTP transport binding (native + envelope-over-HTTP entry points).
 - `httpclient/` - the HTTP outbound client.
-- `healthcheck/` - reserved-topic health-check interception middleware.
+- `healthcheck/` - reserved-topic health-check interception middleware, plus ready-made `Check`
+  implementations for probing a dependency's reachability: `TCPCheck` (opens a TCP connection -
+  `Benzene.HealthChecks.Tcp`) and `HTTPPingCheck` (GETs a URL, healthy only on 200, credentials
+  stripped from the reported URL - `Benzene.HealthChecks.Http`). Both zero-dep (net/net-http) and
+  report a coarse error *category*, never the raw message (which can leak infra detail to an
+  unauthenticated health caller). `Benzene.HealthChecks.Disk` is deferred - Go has no portable
+  free-space API (needs platform-specific syscalls behind build tags; see `ROADMAP.md`).
 - `validation/` - request-validation building block: `Validated(validator, handler)` wraps a
   handler so an invalid request short-circuits to a `validation-error` result before the handler
   runs. The Go-idiomatic form of `Benzene.DataAnnotations`/`Benzene.FluentValidation`'s
