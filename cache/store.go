@@ -8,8 +8,13 @@ import (
 
 // InMemoryStore is an in-process Store backed by a map, for a single instance, tests, and local
 // development. State lives in this process only: in a multi-instance deployment each instance keeps
-// its own map (so a fleet does not share a cache - use a shared store there). Entries are expired
-// lazily on the next access to a key. It is safe for concurrent use.
+// its own map (so a fleet does not share a cache - use a shared store there). It is safe for
+// concurrent use.
+//
+// Entries are expired LAZILY, on the next Get of that key - there is no background sweeper, so an
+// entry that is written once and never read again is not reclaimed. This is fine for a bounded key
+// space; for an unbounded or ever-growing key space it is unbounded memory growth, so use a shared
+// store (or a bounded set of keys) there.
 type InMemoryStore struct {
 	mu      sync.Mutex
 	entries map[string]cacheEntry

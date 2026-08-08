@@ -13,6 +13,10 @@ import (
 // unauthorized outcome, not an error, so a validator never signals "wrong password" any other way.
 // Implement it against whatever credential store the service actually uses; this package ships no
 // default so there is no hardcoded-credential footgun to deploy by accident.
+//
+// Return a Principal the caller may treat as owned: its Roles slice and Claims map ride on the
+// request context by reference, so a validator that hands back a shared/cached map risks a handler
+// mutating that shared backing store. Build a fresh Roles/Claims per call (or return read-only ones).
 type BasicValidator func(username, password string) (Principal, bool)
 
 const basicScheme = "Basic "

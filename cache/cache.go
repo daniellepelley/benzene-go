@@ -41,6 +41,13 @@ type Store interface {
 // through to load (the store is not trusted to break the call); load's error is returned and the
 // value is NOT cached (a transient failure is not remembered); and a store write error is ignored
 // (the freshly-loaded value is still returned). A cache hit never calls load.
+//
+// A key's namespace is per-T: a hit is any stored blob that JSON-unmarshals into T without error,
+// and encoding/json ignores unknown fields and zero-fills missing ones, so a value written under
+// the same key by a different type would deserialize into a wrong, partially-zeroed T rather than a
+// miss. Do NOT share a key across value types - prefix keys by type (e.g. "order:"+id) so each T has
+// its own namespace. A ttl <= 0 caches the value with NO expiry (see Store.Set), not "don't cache"
+// - to invalidate, call store.Delete rather than passing a zero ttl.
 func GetOrLoad[T any](ctx context.Context, store Store, key string, ttl time.Duration, load func(context.Context) (T, error)) (T, error) {
 	if raw, found, err := store.Get(ctx, key); err == nil && found {
 		var cached T
