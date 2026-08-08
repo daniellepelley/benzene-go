@@ -261,6 +261,166 @@ func TestSendAzureHTTP_ReturnsNativeResponse(t *testing.T) {
 	}
 }
 
+// withOrderBatchHandler registers a fan-in handler for the "orders:changed" topic whose request is
+// the whole change-feed batch (a slice) - the shape the Cosmos DB Change Feed trigger delivers. It
+// fails the batch if any document has an empty id, so a test can exercise both the checkpoint (200)
+// and the redeliver-whole-batch (500) paths.
+func withOrderBatchHandler() benzenetest.Option {
+	return benzenetest.WithServices(func(b *benzene.ApplicationBuilder) {
+		if err := benzene.Register(b.Registry, benzene.NewTopic("orders:changed"), benzene.Handler[[]orderRequest, struct{}](
+			func(_ context.Context, batch []orderRequest) benzene.Result[struct{}] {
+				for _, o := range batch {
+					if o.ID == "" {
+						return benzene.BadRequest[struct{}]("order id is required")
+					}
+				}
+				return benzene.Ok(struct{}{})
+			})); err != nil {
+			panic(err)
+		}
+	})
+}
+
+// orderDoc is a row of an "orders" table, as a DynamoDB stream record delivers it after the
+// binding converts the AttributeValue image back to plain JSON.
+type orderDoc struct {
+	ID     string  `json:"id"`
+	Amount float64 `json:"amount"`
+}
+
+// withOrderInsertHandler registers a handler for the "orders:INSERT" topic (the {table}:{event}
+// shape a DynamoDB stream resolves to), failing a row with no id so a test can drive both the
+// success and batch-item-failure paths.
+func withOrderInsertHandler() benzenetest.Option {
+	return benzenetest.WithServices(func(b *benzene.ApplicationBuilder) {
+		if err := benzene.Register(b.Registry, benzene.NewTopic("orders:INSERT"), benzene.Handler[orderDoc, struct{}](
+			func(_ context.Context, o orderDoc) benzene.Result[struct{}] {
+				if o.ID == "" {
+					return benzene.BadRequest[struct{}]("order id is required")
+				}
+				return benzene.Ok(struct{}{})
+			})); err != nil {
+			panic(err)
+		}
+	})
+}
+
+func TestSendDynamoDBStream_SuccessReportsNoFailures(t *testing.T) {
+	host := benzenetest.NewHost(newTestApp(), withOrderInsertHandler())
+
+	failures := benzenetest.SendDynamoDBStream(t, host, "INSERT", "orders", "seq-1", orderDoc{ID: "o-1", Amount: 9.99})
+
+	if len(failures) != 0 {
+		t.Errorf("failures = %v, want none for a valid row", failures)
+	}
+}
+
+func TestSendDynamoDBStream_FailedRecordIsReportedBySequenceNumber(t *testing.T) {
+	host := benzenetest.NewHost(newTestApp(), withOrderInsertHandler())
+
+	failures := benzenetest.SendDynamoDBStream(t, host, "INSERT", "orders", "seq-7", orderDoc{ID: "", Amount: 1})
+
+	if len(failures) != 1 || failures[0] != "seq-7" {
+		t.Errorf("failures = %v, want [seq-7] (reported for redelivery)", failures)
+	}
+}
+
+func TestSendDynamoDBStream_RemoveUsesOldImage(t *testing.T) {
+	// A REMOVE carries no NewImage; the helper must place the row under OldImage and the binding's
+	// NewImage-else-OldImage-else-Keys fallback must still deliver it to the handler.
+	var got orderDoc
+	host := benzenetest.NewHost(newTestApp(), benzenetest.WithServices(func(b *benzene.ApplicationBuilder) {
+		if err := benzene.Register(b.Registry, benzene.NewTopic("orders:REMOVE"), benzene.Handler[orderDoc, struct{}](
+			func(_ context.Context, o orderDoc) benzene.Result[struct{}] {
+				got = o
+				return benzene.Ok(struct{}{})
+			})); err != nil {
+			panic(err)
+		}
+	}))
+
+	failures := benzenetest.SendDynamoDBStream(t, host, "REMOVE", "orders", "seq-1", orderDoc{ID: "gone", Amount: 0})
+
+	if len(failures) != 0 {
+		t.Fatalf("failures = %v, want none", failures)
+	}
+	if got.ID != "gone" {
+		t.Errorf("handler saw id %q, want the OldImage row \"gone\"", got.ID)
+	}
+}
+
+// richDoc exercises every AttributeValue kind the builder encodes: string (S), number (N), bool
+// (BOOL), list (L), map (M), and a nil pointer (NULL).
+type richDoc struct {
+	ID     string            `json:"id"`
+	Count  int               `json:"count"`
+	Active bool              `json:"active"`
+	Tags   []string          `json:"tags"`
+	Meta   map[string]string `json:"meta"`
+	Note   *string           `json:"note"`
+}
+
+func TestSendDynamoDBStream_RichDocumentRoundTripsThroughAttributeValue(t *testing.T) {
+	// A document with every value kind must survive the JSON -> AttributeValue -> JSON round trip
+	// (the builder encodes it, the binding decodes it) intact when the handler reads it back.
+	var got richDoc
+	host := benzenetest.NewHost(newTestApp(), benzenetest.WithServices(func(b *benzene.ApplicationBuilder) {
+		if err := benzene.Register(b.Registry, benzene.NewTopic("orders:INSERT"), benzene.Handler[richDoc, struct{}](
+			func(_ context.Context, d richDoc) benzene.Result[struct{}] {
+				got = d
+				return benzene.Ok(struct{}{})
+			})); err != nil {
+			panic(err)
+		}
+	}))
+
+	want := richDoc{ID: "o-1", Count: 3, Active: true, Tags: []string{"a", "b"}, Meta: map[string]string{"k": "v"}}
+	failures := benzenetest.SendDynamoDBStream(t, host, "INSERT", "orders", "seq-1", want)
+
+	if len(failures) != 0 {
+		t.Fatalf("failures = %v, want none", failures)
+	}
+	if got.ID != "o-1" || got.Count != 3 || !got.Active || len(got.Tags) != 2 || got.Tags[1] != "b" || got.Meta["k"] != "v" || got.Note != nil {
+		t.Errorf("round-tripped doc = %+v, want %+v with nil Note", got, want)
+	}
+}
+
+func TestSendAzureQueue_SuccessAcksAndNackOnFailure(t *testing.T) {
+	host := benzenetest.NewHost(newTestApp())
+
+	ack := benzenetest.SendAzureQueue(t, host, "queueItem", "/GreetQueue", benzene.NewTopic("greet"), greetRequest{Name: "Queue"}, nil)
+	if ack.StatusCode != http.StatusOK {
+		t.Fatalf("StatusCode = %d, want 200 (ack); body = %s", ack.StatusCode, ack.Body)
+	}
+
+	nack := benzenetest.SendAzureQueue(t, host, "queueItem", "/GreetQueue", benzene.NewTopic("greet"), greetRequest{Name: ""}, nil)
+	if nack.StatusCode != http.StatusInternalServerError {
+		t.Errorf("StatusCode = %d, want 500 (nack, redeliver)", nack.StatusCode)
+	}
+}
+
+func TestSendCosmosChangeFeed_BatchIsCheckpointedOnSuccess(t *testing.T) {
+	host := benzenetest.NewHost(newTestApp(), withOrderBatchHandler())
+
+	resp := benzenetest.SendCosmosChangeFeed(t, host, "documents", "/OrdersChanged", benzene.NewTopic("orders:changed"),
+		[]orderRequest{{ID: "order-1"}, {ID: "order-2"}})
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("StatusCode = %d, want 200 (checkpoint); body = %s", resp.StatusCode, resp.Body)
+	}
+}
+
+func TestSendCosmosChangeFeed_FailedBatchIsRedelivered(t *testing.T) {
+	host := benzenetest.NewHost(newTestApp(), withOrderBatchHandler())
+
+	resp := benzenetest.SendCosmosChangeFeed(t, host, "documents", "/OrdersChanged", benzene.NewTopic("orders:changed"),
+		[]orderRequest{{ID: "order-1"}, {ID: ""}})
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("StatusCode = %d, want 500 (redeliver whole batch)", resp.StatusCode)
+	}
+}
+
 // WithServices must land before Configure builds the pipeline; a failure result from the faked
 // sender must reach the handler's publish-failure branch, proving the override is what the
 // handler actually resolves.

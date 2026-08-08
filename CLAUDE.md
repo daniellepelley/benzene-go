@@ -77,7 +77,15 @@ alongside the shared spec.
   the Functions host forwards invocations over - Azure has no native Go worker): `Handler` for
   HTTP-triggered functions, `QueueHandler` for queue-shaped triggers (Storage Queue, Service
   Bus - failure is a non-2xx outer status, handing the message to the platform's own
-  redelivery/poison-queue machinery).
+  redelivery/poison-queue machinery), and `CosmosHandler` for the Cosmos DB Change Feed trigger.
+  The change-feed binding is **fan-in, not topic-routed** (core-concepts §3, streaming-shaped):
+  the whole delivered batch of changed documents is one pipeline invocation - not one per
+  document - dispatched to the topic named in code, whose handler takes the batch as a slice
+  (`Handler[[]TDocument, TRes]`). Checkpointing is batch-level and on success only, so a failed
+  dispatch is a non-2xx outer status that redelivers the entire batch (same convention as
+  `QueueHandler`); the version-aware fan-in uses `envelope.DispatchTopicResult`. The self-hosted
+  worker flavor (`Benzene.Azure.CosmosDb`) is deferred - it needs the Cosmos SDK (see
+  `ROADMAP.md`).
 - `awssqs/` - AWS SQS binding, in **its own Go module** (`awssqs/go.mod`) - one of the packages
   with a third-party dependency (`aws-sdk-go-v2/service/sqs`, needed for the outbound publish
   client; the inbound Lambda-trigger `Handler` is zero-dependency, like `awslambda`). See
@@ -92,6 +100,16 @@ alongside the shared spec.
   the response status code), wire-contracts §2 topic resolution like `awssqs`/`awssns`. The
   outbound publish half needs the Pub/Sub SDK - a pending dependency decision (`ROADMAP.md`);
   if approved it gets its own module like `awssqs`/`awssns`.
+- `awsdynamodb/` - DynamoDB Streams inbound binding, zero-dependency in the root module: a
+  Lambda `Handler` for a stream event source mapping. Topic is `{tableName}:{eventName}` (table
+  parsed from the stream ARN + INSERT/MODIFY/REMOVE), body is the record's image unmarshalled
+  from DynamoDB AttributeValue format into plain JSON (NewImage, else OldImage, else Keys),
+  headers are `dynamodb-`-prefixed metadata (no `_benzeneHeaders` - these come from table writes,
+  not a Benzene publisher). No outbound half exists (writing to the table is the publish; the
+  stream is read-only), so no SDK and no separate module. Records are ordered CDC, so processing
+  is **sequential and stops at the first failure**, reporting that record's `SequenceNumber` for
+  Lambda to checkpoint and redeliver - deliberately not `awssqs`'s concurrent fan-out. Matches
+  `Benzene.Aws.Lambda.DynamoDb`.
 - `awssns/` - AWS SNS binding, in **its own Go module** (`awssns/go.mod`) - same shape and same
   reason as `awssqs` (`aws-sdk-go-v2/service/sns` for the outbound publish client; the inbound
   `Handler`, subscribed directly to an SNS topic, is zero-dependency). Unlike SQS, a direct
@@ -139,14 +157,16 @@ alongside the shared spec.
 - `examples/` - runnable example services: `helloworld` (plain HTTP),
   `mesh-helloworld` (collector + two meshed services, the Phases 1-4 demo), and one
   `<provider>-helloworld` per cloud deployment target (`aws-lambda-helloworld`,
-  `azure-functions-helloworld`, `gcp-cloudrun-helloworld`, `aws-sqs-helloworld`,
-  `aws-sns-helloworld`, `gcp-pubsub-helloworld`) - each with its own README stating the concrete
-  deploy steps and exactly what was/wasn't verified without live cloud credentials. Plain Cloud
-  Run needs no dedicated package (see `gcp-cloudrun-helloworld/README.md`); `gcppubsub` exists
-  because the Pub/Sub push envelope is a concrete shape `httpbinding` alone can't cover - keep
-  applying that bar to any new platform package. `aws-sqs-helloworld` and
-  `aws-sns-helloworld` are each their own module (depends on both the root module and its
-  respective binding - would be a cycle inside either).
+  `aws-dynamodb-helloworld`, `azure-functions-helloworld`, `gcp-cloudrun-helloworld`,
+  `aws-sqs-helloworld`, `aws-sns-helloworld`, `gcp-pubsub-helloworld`) - each with its own README
+  stating the concrete deploy steps and exactly what was/wasn't verified without live cloud
+  credentials. Plain Cloud Run needs no dedicated package (see `gcp-cloudrun-helloworld/
+  README.md`); `gcppubsub` exists because the Pub/Sub push envelope is a concrete shape
+  `httpbinding` alone can't cover - keep applying that bar to any new platform package.
+  `aws-dynamodb-helloworld` is a consumer-only example in the **root** module (like
+  `aws-lambda-helloworld`), since the `awsdynamodb` binding is itself zero-dependency;
+  `aws-sqs-helloworld` and `aws-sns-helloworld` are each their own module (depends on both the
+  root module and its respective binding - would be a cycle inside either).
 - `go.work` - ties the root module, `awssqs/`, `awssns/`, `awseventbridge/`, `kafka/`,
   `diagnostics/`, `grpcbinding/`, `examples/aws-sqs-helloworld/`, and
   `examples/aws-sns-helloworld/` together for local development (see `RELEASING.md`). Its

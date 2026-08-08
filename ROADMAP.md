@@ -31,9 +31,24 @@ delivery order - just the current honest picture, kept up to date as things land
   REST/v1.0, and ALB target-group event shapes, detected per invocation).
 - `azurefunctions` - Azure Functions custom-handler binding: `Handler` for HTTP-triggered
   functions, `QueueHandler` for queue-shaped triggers (Storage Queue, Service Bus) with
-  wire-contracts §2 topic resolution and platform-native retry on failure.
+  wire-contracts §2 topic resolution and platform-native retry on failure, and `CosmosHandler`
+  for the Cosmos DB Change Feed trigger (the `Benzene.Azure.Function.CosmosDb` flavor of
+  `transport-bindings.md`'s "Cosmos DB Change Feed" entry). The change-feed binding is
+  **fan-in, not topic-routed** (core-concepts §3, streaming-shaped): the Functions host owns the
+  change-feed connection and lease container and forwards each delivered batch of changed
+  documents over the same Data/Metadata envelope, so the handler is zero-dependency; the whole
+  batch is one pipeline invocation (not one per document) dispatched to the topic the developer
+  names, whose handler receives the batch as a slice (`Handler[[]TDocument, TRes]`).
+  Checkpointing is batch-level and on successful return only, so a non-success dispatch answers
+  outer HTTP 500 and the host redelivers the entire batch - the same outer-status convention as
+  `QueueHandler`. The version-aware fan-in rides on `envelope.DispatchTopicResult` (explicit
+  programmatic dispatch to a named, possibly-versioned topic - distinct from reading a version
+  header off an inbound message, which no binding does; see the versioning note below).
 - `client` - outbound-client decorators (`CorrelationDecorator`, `RetryDecorator`) over a
-  transport-agnostic `Sender` interface; `httpclient.Client` satisfies it structurally.
+  transport-agnostic `Sender` interface; `httpclient.Client` satisfies it structurally. The
+  spec's third cross-cutting client behavior, trace-context propagation, is
+  `mesh.TraceContextDecorator` - it lives in `mesh` (which owns the `Span` it forwards) so
+  `client` stays free of a mesh dependency.
 - `cors` - portable CORS middleware for HTTP-fronted services (origin/scheme/port matching,
   header wildcard, preflight handling), a Go port of the main repo's own portable CORS
   middleware.
@@ -53,7 +68,10 @@ delivery order - just the current honest picture, kept up to date as things land
 - `mesh` - Phases 1-2 of `docs/design/mesh.md`: the service `Descriptor` derived from the live
   `Registry` (topics + startup-derived JSON Schemas + `descriptorHash`),
   reserved-`benzene:mesh`-topic descriptor middleware, `TraceMiddleware` with W3C `traceparent`
-  propagation, the `LogExporter`/`PushExporter` trace feeds, and the issue feed's emitter
+  propagation (plus `TraceContextDecorator`, its outbound counterpart - the client decorator that
+  forwards the current span's `traceparent` onto outbound calls, so a collector derives
+  who-calls-whom without a declared edge), the `LogExporter`/`PushExporter` trace feeds, and the
+  issue feed's emitter
   (`IssueMiddleware` + `PushIssueExporter`: source-side classification, SHA-256 fingerprint, delta
   aggregation, liveness flush - mesh.md §4.1) - every feed independent and optional.
 - `meshd` - Phases 3-4 of `docs/design/mesh.md`: the collector (register/heartbeat/traces/issues
@@ -72,6 +90,16 @@ delivery order - just the current honest picture, kept up to date as things land
   for a push subscription's endpoint, with wire-contracts §2 topic resolution and ack/nack
   via the response status code. The outbound (publish) half needs the Pub/Sub SDK - see
   "Later" below.
+- `awsdynamodb` - DynamoDB Streams inbound binding (zero dependencies, root module), matching
+  `Benzene.Aws.Lambda.DynamoDb` and `transport-bindings.md`'s "DynamoDB Streams" entry: a Lambda
+  `Handler` for a stream event source mapping. Topic is `{tableName}:{eventName}` (table parsed
+  from the stream ARN + the change type); body is the record's image unmarshalled from DynamoDB
+  AttributeValue format into plain JSON (NewImage, else OldImage, else Keys) so handlers
+  deserialize ordinary structs; headers are `dynamodb-`-prefixed metadata. No outbound side
+  (writing the table is the publish; the stream is read-only), so no SDK and no separate module.
+  Records are ordered CDC, so processing is sequential and stops at the first failure, reporting
+  that record's `SequenceNumber` for Lambda to checkpoint and redeliver - deliberately not
+  `awssqs`'s concurrent fan-out.
 - `awseventbridge` - AWS EventBridge binding, in its **own Go module** (see `RELEASING.md`),
   matching the main repo's `transport-bindings.md` EventBridge entry exactly: an inbound
   `Handler` for a Lambda invoked by an EventBridge rule (zero dependencies; topic is
@@ -86,9 +114,11 @@ delivery order - just the current honest picture, kept up to date as things land
 - `diagnostics` - OpenTelemetry-based diagnostics middleware, in its **own Go module** (see
   `RELEASING.md`) - the Go equivalent of the main repo's `Benzene.Diagnostics`: one server
   span per invocation (topic-named, W3C traceparent join, `benzene.topic`/`benzene.status`
-  attributes) plus invocation count/duration metrics. Depends on the OpenTelemetry *API*
-  only (`go.opentelemetry.io/otel`); the application owns the SDK and exporter, and standard
-  OTLP export covers Datadog/Zipkin/etc. without vendor-specific packages (as promised
+  attributes) plus invocation count/duration metrics, and `TraceContextDecorator` - the OTel-path
+  outbound client decorator that injects the active span context as a W3C `traceparent`, the
+  sibling of `mesh.TraceContextDecorator` for services observed with OpenTelemetry. Depends on the
+  OpenTelemetry *API* only (`go.opentelemetry.io/otel`); the application owns the SDK and exporter,
+  and standard OTLP export covers Datadog/Zipkin/etc. without vendor-specific packages (as promised
   below).
 - `kafka` - Kafka binding, in its **own Go module** (see `RELEASING.md`), matching the main
   repo's `Benzene.Kafka.Core` / `transport-bindings.md` "Kafka" entry exactly: one Kafka
@@ -144,14 +174,16 @@ Per `CLAUDE.md`: no third-party dependency without asking first. These are real,
 extensions, but each needs an explicit yes on a specific dependency before starting, not a
 unilateral add:
 
-- **DynamoDB Streams binding.** EventBridge is now done (`awseventbridge`, see Done above);
-  a Streams-triggered Lambda is the same shape as `awssqs`'s inbound handler (a Records
-  batch with `batchItemFailures` support) - the inbound side is hand-rollable, and there is
-  no outbound side to need an SDK, so this could even be zero-dependency in the root module.
 - **Pub/Sub outbound (publish) client.** The inbound half is done with zero dependencies
   (`gcppubsub` - a push subscription is just HTTPS in). Publishing needs OAuth-signed API
   calls, i.e. `cloud.google.com/go/pubsub` - the same shape as `awssqs`/`awssns`'s outbound
   clients, and like them it would live in its own module so the dependency doesn't spread.
+- **Cosmos DB Change Feed self-hosted worker** (`Benzene.Azure.CosmosDb`, the non-Functions
+  flavor). The Azure Functions trigger flavor already ships zero-dependency (`azurefunctions.
+  CosmosHandler` - the Functions host owns the change-feed connection). A self-hosted worker
+  instead opens the change feed itself and owns the lease container + checkpoint hook, which
+  needs the Cosmos SDK (`github.com/Azure/azure-sdk-for-go/sdk/data/azcosmos`) - the same
+  own-module shape as `awssqs`/`awssns`'s outbound clients.
 - **Google Cloud Functions Gen2 (buildpack) deploy**, as opposed to the Cloud Run path already
   documented in `examples/gcp-cloudrun-helloworld` - needs
   `github.com/GoogleCloudPlatform/functions-framework-go`, the one Google-specific dependency
