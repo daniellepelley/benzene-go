@@ -1,0 +1,44 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  A Benzene service on AWS Lambda, triggered by an SQS queue. Generated from the benzene-go
+  aws-sqs template. Hand-checked against the AWS SAM shape, not deployed from the template
+  itself - review before production use.
+
+Globals:
+  Function:
+    Timeout: 5
+    MemorySize: 128
+    Architectures:
+      - arm64
+
+Resources:
+  GreetQueue:
+    Type: AWS::SQS::Queue
+
+  GreetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      Policies:
+        - SQSPollerPolicy:
+            QueueName: !GetAtt GreetQueue.QueueName
+      Events:
+        GreetQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt GreetQueue.Arn
+            BatchSize: 10
+            # Lets a single bad message be retried on its own instead of failing the whole batch -
+            # the handler side of this is awssqs.Handler's batchItemFailures reporting.
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+    Metadata:
+      DockerTag: aws-sqs
+      DockerContext: .
+      Dockerfile: Dockerfile
+
+Outputs:
+  QueueUrl:
+    Description: The SQS queue URL - send a message with a `topic` = `greet` message attribute.
+    Value: !Ref GreetQueue
