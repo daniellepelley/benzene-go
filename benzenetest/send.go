@@ -12,6 +12,7 @@ import (
 	"github.com/daniellepelley/benzene-go/awsdynamodb"
 	"github.com/daniellepelley/benzene-go/awskinesis"
 	"github.com/daniellepelley/benzene-go/awslambda"
+	"github.com/daniellepelley/benzene-go/awss3"
 	"github.com/daniellepelley/benzene-go/azurefunctions"
 	"github.com/daniellepelley/benzene-go/gcppubsub"
 	"github.com/daniellepelley/benzene-go/httpbinding"
@@ -218,6 +219,17 @@ func SendKinesisStream(t TB, host *Host, streamName, sequenceNumber string, payl
 		failures[i] = f.ItemIdentifier
 	}
 	return failures
+}
+
+// SendS3Event pushes a Lambda S3 event notification for one record through the awss3 binding and
+// returns the outcome as a Go error: nil when the record was handled successfully, or the error the
+// binding returns to the Lambda runtime (which triggers AWS's async-invoke retry) when it was not.
+// The topic resolves to "{bucket}:{eventName}". The S3 analogue of awssns.SendSNS, for an
+// async-invoked notification consumer.
+func SendS3Event(t TB, host *Host, bucket, eventName, key string) error {
+	t.Helper()
+	_, err := awss3.Handler(host.builder)(context.Background(), NewS3Event(t, bucket, eventName, key))
+	return err
 }
 
 // serveHTTP drives an http.Handler binding with an in-memory request/response and returns the

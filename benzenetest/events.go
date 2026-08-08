@@ -284,6 +284,25 @@ func NewKinesisStreamEvent(t TB, streamName, sequenceNumber string, payload any)
 	return mustMarshal(t, event)
 }
 
+// NewS3Event builds the Lambda S3 event-notification payload for one record - the shape
+// awss3.Handler parses. The topic it resolves to is "{bucket}:{eventName}" (e.g.
+// "uploads:ObjectCreated:Put"); the object metadata (key, a fixed size and etag) becomes the body.
+func NewS3Event(t TB, bucket, eventName, key string) json.RawMessage {
+	t.Helper()
+	event := map[string]any{
+		"Records": []map[string]any{{
+			"eventSource": "aws:s3",
+			"eventName":   eventName,
+			"awsRegion":   "us-east-1",
+			"s3": map[string]any{
+				"bucket": map[string]any{"name": bucket},
+				"object": map[string]any{"key": key, "size": 42, "eTag": "test-etag"},
+			},
+		}},
+	}
+	return mustMarshal(t, event)
+}
+
 func mustMarshal(t TB, v any) json.RawMessage {
 	t.Helper()
 	data, err := json.Marshal(v)

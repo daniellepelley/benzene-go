@@ -146,6 +146,17 @@ alongside the shared spec.
   (writing to the stream is the publish; the trigger is read-only), so no SDK and no separate module.
   Same ordered stop-at-first-failure + `SequenceNumber` checkpointing as `awsdynamodb` (AWS reads
   only the first reported failure for a Kinesis mapping). Matches `Benzene.Aws.Lambda.Kinesis`.
+- `awss3/` - S3 event-notification inbound binding, zero-dependency in the root module: a Lambda
+  `Handler` invoked by S3 when an object is created/removed. Topic is `{bucketName}:{eventName}`
+  (bucket-qualified for consistency with `awsdynamodb`/`awskinesis`; the .NET binding routes on the
+  bare event name - the S3 topic is a local routing concern, not a wire contract, so this diverges
+  deliberately); body is the object **metadata** (bucket/key/size/etag - S3 doesn't deliver the
+  object's contents); headers are `s3-`-prefixed. **Failure model differs from the stream siblings**:
+  an S3-to-Lambda notification is an *async* invocation (no batch-item-failure mechanism), so a
+  failed record returns a **Go error** - triggering AWS's async-invoke retry, the same posture as
+  `awssns` - rather than a partial-batch report. This deliberately does NOT mirror the .NET binding's
+  fire-and-forget swallow (which drops a failed event), per this port's no-silent-drop rule; S3 is
+  at-least-once, so handlers must be idempotent. Matches `Benzene.Aws.Lambda.S3`.
 - `awssns/` - AWS SNS binding, in **its own Go module** (`awssns/go.mod`) - same shape and same
   reason as `awssqs` (`aws-sdk-go-v2/service/sns` for the outbound publish client; the inbound
   `Handler`, subscribed directly to an SNS topic, is zero-dependency). Unlike SQS, a direct
@@ -193,14 +204,15 @@ alongside the shared spec.
 - `examples/` - runnable example services: `helloworld` (plain HTTP),
   `mesh-helloworld` (collector + two meshed services, the Phases 1-4 demo), and one
   `<provider>-helloworld` per cloud deployment target (`aws-lambda-helloworld`,
-  `aws-dynamodb-helloworld`, `aws-kinesis-helloworld`, `azure-functions-helloworld`,
+  `aws-dynamodb-helloworld`, `aws-kinesis-helloworld`, `aws-s3-helloworld`,
+  `azure-functions-helloworld`,
   `gcp-cloudrun-helloworld`, `aws-sqs-helloworld`, `aws-sns-helloworld`, `gcp-pubsub-helloworld`) -
   each with its own README stating the concrete deploy steps and exactly what was/wasn't verified
   without live cloud credentials. Plain Cloud Run needs no dedicated package (see
   `gcp-cloudrun-helloworld/README.md`); `gcppubsub` exists because the Pub/Sub push envelope is a
   concrete shape `httpbinding` alone can't cover - keep applying that bar to any new platform
-  package. `aws-dynamodb-helloworld` and `aws-kinesis-helloworld` are consumer-only examples in the
-  **root** module (like `aws-lambda-helloworld`), since the `awsdynamodb`/`awskinesis` bindings are
+  package. `aws-dynamodb-helloworld`, `aws-kinesis-helloworld`, and `aws-s3-helloworld` are consumer-only
+  examples in the **root** module (like `aws-lambda-helloworld`), since the `awsdynamodb`/`awskinesis`/`awss3` bindings are
   themselves zero-dependency; `aws-sqs-helloworld` and `aws-sns-helloworld` are each their own module
   (depends on both the root module and its respective binding - would be a cycle inside either).
 - `go.work` - ties the root module, `awssqs/`, `awssns/`, `awseventbridge/`, `kafka/`,

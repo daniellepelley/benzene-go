@@ -87,6 +87,7 @@ check, and both HTTP entry points wired through the three-phase `App` lifecycle.
 | `awssns` ([own module](RELEASING.md)) | 100% | AWS SNS binding: inbound `Handler` for a Lambda subscribed directly to an SNS topic (zero deps; a failed notification returns a Go error, triggering AWS's own async-invoke retry, since SNS has no batch/partial-failure mechanism), outbound `Client` publishing via `Publish` (needs `aws-sdk-go-v2/service/sns`) |
 | `awsdynamodb` | 100% | AWS DynamoDB Streams inbound binding (zero deps, root module): a Lambda `Handler` for a stream event source mapping. Topic is `{tableName}:{eventName}` (table parsed from the stream ARN + INSERT/MODIFY/REMOVE), body is the record's image unmarshalled from DynamoDB AttributeValue format into plain JSON (NewImage, else OldImage, else Keys). Records are ordered CDC, so processing is sequential and stops at the first failure, reporting that record's `SequenceNumber` for Lambda to checkpoint and redeliver - no outbound side (writing the table is the publish) |
 | `awskinesis` | 100% | AWS Kinesis Data Streams inbound binding (zero deps, root module), the sibling of `awsdynamodb`: a Lambda `Handler` for a stream event source mapping. Topic is the stream name (parsed from the record's stream ARN - a Kinesis record has no per-record event type, so the stream is the routing key), body is the record's `data` base64-decoded into the producer's bytes (typically JSON), headers are `kinesis-`-prefixed metadata. Same ordered stop-at-first-failure + `SequenceNumber` checkpointing; no outbound side (writing the stream is the publish) |
+| `awss3` | 100% | AWS S3 event-notification inbound binding (zero deps, root module): a Lambda `Handler` invoked by S3 on object create/remove. Topic is `{bucket}:{eventName}` (bucket-qualified, vs .NET's bare event name - a local routing concern), body is the object metadata (bucket/key/size/etag, not contents), headers are `s3-`-prefixed. An S3 notification is an async invocation, so a failed record returns a Go error (async-invoke retry, like `awssns`), never a silent drop; handlers must be idempotent |
 | `conformance` | n/a (test-only) | Runs this port against the fixtures vendored from the main repo's `docs/specification/conformance/` |
 | `examples/helloworld` | - | A runnable example service - DI, health check, both HTTP entry points |
 | `examples/aws-lambda-helloworld` | - | The same service, deployable to AWS Lambda (Dockerfile + SAM template) |
@@ -97,6 +98,7 @@ check, and both HTTP entry points wired through the three-phase `App` lifecycle.
 | `examples/aws-sns-helloworld` ([own module](RELEASING.md)) | - | A publisher Lambda (Function URL) forwarding to SNS + a consumer Lambda subscribed to that topic |
 | `examples/aws-dynamodb-helloworld` | - | A consumer Lambda triggered by a DynamoDB table's stream via `awsdynamodb.Handler` - write to the table to drive it, no publisher code |
 | `examples/aws-kinesis-helloworld` | - | A consumer Lambda triggered by a Kinesis data stream via `awskinesis.Handler` - `PutRecord` onto the stream to drive it, no publisher code |
+| `examples/aws-s3-helloworld` | - | A consumer Lambda invoked by an S3 bucket's ObjectCreated notifications via `awss3.Handler` - upload an object to drive it, no publisher code |
 | `examples/mesh-helloworld` | - | The whole mesh story in one process: a `meshd` collector + two meshed services with a cross-service traced call - open the Mesh View and watch the derived fleet |
 
 Every non-test-only package sits at 100% coverage, or just under it where the gap is a
@@ -112,6 +114,7 @@ a type that can't actually fail to marshal). Run `go test ./... -cover` to see c
 | AWS | Lambda subscribed to SNS + publish-to-SNS | `awssns` - its own module (needs the AWS SDK) |
 | AWS | Lambda triggered by a DynamoDB table's stream | `awsdynamodb` (inbound only, zero deps) - the stream delivers change records as plain JSON, no SDK needed |
 | AWS | Lambda triggered by a Kinesis data stream | `awskinesis` (inbound only, zero deps) - the stream delivers records as plain JSON (data base64-encoded), no SDK needed |
+| AWS | Lambda invoked by S3 event notifications | `awss3` (inbound only, zero deps) - S3 delivers the notification (object metadata) as plain JSON, no SDK needed |
 | Azure | Azure Functions custom handler (HTTP, queue, or Cosmos DB Change Feed trigger) | `azurefunctions` - Azure has no native Go worker |
 | Google Cloud | Cloud Run | None - Cloud Run's contract is "listen on `$PORT`", which `httpbinding` + `net/http` already satisfies |
 | Google Cloud | Cloud Run consuming a Pub/Sub push subscription | `gcppubsub` (inbound only, zero deps) - the push envelope's base64/attributes/ack contract is the one GCP shape `httpbinding` can't cover |

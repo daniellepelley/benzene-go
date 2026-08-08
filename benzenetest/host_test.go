@@ -325,6 +325,29 @@ func TestSendDynamoDBStream_FailedRecordIsReportedBySequenceNumber(t *testing.T)
 	}
 }
 
+func TestSendS3Event_SuccessAndFailure(t *testing.T) {
+	// The topic resolves to "{bucket}:{eventName}"; a handler failure surfaces as a Go error (which
+	// would trigger AWS's async-invoke retry), not a silent drop.
+	withUploads := benzenetest.WithServices(func(b *benzene.ApplicationBuilder) {
+		if err := benzene.Register(b.Registry, benzene.NewTopic("uploads:ObjectCreated:Put"), benzene.Handler[map[string]any, struct{}](
+			func(_ context.Context, n map[string]any) benzene.Result[struct{}] {
+				if n["key"] == "bad.jpg" {
+					return benzene.ServiceUnavailable[struct{}]("processing failed")
+				}
+				return benzene.Ok(struct{}{})
+			})); err != nil {
+			panic(err)
+		}
+	})
+
+	if err := benzenetest.SendS3Event(t, benzenetest.NewHost(newTestApp(), withUploads), "uploads", "ObjectCreated:Put", "good.jpg"); err != nil {
+		t.Errorf("SendS3Event(valid) error = %v, want nil", err)
+	}
+	if err := benzenetest.SendS3Event(t, benzenetest.NewHost(newTestApp(), withUploads), "uploads", "ObjectCreated:Put", "bad.jpg"); err == nil {
+		t.Error("SendS3Event(failing) error = nil, want a Go error for async-invoke retry")
+	}
+}
+
 func TestSendKinesisStream_SuccessAndFailure(t *testing.T) {
 	// The topic resolves to the stream name ("orders"); a handler failure is reported by the
 	// record's sequence number for redelivery.
