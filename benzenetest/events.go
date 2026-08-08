@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/wire"
@@ -312,6 +313,27 @@ func NewTimerEvent(t TB, dataName string, tick any) json.RawMessage {
 	t.Helper()
 	event := map[string]any{
 		"Data": map[string]json.RawMessage{dataName: mustMarshal(t, marshalBody(t, tick))},
+	}
+	return mustMarshal(t, event)
+}
+
+// NewKafkaEvent builds the Lambda MSK/Kafka event-source-mapping payload for one record - the shape
+// awskafka.Handler parses. The Benzene topic it resolves to is the Kafka topic; payload is the plain
+// record body, marshaled and base64-encoded into the record's value (as Lambda delivers it). The
+// record is filed under the "{topic}-{partition}" group key at the given offset.
+func NewKafkaEvent(t TB, topic string, partition int, offset int64, payload any) json.RawMessage {
+	t.Helper()
+	event := map[string]any{
+		"eventSource": "aws:kafka",
+		"records": map[string]any{
+			fmt.Sprintf("%s-%d", topic, partition): []map[string]any{{
+				"topic":     topic,
+				"partition": partition,
+				"offset":    offset,
+				"timestamp": 1700000000000,
+				"value":     base64.StdEncoding.EncodeToString([]byte(marshalBody(t, payload))),
+			}},
+		},
 	}
 	return mustMarshal(t, event)
 }

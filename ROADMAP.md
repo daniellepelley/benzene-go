@@ -148,6 +148,19 @@ delivery order - just the current honest picture, kept up to date as things land
   An S3 notification is an async invocation, so a failed record returns a Go error (async-invoke
   retry, like `awssns`) rather than a batch-item report - and deliberately not the .NET binding's
   fire-and-forget swallow, per the no-silent-drop rule. Handlers must be idempotent (at-least-once).
+- `awskafka` - AWS Lambda MSK / self-managed-Kafka inbound binding (zero dependencies, root
+  module), matching `Benzene.Aws.Lambda.Kafka` and DISTINCT from the self-hosted `kafka` module
+  below: that one runs its own broker consumer loop (needing `segmentio/kafka-go`); this is the
+  zero-dep adapter for AWS's *managed* event source mapping, which delivers records as plain JSON
+  (value base64-encoded, header values as byte arrays), so it is "just" JSON parsing plus a base64
+  decode with no SDK. Topic is the Kafka topic verbatim (one Kafka topic = one Benzene topic, like
+  the `kafka` module - unlike Kinesis's stream-name routing); body is the record's `value`
+  base64-decoded into the producer's bytes; headers pass through verbatim. Records are grouped by
+  `{topic}-{partition}` and each partition is processed sequentially, stopping at its first failure
+  and reporting `{partition, offset}` for that partition's resume - an **object-shaped**
+  `batchItemFailures` identifier (unlike the string identifier of SQS/Kinesis/DynamoDB), needing
+  `FunctionResponseTypes: [ReportBatchItemFailures]` on the mapping; partitions are independent. No
+  outbound side (producing to Kafka is the publish; the trigger is read-only), so no separate module.
 - `awseventbridge` - AWS EventBridge binding, in its **own Go module** (see `RELEASING.md`),
   matching the main repo's `transport-bindings.md` EventBridge entry exactly: an inbound
   `Handler` for a Lambda invoked by an EventBridge rule (zero dependencies; topic is

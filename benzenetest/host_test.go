@@ -374,6 +374,32 @@ func TestSendKinesisStream_SuccessAndFailure(t *testing.T) {
 	}
 }
 
+func TestSendKafkaEvent_SuccessAndFailure(t *testing.T) {
+	// The Benzene topic is the Kafka topic ("orders"); a handler failure is reported as
+	// "{partition}@{offset}" (the topic-partition group key and the resume offset) for redelivery.
+	withOrders := benzenetest.WithServices(func(b *benzene.ApplicationBuilder) {
+		if err := benzene.Register(b.Registry, benzene.NewTopic("orders"), benzene.Handler[orderDoc, struct{}](
+			func(_ context.Context, o orderDoc) benzene.Result[struct{}] {
+				if o.ID == "" {
+					return benzene.BadRequest[struct{}]("order id is required")
+				}
+				return benzene.Ok(struct{}{})
+			})); err != nil {
+			panic(err)
+		}
+	})
+
+	ok := benzenetest.SendKafkaEvent(t, benzenetest.NewHost(newTestApp(), withOrders), "orders", 0, 41, orderDoc{ID: "o-1", Amount: 9.99})
+	if len(ok) != 0 {
+		t.Errorf("failures = %v, want none for a valid record", ok)
+	}
+
+	bad := benzenetest.SendKafkaEvent(t, benzenetest.NewHost(newTestApp(), withOrders), "orders", 0, 42, orderDoc{ID: "", Amount: 1})
+	if len(bad) != 1 || bad[0] != "orders-0@42" {
+		t.Errorf("failures = %v, want [orders-0@42] (reported for redelivery)", bad)
+	}
+}
+
 func TestSendDynamoDBStream_RemoveUsesOldImage(t *testing.T) {
 	// A REMOVE carries no NewImage; the helper must place the row under OldImage and the binding's
 	// NewImage-else-OldImage-else-Keys fallback must still deliver it to the handler.

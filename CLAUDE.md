@@ -166,6 +166,19 @@ alongside the shared spec.
   (writing to the stream is the publish; the trigger is read-only), so no SDK and no separate module.
   Same ordered stop-at-first-failure + `SequenceNumber` checkpointing as `awsdynamodb` (AWS reads
   only the first reported failure for a Kinesis mapping). Matches `Benzene.Aws.Lambda.Kinesis`.
+- `awskafka/` - AWS Lambda MSK/self-managed-Kafka inbound binding, zero-dependency in the root
+  module and DISTINCT from the self-hosted `kafka` module (that one runs its own broker consumer
+  loop needing `segmentio/kafka-go`; this is the zero-dep adapter for AWS's *managed* event source
+  mapping, which delivers records as plain JSON). Topic is the **Kafka topic verbatim** (one Kafka
+  topic = one Benzene topic - like the `kafka` module, unlike Kinesis's stream-name routing); body
+  is the record's `value` base64-decoded into the producer's bytes; headers pass through verbatim
+  (their byte-array wire form UTF-8 decoded), matching the self-hosted binding. Records are grouped
+  by `{topic}-{partition}` and each partition is processed sequentially, **stopping at its first
+  failure** and reporting `{partition, offset}` for that partition's resume - an **object-shaped**
+  `batchItemFailures` identifier (unlike the string identifier of SQS/Kinesis/DynamoDB), so the
+  mapping needs `FunctionResponseTypes: [ReportBatchItemFailures]`. Partitions are independent. No
+  outbound half (producing to Kafka is the publish; the trigger is read-only), so no SDK and no
+  separate module. Matches `Benzene.Aws.Lambda.Kafka`.
 - `awss3/` - S3 event-notification inbound binding, zero-dependency in the root module: a Lambda
   `Handler` invoked by S3 when an object is created/removed. Topic is `{bucketName}:{eventName}`
   (bucket-qualified for consistency with `awsdynamodb`/`awskinesis`; the .NET binding routes on the
@@ -224,16 +237,17 @@ alongside the shared spec.
 - `examples/` - runnable example services: `helloworld` (plain HTTP),
   `mesh-helloworld` (collector + two meshed services, the Phases 1-4 demo), and one
   `<provider>-helloworld` per cloud deployment target (`aws-lambda-helloworld`,
-  `aws-dynamodb-helloworld`, `aws-kinesis-helloworld`, `aws-s3-helloworld`,
+  `aws-dynamodb-helloworld`, `aws-kinesis-helloworld`, `aws-kafka-helloworld`, `aws-s3-helloworld`,
   `azure-functions-helloworld`,
   `gcp-cloudrun-helloworld`, `aws-sqs-helloworld`, `aws-sns-helloworld`, `gcp-pubsub-helloworld`) -
   each with its own README stating the concrete deploy steps and exactly what was/wasn't verified
   without live cloud credentials. Plain Cloud Run needs no dedicated package (see
   `gcp-cloudrun-helloworld/README.md`); `gcppubsub` exists because the Pub/Sub push envelope is a
   concrete shape `httpbinding` alone can't cover - keep applying that bar to any new platform
-  package. `aws-dynamodb-helloworld`, `aws-kinesis-helloworld`, and `aws-s3-helloworld` are consumer-only
-  examples in the **root** module (like `aws-lambda-helloworld`), since the `awsdynamodb`/`awskinesis`/`awss3` bindings are
-  themselves zero-dependency; `aws-sqs-helloworld` and `aws-sns-helloworld` are each their own module
+  package. `aws-dynamodb-helloworld`, `aws-kinesis-helloworld`, `aws-kafka-helloworld`, and `aws-s3-helloworld` are consumer-only
+  examples in the **root** module (like `aws-lambda-helloworld`), since the `awsdynamodb`/`awskinesis`/`awskafka`/`awss3` bindings are
+  themselves zero-dependency (`aws-kafka-helloworld` targets AWS's *managed* MSK trigger, distinct from the self-hosted
+  `kafka` module); `aws-sqs-helloworld` and `aws-sns-helloworld` are each their own module
   (depends on both the root module and its respective binding - would be a cycle inside either).
 - `go.work` - ties the root module, `awssqs/`, `awssns/`, `awseventbridge/`, `kafka/`,
   `diagnostics/`, `grpcbinding/`, `examples/aws-sqs-helloworld/`, and

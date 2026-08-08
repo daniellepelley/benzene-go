@@ -3,6 +3,7 @@ package benzenetest
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/awsdynamodb"
+	"github.com/daniellepelley/benzene-go/awskafka"
 	"github.com/daniellepelley/benzene-go/awskinesis"
 	"github.com/daniellepelley/benzene-go/awslambda"
 	"github.com/daniellepelley/benzene-go/awss3"
@@ -243,6 +245,35 @@ func SendTimer(t TB, host *Host, dataName, path string, topic benzene.Topic, tic
 	t.Helper()
 	event := NewTimerEvent(t, dataName, tick)
 	return serveHTTP(t, azurefunctions.TimerHandler(host.builder, topic, dataName), http.MethodPost, path, event)
+}
+
+// SendKafkaEvent pushes a Lambda MSK/Kafka delivery for one record through the awskafka binding and
+// returns the reported batch-item failures, each formatted "{partition}@{offset}" (the topic-
+// partition group key and the resume offset) - empty when the record was handled successfully. The
+// Benzene topic is the Kafka topic. The Kafka analogue of SendKinesisStream.
+func SendKafkaEvent(t TB, host *Host, topic string, partition int, offset int64, payload any) []string {
+	t.Helper()
+	event := NewKafkaEvent(t, topic, partition, offset, payload)
+	raw, err := awskafka.Handler(host.builder)(context.Background(), event)
+	if err != nil {
+		t.Fatalf("benzenetest: SendKafkaEvent dispatch error: %v", err)
+	}
+	var resp struct {
+		BatchItemFailures []struct {
+			ItemIdentifier struct {
+				Partition string `json:"partition"`
+				Offset    int64  `json:"offset"`
+			} `json:"itemIdentifier"`
+		} `json:"batchItemFailures"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		t.Fatalf("benzenetest: decode Kafka batch response: %v; response = %s", err, raw)
+	}
+	failures := make([]string, len(resp.BatchItemFailures))
+	for i, f := range resp.BatchItemFailures {
+		failures[i] = fmt.Sprintf("%s@%d", f.ItemIdentifier.Partition, f.ItemIdentifier.Offset)
+	}
+	return failures
 }
 
 // serveHTTP drives an http.Handler binding with an in-memory request/response and returns the
