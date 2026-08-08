@@ -84,6 +84,22 @@ delivery order - just the current honest picture, kept up to date as things land
   a partial one, with exponential backoff). Deliberately in-process only - steps are closures that
   can't be rehydrated, so there is no durable crash-resume (that's a durable workflow engine's job:
   Step Functions, Durable Functions, Temporal); this matches `Benzene.Saga`'s own capability boundary.
+- `responseevents` - the response-as-event pattern (zero dependencies), matching
+  `Benzene.ResponseEvents`: a pipeline `Middleware(publisher, mappings, opts...)` that after the
+  handler republishes the response payload as a follow-up event on a fire-and-forget transport (an
+  SQS `order:create` handler's payload published as `order:created`). Each `Mapping` resolves
+  `(sourceTopic, result) -> *Publication` and every matching mapping publishes (fan-out); `Map`
+  (explicit source->event with `When`/`Project` options) and `CrudConvention`
+  (`X:create`+`created` -> `X:created`) are the ready-made rules, plus custom `Mapping`
+  implementations. `Publisher` is the outbound port, `NewSenderPublisher(client.Sender)` the default.
+  `PublishFailureMode.FailMessage` (default) replaces the result with `unexpected-error` and stops
+  (nack/redeliver - handlers must be idempotent); `LogAndContinue` keeps the result and continues,
+  with an optional `OnPublishError` hook so the package forces no logger dependency. Deliberately
+  scoped to the runtime capability: the .NET package's AsyncAPI/event-service spec-catalog and its
+  build-time unmapped-response diagnostic are NOT ported - Go has no spec generator here, and mesh
+  descriptor derivation is this port's introspection path (`Mapping.Covers` is kept for a future
+  diagnostic). The nil-payload check is reflect-free (dispatch path), so a successful *typed*-nil
+  pointer payload publishes JSON `null` - a documented divergence from .NET's reference-null semantics.
 - `logging` - basic request logging/timing middleware using only `log/slog`: one structured
   line per invocation (topic/version, Benzene status, duration; Info/Warn/Error by outcome).
   The dependency-free visibility option alongside the `diagnostics` module's full OTel feed.

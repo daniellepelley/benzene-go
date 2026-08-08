@@ -124,6 +124,22 @@ alongside the shared spec.
   `Set`/`Get[T]` free functions; type-keyed context uses `reflect.TypeFor` at set/get time (off the
   message dispatch path, like `registry.go`). **In-process only, no durable crash-resume** - steps are
   closures that can't be rehydrated; for that, use Step Functions/Durable Functions/Temporal.
+- `responseevents/` - the *response-as-event* pattern, matching `Benzene.ResponseEvents` (zero-dep):
+  a pipeline `Middleware(publisher, mappings, opts...)` that, after the handler runs, republishes the
+  handler's response payload as a follow-up event on a fire-and-forget transport (an SQS
+  `order:create` handler's payload published as `order:created`). Each `Mapping` resolves
+  `(sourceTopic, ic.Result) -> *Publication` and every matching mapping publishes (fan-out); `Map`
+  (source->event, default: successful + payload, with `When`/`Project` options) and `CrudConvention`
+  (`X:create`+`created` -> `X:created`) are the ready-made rules, plus custom `Mapping`
+  implementations. `Publisher` is the outbound port; `NewSenderPublisher(client.Sender)` is the
+  default (marshals + sends, an unsuccessful send is a publish failure). `PublishFailureMode`:
+  `FailMessage` (default) replaces the result with `unexpected-error` and stops (nack/redeliver -
+  handlers must be idempotent); `LogAndContinue` keeps the result and continues, with an optional
+  `OnPublishError` hook (no forced logger dependency). The .NET package's AsyncAPI/spec-catalog and
+  build-time unmapped-response diagnostic are **not** ported (Go has no spec generator here; mesh
+  descriptor derivation is the introspection path); `Mapping.Covers` is kept for a future diagnostic.
+  Reflect-free nil-payload check (dispatch path), so a *typed*-nil pointer payload publishes JSON
+  `null` - a documented divergence from .NET's reference-null semantics.
 - `mesh/` - Phases 1-2 of `docs/design/mesh.md`: service `Descriptor` derived from the
   `Registry` (topics + JSON Schemas derived at startup from the `TReq`/`TRes` types the
   Registry captures at `Register` time, plus the contract `descriptorHash`),
