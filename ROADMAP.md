@@ -48,6 +48,11 @@ delivery order - just the current honest picture, kept up to date as things land
   `WWW-Authenticate` challenge, or sets the principal), and `Authorize(predicate)`/`RequireRole(role)`
   authorization middleware (`forbidden` when not permitted). Header-based; authentication is for
   HTTP-fronted pipelines.
+- `cache` - caching building block (zero dependencies), matching the essence of `Benzene.Cache.Core`:
+  a pluggable `Store` (Get/Set/Delete with TTL) + a generic read-through helper `GetOrLoad[T]` (the
+  Go form of `CacheEntry.LazyLoad`). `InMemoryStore` (thread-safe, TTL + clock) is the default; a
+  shared store is its own module. Degrades safely (read error = miss, write error ignored, load
+  error returned and not cached).
 - `logging` - basic request logging/timing middleware using only `log/slog`: one structured
   line per invocation (topic/version, Benzene status, duration; Info/Warn/Error by outcome).
   The dependency-free visibility option alongside the `diagnostics` module's full OTel feed.

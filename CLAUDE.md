@@ -86,6 +86,13 @@ alongside the shared spec.
   `RequireRole(role)` are the authorization middleware (`forbidden` when the principal is present
   but not permitted, `unauthorized` when absent). Header-based, so authentication is for
   HTTP-fronted pipelines.
+- `cache/` - caching building block, matching the essence of `Benzene.Cache.Core` (zero-dep): a
+  pluggable `Store` (Get/Set/Delete with per-entry TTL) + a generic read-through helper
+  `GetOrLoad[T](ctx, store, key, ttl, load)` (the Go form of `CacheEntry.LazyLoad` - returns the
+  cached value or calls `load` once and caches it). `InMemoryStore` (thread-safe, TTL + injectable
+  clock) is the default; a shared store (Redis) implements the same interface in its own module.
+  Degrades safely: a store read error is a miss, a write error is ignored, a `load` error is
+  returned and not cached. Caching is a handler-level concern, so it's a helper, not a middleware.
 - `mesh/` - Phases 1-2 of `docs/design/mesh.md`: service `Descriptor` derived from the
   `Registry` (topics + JSON Schemas derived at startup from the `TReq`/`TRes` types the
   Registry captures at `Register` time, plus the contract `descriptorHash`),
