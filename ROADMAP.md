@@ -100,6 +100,14 @@ delivery order - just the current honest picture, kept up to date as things land
   Records are ordered CDC, so processing is sequential and stops at the first failure, reporting
   that record's `SequenceNumber` for Lambda to checkpoint and redeliver - deliberately not
   `awssqs`'s concurrent fan-out.
+- `awskinesis` - Kinesis Data Streams inbound binding (zero dependencies, root module), the direct
+  sibling of `awsdynamodb` and matching `Benzene.Aws.Lambda.Kinesis`: a Lambda `Handler` for a
+  stream event source mapping. Topic is the stream name parsed from the record's stream ARN (a
+  Kinesis record has no per-record event type, so the stream is the routing key); body is the
+  record's `data` base64-decoded into the producer's bytes (typically JSON); headers are
+  `kinesis-`-prefixed metadata. No outbound side (writing the stream is the publish), so no SDK and
+  no separate module. Same ordered stop-at-first-failure + first-`SequenceNumber` checkpointing as
+  `awsdynamodb`.
 - `awseventbridge` - AWS EventBridge binding, in its **own Go module** (see `RELEASING.md`),
   matching the main repo's `transport-bindings.md` EventBridge entry exactly: an inbound
   `Handler` for a Lambda invoked by an EventBridge rule (zero dependencies; topic is
@@ -152,8 +160,9 @@ delivery order - just the current honest picture, kept up to date as things land
   in the Go standard library) and `google.golang.org/protobuf` (proto3-JSON).
 - `conformance` - runs this port against the main repo's vendored language-neutral fixtures.
 - Examples: `helloworld` (plain HTTP + DI + health check), `aws-lambda-helloworld`,
-  `azure-functions-helloworld`, `gcp-cloudrun-helloworld` (no new package needed for GCP - see
-  its README), `aws-sqs-helloworld` (publisher + consumer Lambdas, its own module),
+  `aws-dynamodb-helloworld` and `aws-kinesis-helloworld` (consumer-only stream Lambdas, root
+  module), `azure-functions-helloworld`, `gcp-cloudrun-helloworld` (no new package needed for GCP -
+  see its README), `aws-sqs-helloworld` (publisher + consumer Lambdas, its own module),
   `aws-sns-helloworld` (publisher + consumer Lambdas, its own module),
   `gcp-pubsub-helloworld` (a Cloud Run service consuming a Pub/Sub push subscription),
   `mesh-helloworld` (collector + two meshed services, local-only) - each cloud example with a

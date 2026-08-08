@@ -110,6 +110,15 @@ alongside the shared spec.
   is **sequential and stops at the first failure**, reporting that record's `SequenceNumber` for
   Lambda to checkpoint and redeliver - deliberately not `awssqs`'s concurrent fan-out. Matches
   `Benzene.Aws.Lambda.DynamoDb`.
+- `awskinesis/` - Kinesis Data Streams inbound binding, zero-dependency in the root module and the
+  direct sibling of `awsdynamodb`: a Lambda `Handler` for a stream event source mapping. Topic is
+  the **stream name** parsed from the record's stream ARN (a Kinesis record has no per-record event
+  type, so the stream itself is the routing key - unlike DynamoDB's `{tableName}:{eventName}`); body
+  is the record's `data` base64-decoded into the raw bytes the producer wrote (typically JSON);
+  headers are `kinesis-`-prefixed metadata (partition key, sequence number, ...). No outbound half
+  (writing to the stream is the publish; the trigger is read-only), so no SDK and no separate module.
+  Same ordered stop-at-first-failure + `SequenceNumber` checkpointing as `awsdynamodb` (AWS reads
+  only the first reported failure for a Kinesis mapping). Matches `Benzene.Aws.Lambda.Kinesis`.
 - `awssns/` - AWS SNS binding, in **its own Go module** (`awssns/go.mod`) - same shape and same
   reason as `awssqs` (`aws-sdk-go-v2/service/sns` for the outbound publish client; the inbound
   `Handler`, subscribed directly to an SNS topic, is zero-dependency). Unlike SQS, a direct
@@ -157,16 +166,16 @@ alongside the shared spec.
 - `examples/` - runnable example services: `helloworld` (plain HTTP),
   `mesh-helloworld` (collector + two meshed services, the Phases 1-4 demo), and one
   `<provider>-helloworld` per cloud deployment target (`aws-lambda-helloworld`,
-  `aws-dynamodb-helloworld`, `azure-functions-helloworld`, `gcp-cloudrun-helloworld`,
-  `aws-sqs-helloworld`, `aws-sns-helloworld`, `gcp-pubsub-helloworld`) - each with its own README
-  stating the concrete deploy steps and exactly what was/wasn't verified without live cloud
-  credentials. Plain Cloud Run needs no dedicated package (see `gcp-cloudrun-helloworld/
-  README.md`); `gcppubsub` exists because the Pub/Sub push envelope is a concrete shape
-  `httpbinding` alone can't cover - keep applying that bar to any new platform package.
-  `aws-dynamodb-helloworld` is a consumer-only example in the **root** module (like
-  `aws-lambda-helloworld`), since the `awsdynamodb` binding is itself zero-dependency;
-  `aws-sqs-helloworld` and `aws-sns-helloworld` are each their own module (depends on both the
-  root module and its respective binding - would be a cycle inside either).
+  `aws-dynamodb-helloworld`, `aws-kinesis-helloworld`, `azure-functions-helloworld`,
+  `gcp-cloudrun-helloworld`, `aws-sqs-helloworld`, `aws-sns-helloworld`, `gcp-pubsub-helloworld`) -
+  each with its own README stating the concrete deploy steps and exactly what was/wasn't verified
+  without live cloud credentials. Plain Cloud Run needs no dedicated package (see
+  `gcp-cloudrun-helloworld/README.md`); `gcppubsub` exists because the Pub/Sub push envelope is a
+  concrete shape `httpbinding` alone can't cover - keep applying that bar to any new platform
+  package. `aws-dynamodb-helloworld` and `aws-kinesis-helloworld` are consumer-only examples in the
+  **root** module (like `aws-lambda-helloworld`), since the `awsdynamodb`/`awskinesis` bindings are
+  themselves zero-dependency; `aws-sqs-helloworld` and `aws-sns-helloworld` are each their own module
+  (depends on both the root module and its respective binding - would be a cycle inside either).
 - `go.work` - ties the root module, `awssqs/`, `awssns/`, `awseventbridge/`, `kafka/`,
   `diagnostics/`, `grpcbinding/`, `examples/aws-sqs-helloworld/`, and
   `examples/aws-sns-helloworld/` together for local development (see `RELEASING.md`). Its

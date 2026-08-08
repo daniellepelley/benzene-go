@@ -83,6 +83,7 @@ check, and both HTTP entry points wired through the three-phase `App` lifecycle.
 | `awseventbridge` ([own module](RELEASING.md)) | 96%+ | AWS EventBridge binding, matching the main repo's spec exactly: inbound `Handler` for a Lambda invoked by a rule (zero deps; topic is `detail-type` verbatim, body is the raw `detail` JSON, headers are `eventbridge-`-prefixed envelope metadata plus any `_benzeneHeaders` object embedded inside `detail`; a failed event returns a Go error, triggering AWS's async-invoke retry) and an outbound `Client` publishing via `PutEvents` (embeds headers under `_benzeneHeaders` when the message is a JSON object; needs `aws-sdk-go-v2/service/eventbridge`) |
 | `awssns` ([own module](RELEASING.md)) | 100% | AWS SNS binding: inbound `Handler` for a Lambda subscribed directly to an SNS topic (zero deps; a failed notification returns a Go error, triggering AWS's own async-invoke retry, since SNS has no batch/partial-failure mechanism), outbound `Client` publishing via `Publish` (needs `aws-sdk-go-v2/service/sns`) |
 | `awsdynamodb` | 100% | AWS DynamoDB Streams inbound binding (zero deps, root module): a Lambda `Handler` for a stream event source mapping. Topic is `{tableName}:{eventName}` (table parsed from the stream ARN + INSERT/MODIFY/REMOVE), body is the record's image unmarshalled from DynamoDB AttributeValue format into plain JSON (NewImage, else OldImage, else Keys). Records are ordered CDC, so processing is sequential and stops at the first failure, reporting that record's `SequenceNumber` for Lambda to checkpoint and redeliver - no outbound side (writing the table is the publish) |
+| `awskinesis` | 100% | AWS Kinesis Data Streams inbound binding (zero deps, root module), the sibling of `awsdynamodb`: a Lambda `Handler` for a stream event source mapping. Topic is the stream name (parsed from the record's stream ARN - a Kinesis record has no per-record event type, so the stream is the routing key), body is the record's `data` base64-decoded into the producer's bytes (typically JSON), headers are `kinesis-`-prefixed metadata. Same ordered stop-at-first-failure + `SequenceNumber` checkpointing; no outbound side (writing the stream is the publish) |
 | `conformance` | n/a (test-only) | Runs this port against the fixtures vendored from the main repo's `docs/specification/conformance/` |
 | `examples/helloworld` | - | A runnable example service - DI, health check, both HTTP entry points |
 | `examples/aws-lambda-helloworld` | - | The same service, deployable to AWS Lambda (Dockerfile + SAM template) |
@@ -92,6 +93,7 @@ check, and both HTTP entry points wired through the three-phase `App` lifecycle.
 | `examples/aws-sqs-helloworld` ([own module](RELEASING.md)) | - | A publisher Lambda (Function URL) forwarding to SQS + a consumer Lambda triggered by that queue |
 | `examples/aws-sns-helloworld` ([own module](RELEASING.md)) | - | A publisher Lambda (Function URL) forwarding to SNS + a consumer Lambda subscribed to that topic |
 | `examples/aws-dynamodb-helloworld` | - | A consumer Lambda triggered by a DynamoDB table's stream via `awsdynamodb.Handler` - write to the table to drive it, no publisher code |
+| `examples/aws-kinesis-helloworld` | - | A consumer Lambda triggered by a Kinesis data stream via `awskinesis.Handler` - `PutRecord` onto the stream to drive it, no publisher code |
 | `examples/mesh-helloworld` | - | The whole mesh story in one process: a `meshd` collector + two meshed services with a cross-service traced call - open the Mesh View and watch the derived fleet |
 
 Every non-test-only package sits at 100% coverage, or just under it where the gap is a
@@ -106,6 +108,7 @@ a type that can't actually fail to marshal). Run `go test ./... -cover` to see c
 | AWS | Lambda triggered by SQS + publish-to-SQS | `awssqs` - its own module (needs the AWS SDK) |
 | AWS | Lambda subscribed to SNS + publish-to-SNS | `awssns` - its own module (needs the AWS SDK) |
 | AWS | Lambda triggered by a DynamoDB table's stream | `awsdynamodb` (inbound only, zero deps) - the stream delivers change records as plain JSON, no SDK needed |
+| AWS | Lambda triggered by a Kinesis data stream | `awskinesis` (inbound only, zero deps) - the stream delivers records as plain JSON (data base64-encoded), no SDK needed |
 | Azure | Azure Functions custom handler (HTTP, queue, or Cosmos DB Change Feed trigger) | `azurefunctions` - Azure has no native Go worker |
 | Google Cloud | Cloud Run | None - Cloud Run's contract is "listen on `$PORT`", which `httpbinding` + `net/http` already satisfies |
 | Google Cloud | Cloud Run consuming a Pub/Sub push subscription | `gcppubsub` (inbound only, zero deps) - the push envelope's base64/attributes/ack contract is the one GCP shape `httpbinding` can't cover |

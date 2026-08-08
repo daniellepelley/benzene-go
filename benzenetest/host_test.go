@@ -325,6 +325,32 @@ func TestSendDynamoDBStream_FailedRecordIsReportedBySequenceNumber(t *testing.T)
 	}
 }
 
+func TestSendKinesisStream_SuccessAndFailure(t *testing.T) {
+	// The topic resolves to the stream name ("orders"); a handler failure is reported by the
+	// record's sequence number for redelivery.
+	withOrders := benzenetest.WithServices(func(b *benzene.ApplicationBuilder) {
+		if err := benzene.Register(b.Registry, benzene.NewTopic("orders"), benzene.Handler[orderDoc, struct{}](
+			func(_ context.Context, o orderDoc) benzene.Result[struct{}] {
+				if o.ID == "" {
+					return benzene.BadRequest[struct{}]("order id is required")
+				}
+				return benzene.Ok(struct{}{})
+			})); err != nil {
+			panic(err)
+		}
+	})
+
+	ok := benzenetest.SendKinesisStream(t, benzenetest.NewHost(newTestApp(), withOrders), "orders", "seq-1", orderDoc{ID: "o-1", Amount: 9.99})
+	if len(ok) != 0 {
+		t.Errorf("failures = %v, want none for a valid record", ok)
+	}
+
+	bad := benzenetest.SendKinesisStream(t, benzenetest.NewHost(newTestApp(), withOrders), "orders", "seq-2", orderDoc{ID: "", Amount: 1})
+	if len(bad) != 1 || bad[0] != "seq-2" {
+		t.Errorf("failures = %v, want [seq-2] (reported for redelivery)", bad)
+	}
+}
+
 func TestSendDynamoDBStream_RemoveUsesOldImage(t *testing.T) {
 	// A REMOVE carries no NewImage; the helper must place the row under OldImage and the binding's
 	// NewImage-else-OldImage-else-Keys fallback must still deliver it to the handler.

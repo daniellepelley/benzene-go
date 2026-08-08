@@ -259,6 +259,31 @@ func jsonToAttributeValue(t TB, raw json.RawMessage) any {
 	}
 }
 
+// NewKinesisStreamEvent builds the Lambda Kinesis stream event-source-mapping payload for one
+// record - the shape awskinesis.Handler parses. The topic it resolves to is the stream name (e.g.
+// "orders"); payload is the plain record body, which this marshals and base64-encodes into the
+// record's data field (as Lambda delivers it) so the binding decodes it back for the handler.
+// sequenceNumber identifies the record in a batch-item-failure report.
+func NewKinesisStreamEvent(t TB, streamName, sequenceNumber string, payload any) json.RawMessage {
+	t.Helper()
+	arn := "arn:aws:kinesis:us-east-1:000000000000:stream/" + streamName
+	event := map[string]any{
+		"Records": []map[string]any{{
+			"eventID":        "evt-" + sequenceNumber,
+			"eventName":      "aws:kinesis:record",
+			"eventSource":    "aws:kinesis",
+			"eventSourceARN": arn,
+			"awsRegion":      "us-east-1",
+			"kinesis": map[string]any{
+				"partitionKey":   "pk-" + sequenceNumber,
+				"sequenceNumber": sequenceNumber,
+				"data":           base64.StdEncoding.EncodeToString([]byte(marshalBody(t, payload))),
+			},
+		}},
+	}
+	return mustMarshal(t, event)
+}
+
 func mustMarshal(t TB, v any) json.RawMessage {
 	t.Helper()
 	data, err := json.Marshal(v)

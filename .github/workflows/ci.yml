@@ -55,6 +55,7 @@ jobs:
           set -euo pipefail
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/aws-lambda-helloworld ./examples/aws-lambda-helloworld
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/aws-dynamodb-helloworld ./examples/aws-dynamodb-helloworld
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/aws-kinesis-helloworld ./examples/aws-kinesis-helloworld
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/azure-functions-helloworld ./examples/azure-functions-helloworld
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/gcp-cloudrun-helloworld ./examples/gcp-cloudrun-helloworld
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/gcp-pubsub-helloworld ./examples/gcp-pubsub-helloworld

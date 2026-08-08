@@ -10,6 +10,7 @@ import (
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/awsdynamodb"
+	"github.com/daniellepelley/benzene-go/awskinesis"
 	"github.com/daniellepelley/benzene-go/awslambda"
 	"github.com/daniellepelley/benzene-go/azurefunctions"
 	"github.com/daniellepelley/benzene-go/gcppubsub"
@@ -184,6 +185,33 @@ func SendDynamoDBStream(t TB, host *Host, eventName, tableName, sequenceNumber s
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		t.Fatalf("benzenetest: decode DynamoDB batch response: %v; response = %s", err, raw)
+	}
+	failures := make([]string, len(resp.BatchItemFailures))
+	for i, f := range resp.BatchItemFailures {
+		failures[i] = f.ItemIdentifier
+	}
+	return failures
+}
+
+// SendKinesisStream pushes a Lambda Kinesis stream delivery for one record through the awskinesis
+// binding and returns the reported batch-item failures (each entry the failing record's sequence
+// number) - empty when the record was handled successfully. The topic resolves to the stream name
+// and payload is the plain record body (marshaled and base64-encoded by the builder). The Kinesis
+// analogue of SendDynamoDBStream, for a stream-triggered consumer.
+func SendKinesisStream(t TB, host *Host, streamName, sequenceNumber string, payload any) []string {
+	t.Helper()
+	event := NewKinesisStreamEvent(t, streamName, sequenceNumber, payload)
+	raw, err := awskinesis.Handler(host.builder)(context.Background(), event)
+	if err != nil {
+		t.Fatalf("benzenetest: SendKinesisStream dispatch error: %v", err)
+	}
+	var resp struct {
+		BatchItemFailures []struct {
+			ItemIdentifier string `json:"itemIdentifier"`
+		} `json:"batchItemFailures"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		t.Fatalf("benzenetest: decode Kinesis batch response: %v; response = %s", err, raw)
 	}
 	failures := make([]string, len(resp.BatchItemFailures))
 	for i, f := range resp.BatchItemFailures {
