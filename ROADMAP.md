@@ -31,6 +31,18 @@ delivery order - just the current honest picture, kept up to date as things land
   userinfo from the reported URL so basic-auth credentials do not leak. `Benzene.HealthChecks.Disk`
   (host free-space self-check) is deferred - Go has no portable free-space API, so it needs
   platform-specific syscalls behind build tags (see below).
+- `clienthealthcheck` - the consumer-side dependency health check (zero dependencies), matching
+  `Benzene.Clients.HealthChecks`: a `ServiceCheck` (a `healthcheck.Check`, in its own package so
+  `healthcheck` keeps its net-only footprint) probes a downstream Benzene provider through an
+  outbound `client.Sender` and reports the *contract* relationship, not the provider's transient
+  health - unreachable = `failed`, reachable+matching contract hash = `ok`, reachable+drifted =
+  `warning` (degraded, does not flip the caller's health), reachable without drift-detection
+  configured = `ok` (reachability only). .NET bakes the hash into a generated client; Go has none,
+  so `WithExpectedContractHash` supplies the consumer's built-against hash and the check reads the
+  provider's live `descriptorHash` from its reserved `benzene:mesh` descriptor. A provider that omits
+  the descriptor leaves drift unassessable = `ok` (reachability passed; the gap is recorded in the
+  result `Data`, per the profile's §4 degradation rule), never a false failure. For a *contracts*
+  diagnostic surface, not a liveness/readiness probe (it calls a downstream service).
 - `validation` - request-validation building block (zero dependencies): `Validated(validator,
   handler)` wraps a handler so an invalid request short-circuits to a `validation-error` result
   before the handler runs, plus `Validator[T]`/`ValidatorFunc[T]` and a `Combine` composer. The
@@ -308,12 +320,6 @@ Done above. These zero-dependency items remain queued and buildable without any 
   emit a wiring-time self-check report - the internal counterpart to the external `cloudserviceprobe`
   (`Benzene.CloudService.CloudServiceProfileReport` vs `.Probe`). Pure assembly of existing zero-dep
   parts; the design work is the builder's shape and how it composes with a hand-wired `App`.
-- **Consumer-side contract-drift health check** (`Benzene.Clients.HealthChecks`). A `healthcheck.Check`
-  that invokes a downstream Benzene service's reserved `benzene:healthcheck` topic via a
-  `client.Sender` and compares the provider's live contract hash (from its `benzene:mesh` descriptor)
-  against a hash the consumer was built against: reachable+matching = ok, reachable+drifted = warning
-  (does not flip health), unreachable = failed. Zero-dep, but needs the descriptor-hash comparison
-  wired in, so it is more than the existing reachability-only `TCPCheck`/`HTTPPingCheck`.
 - **OpenAPI/AsyncAPI spec generation** (`Benzene.Schema.OpenApi`). R5 is satisfied today by
   `mesh.SpecHandler` serving the derived descriptor (Benzene's own format, which the profile
   permits). A richer, industry-standard document (OpenAPI for request/response topics, AsyncAPI for

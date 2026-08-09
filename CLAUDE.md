@@ -140,6 +140,20 @@ alongside the shared spec.
   descriptor derivation is the introspection path); `Mapping.Covers` is kept for a future diagnostic.
   Reflect-free nil-payload check (dispatch path), so a *typed*-nil pointer payload publishes JSON
   `null` - a documented divergence from .NET's reference-null semantics.
+- `clienthealthcheck/` - the consumer-side dependency health check, matching
+  `Benzene.Clients.HealthChecks` (zero-dep). A `ServiceCheck` (a `healthcheck.Check`) probes a
+  downstream Benzene provider through an outbound `client.Sender` and reports the **contract
+  relationship**, not the provider's transient health: unreachable -> `failed`, reachable+matching
+  contract hash -> `ok`, reachable+drifted hash -> `warning` (degraded, does **not** flip the
+  caller's health), reachable without drift-detection configured -> `ok` (reachability only).
+  `.NET` bakes the hash into a generated client; Go has none, so `WithExpectedContractHash` supplies
+  the hash the consumer was built against and the check reads the provider's live
+  `descriptorHash` from its reserved `benzene:mesh` descriptor. A provider that omits the descriptor
+  leaves drift unassessable -> `ok` (reachability passed; the gap is recorded in `Data`, per the
+  profile's §4 degradation rule), never a false failure. Register it on a **contracts** diagnostic
+  surface, not a liveness/readiness probe (it calls a downstream). Its own package (not in
+  `healthcheck`) so `healthcheck` keeps its net/net-http-only footprint - this check additionally
+  needs `client` + `mesh`.
 - `cloudserviceprobe/` - the external, black-box conformance checker for the Cloud Service Profile
   (`docs/specification/cloud-service-profile.md` §2, §5), matching `Benzene.CloudService.Probe`
   (zero-dep: `net/http`+`encoding/json`+`crypto/rand`). `Run(ctx, client, baseURL, opts...)` hits a
