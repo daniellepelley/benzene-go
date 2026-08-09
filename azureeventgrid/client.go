@@ -1,7 +1,7 @@
 // Package azureeventgrid is the outbound Azure Event Grid client, the Go port of
 // Benzene.Clients.Azure.EventGrid's EventGridBenzeneMessageClient (its CloudEvents 1.0
 // EventGridContextConverter, the schema Benzene's Event Grid ingress prefers). Client
-// satisfies client.Sender, so it composes with client.CorrelationDecorator/RetryDecorator
+// satisfies client.Sender, so it composes with client.WithCorrelationID/WithRetry
 // like any other outbound client. Outbound-only: Event Grid has no request/response beyond a
 // send acknowledgement, and inbound Event Grid delivery is the azurefunctions EventGridHandler.
 package azureeventgrid
@@ -29,8 +29,8 @@ type PublishCloudEventsAPI interface {
 }
 
 // Client publishes outbound Benzene messages to an Azure Event Grid topic as CloudEvents 1.0.
-// It satisfies client.Sender, so it can be wrapped in client.CorrelationDecorator/
-// RetryDecorator like any other Sender.
+// It satisfies client.Sender, so it can be wrapped in client.WithCorrelationID/
+// WithRetry like any other Sender.
 type Client struct {
 	API PublishCloudEventsAPI
 	// Source is the CloudEvent "source" attribute - the publishing service's identity (e.g.

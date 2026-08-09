@@ -96,6 +96,6 @@ func buildReport(cfg config) ProfileReport {
 		{ID: "R5", Name: "derived spec", Satisfied: cfg.descriptor, Detail: specDetail},
 		{ID: "R6", Name: "mesh service-side feeds", Satisfied: false, Detail: r6Detail},
 		{ID: "R7", Name: "default service-standard paths", Satisfied: true, Detail: "reserved endpoints use the /benzene/* defaults"},
-		{ID: "R8", Name: "trace-context propagation", Satisfied: false, Detail: "not wired by this builder - add mesh.TraceMiddleware (inbound join) and the client TraceContextDecorator (outbound forward)"},
+		{ID: "R8", Name: "trace-context propagation", Satisfied: false, Detail: "not wired by this builder - add mesh.TraceMiddleware (inbound join) and the client WithTraceContext (outbound forward)"},
 	}}
 }

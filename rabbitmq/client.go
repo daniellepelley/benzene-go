@@ -22,7 +22,7 @@ type Publisher interface {
 }
 
 // Client publishes outbound Benzene messages to RabbitMQ. It satisfies client.Sender, so it can
-// be wrapped in client.CorrelationDecorator/RetryDecorator like any other Sender, and mirrors the
+// be wrapped in client.WithCorrelationID/WithRetry like any other Sender, and mirrors the
 // main repo's Benzene.RabbitMq outbound client (RabbitMqBenzeneMessageClient /
 // RabbitMqContextConverter): the Benzene topic becomes the AMQP routing key and is ALSO carried as
 // a reserved "topic" message header, so a Benzene RabbitMQ Consumer routes by header (portable)

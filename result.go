@@ -130,7 +130,7 @@ func TooManyRequests[T any](errors ...string) Result[T] {
 
 // Timeout returns a failed Result with StatusTimeout - a downstream deadline elapsed;
 // transient, but whether the operation was applied is unknown, so blind retries are only
-// safe for idempotent operations (unlike StatusServiceUnavailable, RetryDecorator does not
+// safe for idempotent operations (unlike StatusServiceUnavailable, WithRetry does not
 // retry this status by default).
 func Timeout[T any](errors ...string) Result[T] { return Fail[T](StatusTimeout, errors...) }
 

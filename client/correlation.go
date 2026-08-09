@@ -11,7 +11,7 @@ import (
 	"github.com/daniellepelley/benzene-go/wire"
 )
 
-// CorrelationDecorator wraps next so an outbound Send propagates the reserved correlation header
+// WithCorrelationID wraps next so an outbound Send propagates the reserved correlation header
 // (wire-contracts.md §2, default x-correlation-id) - the value the caller already put in its own
 // headers (matched case-insensitively, per §2's "case-insensitive on read"), left untouched and
 // never overwritten. Per §2 the header is "written ... when the application populates one," and
@@ -19,17 +19,17 @@ import (
 // decorator does NOT invent one when the caller's headers lack it - a fresh per-send random
 // value correlates nothing and would misrepresent the framework as the source. Pass a non-nil
 // generate to opt into producing a value at the edge (e.g. to start a new correlation chain);
-// client.RandomCorrelationID is a ready-made generator for that. Use CorrelationDecoratorWithKey
+// client.RandomCorrelationID is a ready-made generator for that. Use WithCorrelationIDKey
 // to override the header name.
-func CorrelationDecorator(next Sender, generate func() string) Sender {
-	return CorrelationDecoratorWithKey(next, "", generate)
+func WithCorrelationID(next Sender, generate func() string) Sender {
+	return WithCorrelationIDKey(next, "", generate)
 }
 
-// CorrelationDecoratorWithKey is CorrelationDecorator with the reserved correlation header name
+// WithCorrelationIDKey is WithCorrelationID with the reserved correlation header name
 // overridden (wire-contracts.md §2 "Reserved names are defaults"). An empty key means the default
 // (wire.DefaultCorrelationKey). Pass the SAME name the rest of the service uses - an override
 // applies to both directions.
-func CorrelationDecoratorWithKey(next Sender, key string, generate func() string) Sender {
+func WithCorrelationIDKey(next Sender, key string, generate func() string) Sender {
 	if key == "" {
 		key = wire.DefaultCorrelationKey
 	}
@@ -57,7 +57,7 @@ func withCorrelationID(headers map[string]string, key string, generate func() st
 }
 
 // RandomCorrelationID returns a random 32-character hex string, the opt-in edge generator for
-// CorrelationDecorator: pass it as generate to start a new correlation chain when the caller did
+// WithCorrelationID: pass it as generate to start a new correlation chain when the caller did
 // not supply one. It is not a UUID (this repo adds no dependency to format one per RFC 9562) but
 // is sufficiently unique and URL/header-safe. crypto/rand.Read reading the OS CSPRNG is not
 // documented to fail on any platform this library targets, so its error is intentionally ignored

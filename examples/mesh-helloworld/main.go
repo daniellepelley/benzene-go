@@ -71,7 +71,7 @@ type welcomeResponse struct {
 // welcomeHandler is the cross-service hop: it calls greeter's "greet" topic over the wire
 // envelope. Trace propagation - forwarding this invocation's span as a traceparent header, which
 // joins the two services' trace events into one flow and derives the consumer edge on the
-// collector - is handled by wrapping greeter in mesh.TraceContextDecorator at construction (see
+// collector - is handled by wrapping greeter in mesh.WithTraceContext at construction (see
 // the call sites), so the handler itself writes no mesh-specific line at all.
 func welcomeHandler(greeter client.Sender) benzene.Handler[welcomeRequest, welcomeResponse] {
 	return func(ctx context.Context, req welcomeRequest) benzene.Result[welcomeResponse] {
@@ -213,7 +213,7 @@ func main() {
 	go func() { log.Fatal(http.ListenAndServe(":"+greeterPort, greeter.handler)) }()
 
 	frontdoor := newService("frontdoor", meshdEndpoint, true, func(registry *benzene.Registry) {
-		greeterClient := mesh.TraceContextDecorator(httpclient.NewClient("http://localhost:" + greeterPort + httpbinding.EnvelopePath))
+		greeterClient := mesh.WithTraceContext(httpclient.NewClient("http://localhost:" + greeterPort + httpbinding.EnvelopePath))
 		if err := benzene.Register(registry, benzene.NewTopic("welcome"), welcomeHandler(greeterClient)); err != nil {
 			log.Fatalf("register welcome: %v", err)
 		}
@@ -230,7 +230,7 @@ func main() {
 	// "missing feeds: descriptor, health" - and its calls to greeter still produce the
 	// legacy-portal→greet consumer edge. This is the degradation rule, live.
 	legacy := newService("legacy-portal", meshdEndpoint, false, func(registry *benzene.Registry) {
-		greeterClient := mesh.TraceContextDecorator(httpclient.NewClient("http://localhost:" + greeterPort + httpbinding.EnvelopePath))
+		greeterClient := mesh.WithTraceContext(httpclient.NewClient("http://localhost:" + greeterPort + httpbinding.EnvelopePath))
 		if err := benzene.Register(registry, benzene.NewTopic("legacy:relay"), welcomeHandler(greeterClient)); err != nil {
 			log.Fatalf("register legacy:relay: %v", err)
 		}

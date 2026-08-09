@@ -31,7 +31,7 @@ type StartExecutionAPI interface {
 }
 
 // Client starts executions of a Step Functions state machine with outbound Benzene messages. It
-// satisfies client.Sender, so it can be wrapped in client.CorrelationDecorator/RetryDecorator like
+// satisfies client.Sender, so it can be wrapped in client.WithCorrelationID/WithRetry like
 // any other Sender.
 type Client struct {
 	API             StartExecutionAPI

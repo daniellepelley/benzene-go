@@ -1,7 +1,7 @@
 // Package azurequeuestorage is the outbound Azure Queue Storage client, the Go port of
 // Benzene.Clients.Azure.QueueStorage's QueueStorageBenzeneMessageClient (its
 // QueueStorageContextConverter). Client satisfies client.Sender, so it composes with
-// client.CorrelationDecorator/RetryDecorator like any other outbound client. Outbound-only:
+// client.WithCorrelationID/WithRetry like any other outbound client. Outbound-only:
 // Queue Storage has no request/response beyond a send acknowledgement, and inbound Queue
 // Storage delivery is the azurefunctions QueueHandler.
 package azurequeuestorage
@@ -27,7 +27,7 @@ type EnqueueMessageAPI interface {
 }
 
 // Client publishes outbound Benzene messages to an Azure Storage queue. It satisfies
-// client.Sender, so it can be wrapped in client.CorrelationDecorator/RetryDecorator like any
+// client.Sender, so it can be wrapped in client.WithCorrelationID/WithRetry like any
 // other Sender.
 type Client struct {
 	API EnqueueMessageAPI

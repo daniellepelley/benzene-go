@@ -36,7 +36,7 @@ type SenderAPI interface {
 
 // Client publishes outbound Benzene messages to a Service Bus queue or topic via a caller-supplied
 // sender (obtained from azservicebus.Client.NewSender(queueOrTopicName)). It satisfies client.Sender,
-// so it composes with client.CorrelationDecorator/RetryDecorator like any other Sender.
+// so it composes with client.WithCorrelationID/WithRetry like any other Sender.
 //
 // Like the .NET ServiceBusBenzeneMessageClient, it wraps an already-built sender rather than a
 // connection string or credential: the caller builds the azservicebus.Client however they choose

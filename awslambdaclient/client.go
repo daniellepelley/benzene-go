@@ -27,7 +27,7 @@ type InvokeAPI interface {
 }
 
 // Client invokes a target Lambda function with an outbound Benzene message. It satisfies
-// client.Sender, so it can be wrapped in client.CorrelationDecorator/RetryDecorator like any
+// client.Sender, so it can be wrapped in client.WithCorrelationID/WithRetry like any
 // other Sender.
 type Client struct {
 	API          InvokeAPI

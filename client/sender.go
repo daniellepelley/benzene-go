@@ -2,13 +2,13 @@
 // daniellepelley/Benzene's docs/specification/transport-bindings.md §2: "Cross-cutting client
 // behaviors (correlation ID injection, trace context, retry) are decorators over the same
 // interface and therefore transport-agnostic." Sender is that one interface;
-// CorrelationDecorator and RetryDecorator are decorators over it - each wraps a Sender and
+// WithCorrelationID and WithRetry are decorators over it - each wraps a Sender and
 // returns another Sender, so they compose freely and work over any transport's outbound client
 // (httpclient.Client already satisfies Sender structurally, with no changes needed there). The
 // third behavior the spec names, trace-context propagation, is a decorator over this same Sender
 // too, but lives with the trace system it forwards so this package stays dependency-free of both:
-// mesh.TraceContextDecorator propagates the zero-dependency mesh Span, and
-// diagnostics.TraceContextDecorator propagates the OpenTelemetry span context.
+// mesh.WithTraceContext propagates the zero-dependency mesh Span, and
+// diagnostics.WithTraceContext propagates the OpenTelemetry span context.
 package client
 
 import (

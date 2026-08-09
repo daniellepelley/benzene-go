@@ -22,7 +22,7 @@ type ProducerAPI interface {
 }
 
 // Client publishes outbound Benzene messages to an Event Hub. It satisfies client.Sender, so it
-// can be wrapped in client.CorrelationDecorator/RetryDecorator like any other Sender. It mirrors
+// can be wrapped in client.WithCorrelationID/WithRetry like any other Sender. It mirrors
 // Benzene.Clients.Azure.EventHub.EventHubBenzeneMessageClient: the topic and headers travel as
 // event properties, the message bytes as the event body, and a completed send is an acknowledgement
 // only (Event Hubs has no request/response semantics).

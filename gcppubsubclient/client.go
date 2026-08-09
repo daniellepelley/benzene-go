@@ -16,7 +16,7 @@
 // on Pub/Sub the routing topic and the physical topic are independent, exactly as on the inbound
 // side (which routes on the attribute, not the Pub/Sub topic name).
 //
-// Client satisfies client.Sender, so it composes with client.CorrelationDecorator/RetryDecorator
+// Client satisfies client.Sender, so it composes with client.WithCorrelationID/WithRetry
 // like any other Sender. Publishing is fire-and-acknowledge: a successful publish returns a
 // server-assigned message id (no payload), so a success maps to StatusAccepted, matching every
 // other queue-shaped Sender in this repo; a publish failure maps to ServiceUnavailable.
