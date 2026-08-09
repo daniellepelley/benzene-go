@@ -44,8 +44,8 @@ unverifiable wire shape is deferred, not guessed.
 | `Clients.Aws.Sqs` | Outbound SQS publish | Done `awssqs.Client` | — |
 | `Clients.Aws.Sns` | Outbound SNS publish | Done `awssns.Client` | — |
 | `Clients.Aws.EventBridge` | Outbound `PutEvents` | Done `awseventbridge.Client` | — |
-| `Clients.Aws.Lambda` | **Outbound Lambda-invoke** (RequestResponse/Event, FunctionError) | **Missing** | `aws-sdk-go-v2/service/lambda` |
-| `Clients.Aws.StepFunctions` | **Outbound StartExecution** (idempotent name) | **Missing** | `aws-sdk-go-v2/service/sfn` |
+| `Clients.Aws.Lambda` | **Outbound Lambda-invoke** (RequestResponse/Event, FunctionError) | **Done** `awslambdaclient` | `aws-sdk-go-v2/service/lambda` |
+| `Clients.Aws.StepFunctions` | **Outbound StartExecution** (idempotent name) | **Done** `awsstepfunctions` | `aws-sdk-go-v2/service/sfn` |
 | `Aws.Sqs` (not the Lambda one) | **Self-hosted SQS poller** (Receive/Delete loop, backoff) | **Done** `awssqs.Consumer` | `aws-sdk-go-v2/service/sqs` (already present) |
 | `Aws.Lambda.XRay` | Direct-to-X-Ray-SDK per-stage subsegments | Partial — intent covered by `diagnostics` (OTel→X-Ray via ADOT/OTLP); a direct-SDK port is a separate gap | `aws-xray-sdk-go` (only if the OTel path is judged inadequate) |
 | `Aws.Lambda.HttpBridge` / `.AspNet` / `.Hosting` | Bridge to ASP.NET / generic-host glue | Out-of-scope (no ASP.NET in Go; `net/http` handler *is* the pipeline) | — |

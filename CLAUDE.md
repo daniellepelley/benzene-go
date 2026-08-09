@@ -250,6 +250,21 @@ alongside the shared spec.
   is the standalone-compute alternative to the Lambda-trigger `Handler` (a container/EC2 worker that
   owns its poll loop), depends on a narrow `ReceiveDeleteAPI` for fake-based tests, and backs off on
   a transient AWS error rather than hot-looping.
+- `awslambdaclient/` - **outbound Lambda-invoke client**, in its **own Go module** (needs
+  `aws-sdk-go-v2/service/lambda`), the Go form of `Benzene.Clients.Aws.Lambda` and the invoking
+  counterpart of the inbound `awslambda` binding. `Client` satisfies `client.Sender`: `Send` invokes
+  a target function with a wire envelope payload. `RequestResponse` (default) parses the target's
+  envelope response back into a `Result` (same `toResult` rules as `httpclient`); `Event`
+  fire-and-forget returns `accepted` without a body; a set `FunctionError` (the target threw) becomes
+  `unexpected-error`, not a mis-parsed success; a transport failure becomes `service-unavailable`.
+  Narrow `InvokeAPI` for fake-based tests.
+- `awsstepfunctions/` - **outbound Step Functions client**, in its **own Go module** (needs
+  `aws-sdk-go-v2/service/sfn`), the Go form of `Benzene.Clients.Aws.StepFunctions`. `Client` satisfies
+  `client.Sender`: `Send` starts a state-machine execution with the wire envelope as the `Input`.
+  Starting is fire-and-forget, so a successful start is `accepted`; a transport failure is
+  `service-unavailable`. An optional `ExecutionName` func derives an idempotent execution name
+  (sanitized to Step Functions' rules, capped at 80 runes), and an `ExecutionAlreadyExists` error on
+  a same-name retry is treated as an idempotent `accepted` (matching .NET's catch), not a failure.
 - `cloudevents/` - CloudEvents 1.0 mapping, zero-dependency: wire envelope <-> CloudEvents
   (`type` <-> topic, `data` <-> body, other attributes <-> `ce-`-prefixed headers - the
   outbound direction only maps `ce-` headers back, documented lossiness), plus an inbound
@@ -437,10 +452,10 @@ alongside the shared spec.
 ## Workflow expectations
 
 - Run `gofmt -w .` before every commit; CI fails on unformatted files.
-- Run `go vet ./... ./awssqs/... ./awssns/... ./awseventbridge/... ./kafka/...
-  ./diagnostics/... ./grpcbinding/... ./examples/aws-sqs-helloworld/...
-  ./examples/aws-sns-helloworld/... && go build (same paths) && go test (same paths) -race
-  -cover` before considering a task
+- Run `go vet ./... ./awssqs/... ./awslambdaclient/... ./awsstepfunctions/... ./awssns/...
+  ./awseventbridge/... ./kafka/... ./diagnostics/... ./grpcbinding/...
+  ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/... && go build (same paths) &&
+  go test (same paths) -race -cover` before considering a task
   complete - `./...` from the root does not cross a nested
   module boundary even with `go.work` present, so the nested modules need their own explicit
   path. Every non-test-only package should sit at 100% coverage, or just under it with the gap
