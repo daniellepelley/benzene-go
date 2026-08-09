@@ -11,53 +11,56 @@ import (
 	"github.com/daniellepelley/benzene-go/mesh"
 )
 
-// responder answers by reserved topic id, so a test scripts the downstream's healthcheck and mesh
-// descriptor replies independently.
-type responder func(topicID string) benzene.Result[json.RawMessage]
-
-func sender(r responder) client.Sender {
+// meshResponder answers the reserved benzene:mesh topic (the only topic this check probes) with a
+// scripted result, and fails any other topic so a stray call is obvious.
+func meshResponder(reply benzene.Result[json.RawMessage]) client.Sender {
 	return client.SenderFunc(func(_ context.Context, topic benzene.Topic, _ map[string]string, _ []byte) benzene.Result[json.RawMessage] {
-		return r(topic.ID)
+		if topic.ID == mesh.TopicID {
+			return reply
+		}
+		return benzene.NotFound[json.RawMessage]("unexpected topic " + topic.ID)
 	})
 }
 
-func healthOK(topicID string) benzene.Result[json.RawMessage] {
-	if topicID == healthcheck.ReservedTopic {
-		return benzene.Ok(json.RawMessage(`{"isHealthy":true}`))
-	}
-	return benzene.NotFound[json.RawMessage]("no descriptor")
-}
-
-func descriptorJSON(t *testing.T, hash string) json.RawMessage {
+func descriptorReply(t *testing.T, hash string) benzene.Result[json.RawMessage] {
 	t.Helper()
 	data, err := json.Marshal(mesh.Descriptor{Service: "orders", DescriptorHash: hash})
 	if err != nil {
 		t.Fatalf("marshal descriptor: %v", err)
 	}
-	return data
+	return benzene.Ok(json.RawMessage(data))
 }
 
 func TestServiceCheck_Name(t *testing.T) {
-	if got := New("orders", sender(healthOK)).Name(); got != "orders" {
+	if got := New("orders", meshResponder(descriptorReply(t, "h1"))).Name(); got != "orders" {
 		t.Errorf("Name() = %q, want orders", got)
 	}
 }
 
 func TestServiceCheck_UnreachableIsFailed(t *testing.T) {
-	check := New("orders", sender(func(string) benzene.Result[json.RawMessage] {
-		return benzene.ServiceUnavailable[json.RawMessage]("down")
-	}))
-	result := check.Check(context.Background())
-	if result.Status != healthcheck.StatusFailed {
-		t.Fatalf("status = %q, want failed", result.Status)
+	// A transport failure, and an up-but-doesn't-serve-a-descriptor (not-found), both read as
+	// unreachable-for-contract-purposes: failed.
+	tests := map[string]benzene.Result[json.RawMessage]{
+		"transport failure":     benzene.ServiceUnavailable[json.RawMessage]("down"),
+		"descriptor not served": benzene.NotFound[json.RawMessage]("no benzene:mesh handler"),
 	}
-	if result.Type != "orders" || result.Data["reachable"] != false {
-		t.Errorf("result = %+v, want type orders and reachable=false", result)
+	for name, reply := range tests {
+		t.Run(name, func(t *testing.T) {
+			result := New("orders", meshResponder(reply)).Check(context.Background())
+			if result.Status != healthcheck.StatusFailed {
+				t.Fatalf("status = %q, want failed", result.Status)
+			}
+			if result.Type != "orders" || result.Data["reachable"] != false {
+				t.Errorf("result = %+v, want type orders and reachable=false", result)
+			}
+		})
 	}
 }
 
 func TestServiceCheck_ReachableWithoutDriftDetectionIsOk(t *testing.T) {
-	result := New("orders", sender(healthOK)).Check(context.Background())
+	// A reachable provider - even one whose own health is failing - serves its descriptor with a
+	// success status, so this contract check reports ok (it never couples to transient health).
+	result := New("orders", meshResponder(descriptorReply(t, "h1"))).Check(context.Background())
 	if result.Status != healthcheck.StatusOk {
 		t.Fatalf("status = %q, want ok", result.Status)
 	}
@@ -70,14 +73,8 @@ func TestServiceCheck_ReachableWithoutDriftDetectionIsOk(t *testing.T) {
 }
 
 func TestServiceCheck_ContractMatchIsOk(t *testing.T) {
-	check := New("orders", sender(func(topicID string) benzene.Result[json.RawMessage] {
-		if topicID == mesh.TopicID {
-			return benzene.Ok(descriptorJSON(t, "hash-v1"))
-		}
-		return healthOK(topicID)
-	}), WithExpectedContractHash("hash-v1"))
-
-	result := check.Check(context.Background())
+	result := New("orders", meshResponder(descriptorReply(t, "hash-v1")), WithExpectedContractHash("hash-v1")).
+		Check(context.Background())
 	if result.Status != healthcheck.StatusOk {
 		t.Fatalf("status = %q, want ok", result.Status)
 	}
@@ -87,14 +84,8 @@ func TestServiceCheck_ContractMatchIsOk(t *testing.T) {
 }
 
 func TestServiceCheck_ContractDriftIsWarning(t *testing.T) {
-	check := New("orders", sender(func(topicID string) benzene.Result[json.RawMessage] {
-		if topicID == mesh.TopicID {
-			return benzene.Ok(descriptorJSON(t, "hash-v2")) // provider moved on
-		}
-		return healthOK(topicID)
-	}), WithExpectedContractHash("hash-v1"))
-
-	result := check.Check(context.Background())
+	result := New("orders", meshResponder(descriptorReply(t, "hash-v2")), WithExpectedContractHash("hash-v1")).
+		Check(context.Background())
 	if result.Status != healthcheck.StatusWarning {
 		t.Fatalf("status = %q, want warning (drift is degraded, not fatal)", result.Status)
 	}
@@ -104,28 +95,17 @@ func TestServiceCheck_ContractDriftIsWarning(t *testing.T) {
 }
 
 func TestServiceCheck_DriftUnassessableStaysOk(t *testing.T) {
-	// Reachable, drift-detection configured, but the provider's descriptor can't be read: the profile
-	// allows a service to omit the descriptor, so this is ok (reachability passed), not a failure -
-	// and the gap is recorded rather than hidden.
-	tests := []struct {
-		name string
-		mesh benzene.Result[json.RawMessage]
-	}{
-		{"descriptor unreachable", benzene.ServiceUnavailable[json.RawMessage]("no mesh feed")},
-		{"descriptor unparseable", benzene.Ok(json.RawMessage(`not json`))},
-		{"descriptor without a hash", benzene.Ok(json.RawMessage(`{"service":"orders"}`))},
-		{"reachable success with no body", benzene.Result[json.RawMessage]{Status: benzene.StatusOk}},
+	// Reachable (the descriptor answered with success), drift-detection configured, but no usable hash
+	// came back: ok (reachability passed), with the gap recorded rather than hidden.
+	tests := map[string]benzene.Result[json.RawMessage]{
+		"descriptor unparseable":         benzene.Ok(json.RawMessage(`not json`)),
+		"descriptor without a hash":      benzene.Ok(json.RawMessage(`{"service":"orders"}`)),
+		"reachable success with no body": {Status: benzene.StatusOk},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			check := New("orders", sender(func(topicID string) benzene.Result[json.RawMessage] {
-				if topicID == mesh.TopicID {
-					return tc.mesh
-				}
-				return healthOK(topicID)
-			}), WithExpectedContractHash("hash-v1"))
-
-			result := check.Check(context.Background())
+	for name, reply := range tests {
+		t.Run(name, func(t *testing.T) {
+			result := New("orders", meshResponder(reply), WithExpectedContractHash("hash-v1")).
+				Check(context.Background())
 			if result.Status != healthcheck.StatusOk {
 				t.Fatalf("status = %q, want ok", result.Status)
 			}

@@ -33,16 +33,20 @@ delivery order - just the current honest picture, kept up to date as things land
   platform-specific syscalls behind build tags (see below).
 - `clienthealthcheck` - the consumer-side dependency health check (zero dependencies), matching
   `Benzene.Clients.HealthChecks`: a `ServiceCheck` (a `healthcheck.Check`, in its own package so
-  `healthcheck` keeps its net-only footprint) probes a downstream Benzene provider through an
-  outbound `client.Sender` and reports the *contract* relationship, not the provider's transient
-  health - unreachable = `failed`, reachable+matching contract hash = `ok`, reachable+drifted =
-  `warning` (degraded, does not flip the caller's health), reachable without drift-detection
-  configured = `ok` (reachability only). .NET bakes the hash into a generated client; Go has none,
-  so `WithExpectedContractHash` supplies the consumer's built-against hash and the check reads the
-  provider's live `descriptorHash` from its reserved `benzene:mesh` descriptor. A provider that omits
-  the descriptor leaves drift unassessable = `ok` (reachability passed; the gap is recorded in the
-  result `Data`, per the profile's §4 degradation rule), never a false failure. For a *contracts*
-  diagnostic surface, not a liveness/readiness probe (it calls a downstream service).
+  `healthcheck` keeps its net-only footprint) probes a downstream Benzene provider's reserved
+  `benzene:mesh` descriptor through an outbound `client.Sender` and reports the *contract*
+  relationship, not the provider's transient health - unreachable / serves no descriptor = `failed`,
+  reachable+matching contract hash = `ok`, reachable+drifted = `warning` (degraded, does not flip the
+  caller's health), reachable without drift-detection configured = `ok` (reachability only),
+  reachable+hashless descriptor = `ok` (drift unassessable, recorded in the result `Data` per the
+  profile's §4 degradation rule). Both the reachability signal and the hash come from the descriptor,
+  which `mesh.Middleware` serves with a success status unconditionally (health-independent) -
+  deliberately NOT the `benzene:healthcheck` topic, whose failure-on-unhealthy the envelope transport
+  can't tell from "down" (`httpclient` drops a failure body), and coupling this contract check to the
+  provider's transient health is exactly what it must avoid. .NET bakes the hash into a generated
+  client; Go has none, so `WithExpectedContractHash` supplies the consumer's built-against hash (a
+  documented divergence driven by the transport + the fact that Go's descriptor, not its health
+  response, carries the hash). For a *contracts* diagnostic surface, not a liveness/readiness probe.
 - `validation` - request-validation building block (zero dependencies): `Validated(validator,
   handler)` wraps a handler so an invalid request short-circuits to a `validation-error` result
   before the handler runs, plus `Validator[T]`/`ValidatorFunc[T]` and a `Combine` composer. The
