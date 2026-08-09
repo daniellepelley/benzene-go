@@ -15,6 +15,12 @@ idiomatically in Go and interoperates on the wire with the .NET, TypeScript, and
     - [gRPC](getting-started-grpc.md) — the unary gRPC server and client binding
     - [Kafka](getting-started-kafka.md) — the consumer-group worker and producer client
 
+- **Concepts**
+  - [Message handlers](message-handlers.md) — handlers, topics, the registry, routing, and dependency injection
+  - [Message results](message-result.md) — the `Result[T]` type and the status vocabulary, with the HTTP and gRPC mappings
+  - [Middleware](middleware.md) — the pipeline, writing your own middleware, and the built-ins Benzene ships
+  - [Testing](testing.md) — unit-test a handler and drive the whole pipeline in-memory with `benzenetest`
+
 - **About**
   - [How Benzene compares](comparison.md) — where the Go port sits relative to Dapr, the Go CDK, Watermill, and Encore
   - [Examples](https://github.com/daniellepelley/benzene-go/tree/main/examples) — runnable services, one per cloud host
