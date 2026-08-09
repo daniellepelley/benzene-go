@@ -18,15 +18,20 @@ unverifiable wire shape is deferred, not guessed.
 
 - **AWS inbound: full parity.** All seven Lambda triggers are done (API Gateway v1/v2/Function-URL/ALB,
   SQS, SNS, EventBridge, DynamoDB Streams, Kinesis, Kafka/MSK, S3).
-- **AWS outbound: SQS, SNS, EventBridge done.** Missing: Lambda-invoke and Step Functions clients, and
-  a self-hosted SQS poller (all `aws-sdk-go-v2`, isolatable in a module like `awssqs`).
+- **AWS outbound: full parity.** SQS, SNS, EventBridge, plus the Lambda-invoke (`awslambdaclient`) and
+  Step Functions (`awsstepfunctions`) clients, plus the self-hosted SQS poller (`awssqs.Consumer`) are
+  all done.
 - **Azure Functions triggers: parity on the custom-handler-expressible ones** (Queue Storage, Service
   Bus*, Event Grid, Timer, Cosmos change feed). Kafka trigger missing; Event Hub / Blob are SDK-typed
   and deferred. *Service Bus lacks explicit per-message settle/dead-letter.
-- **Azure outbound + self-hosted workers: all missing** — every one needs an Azure SDK.
-- **GCP: Pub/Sub push (Cloud Run) done.** Pub/Sub outbound and the Functions-framework Gen2 flavors
-  need GCP SDKs.
-- **Kafka self-hosted: done.** RabbitMQ: missing (needs an AMQP client).
+- **Azure outbound: done** — Service Bus (`azureservicebus`), Event Hub (`azureeventhub`), Event Grid
+  (`azureeventgrid`), Queue Storage (`azurequeuestorage`) outbound clients all ship. **Self-hosted
+  workers: Service Bus (`azureservicebus.Worker`) and Event Hub (`azureeventhub.Consumer`, caller-owned
+  checkpoint) done**; Cosmos change-feed worker and the isolated-worker Event Hub/Blob triggers stay
+  deferred (each needs a further Azure SDK / an app-owned lease store).
+- **GCP: Pub/Sub push (Cloud Run) done, plus the Pub/Sub outbound client** (`gcppubsubclient`). The
+  Functions-framework Gen2 flavors remain deferred (need `functions-framework-go`).
+- **Kafka self-hosted: done.** **RabbitMQ: done** (`rabbitmq` — self-hosted worker + outbound client).
 
 ## AWS
 

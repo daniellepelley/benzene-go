@@ -265,6 +265,51 @@ alongside the shared spec.
   `service-unavailable`. An optional `ExecutionName` func derives an idempotent execution name
   (sanitized to Step Functions' rules, capped at 80 runes), and an `ExecutionAlreadyExists` error on
   a same-name retry is treated as an idempotent `accepted` (matching .NET's catch), not a failure.
+- `azureservicebus/` - Azure Service Bus binding, in its **own Go module** (needs
+  `azure-sdk-for-go/.../azservicebus`), the Go form of `Benzene.Clients.Azure.ServiceBus` (outbound)
+  + `Benzene.Azure.ServiceBus` (the self-hosted worker). Outbound `Client` (satisfies `client.Sender`)
+  sends one message per publish, topic written as the reserved topic **application property** last so
+  it wins over a stray header, headers as the other string application properties, body verbatim; a
+  successful send is `accepted`, a transport failure `service-unavailable`. Self-hosted `Worker` owns
+  its own receive loop (`Run(ctx)` over a narrow `ReceiverAPI`) - the pull-loop counterpart of .NET's
+  push `ServiceBusProcessor` and the sibling of `awssqs.Consumer`: dispatches each message in its own
+  scope, `CompleteMessage`-completes only the ones whose dispatch succeeded, and settles a failed one
+  per `AckMode` (`AckModeAbandon` default → redeliver; `AckModeDeadLetter` → quarantine). Settlement
+  runs on a cancellation-detached context; `reservedNames` defaults to `builder.ReservedNames`.
+- `azureeventhub/` - Azure Event Hubs binding, in its **own Go module** (needs
+  `azure-sdk-for-go/.../azeventhubs/v2`), matching `Benzene.Azure.EventHub`. Outbound `Client`
+  (satisfies `client.Sender`) publishes one event as a batch-of-one (`NewEventDataBatch` →
+  `AddEventData` → `SendEventDataBatch`), topic + headers as the event's application properties. The
+  `Consumer` reads over a narrow `Receiver` interface and hands checkpointing back to a **caller-owned
+  `Checkpoint` hook** (Event Hubs checkpointing needs a blob-store checkpoint store the app owns - the
+  worker deliberately does not implement it, a documented divergence). Topic/header/body resolution
+  matches the Service Bus worker.
+- `azureeventgrid/` - Azure Event Grid binding, in its **own Go module** (needs
+  `azure-sdk-for-go/.../eventgrid/azeventgrid`), matching `Benzene.Clients.Azure.EventGrid`. Outbound
+  CloudEvents `Client` (satisfies `client.Sender`): topic → CloudEvent `Type`, body → `Data` carried
+  as `json.RawMessage` (so a JSON payload rides as JSON, never base64), headers → lowercased CloudEvent
+  extension attributes. A successful publish is `accepted`, a transport failure `service-unavailable`.
+- `azurequeuestorage/` - Azure Queue Storage binding, in its **own Go module** (needs
+  `azure-sdk-for-go/.../storage/azqueue`), matching `Benzene.Clients.Azure.QueueStorage`. Outbound
+  `Client` (satisfies `client.Sender`): `EnqueueMessage` with the **whole `wire.Request` envelope** as
+  the message text (verbatim, not base64) - the same envelope-as-message-body convention the queue
+  workers rehydrate. Successful enqueue → `accepted`, transport failure → `service-unavailable`.
+- `gcppubsubclient/` - Google Cloud Pub/Sub **outbound** client, in its **own Go module** (needs
+  `cloud.google.com/go/pubsub`, which requires **go 1.25** - the one module forcing the workspace's
+  go directive and CI `setup-go` to 1.25; the root and every other module still declare 1.24.7, so
+  external consumers of those are unaffected). The invoking counterpart of the inbound `gcppubsub`
+  push `http.Handler`. Interface-driven (`Publisher` narrow interface, `NewTopicPublisher` wraps a
+  concrete `*pubsub.Topic` in `adapter.go`): `Send` publishes with topic + headers as Pub/Sub message
+  **attributes** (empty headers dropped), body as `Data`; a successful publish is `accepted`, a
+  transport failure `service-unavailable`.
+- `rabbitmq/` - RabbitMQ binding, in its **own Go module** (needs `rabbitmq/amqp091-go` - an AMQP
+  broker wire protocol isn't hand-rollable, same reason as `kafka`). Outbound `Client` (satisfies
+  `client.Sender`) publishes with the topic as **both** the routing key and a `"topic"` header, the
+  body as the AMQP body, `Persistent` delivery mode. Self-hosted `Consumer` (over a narrow
+  `DeliverySource` interface) `Ack`s a successfully-dispatched delivery and `Nack`s a failed one,
+  requeuing it exactly once (`!NoRequeue && !delivery.Redelivered`, so a poison message is bounded to
+  one retry, then dropped/dead-lettered by the broker) - the AMQP sibling of `awssqs.Consumer` and the
+  `kafka` worker.
 - `cloudevents/` - CloudEvents 1.0 mapping, zero-dependency: wire envelope <-> CloudEvents
   (`type` <-> topic, `data` <-> body, other attributes <-> `ce-`-prefixed headers - the
   outbound direction only maps `ce-` headers back, documented lossiness), plus an inbound
@@ -452,8 +497,9 @@ alongside the shared spec.
 ## Workflow expectations
 
 - Run `gofmt -w .` before every commit; CI fails on unformatted files.
-- Run `go vet ./... ./awssqs/... ./awslambdaclient/... ./awsstepfunctions/... ./awssns/...
-  ./awseventbridge/... ./kafka/... ./diagnostics/... ./grpcbinding/...
+- Run `go vet ./... ./awssqs/... ./awslambdaclient/... ./awsstepfunctions/... ./azureservicebus/...
+  ./azureeventhub/... ./azureeventgrid/... ./azurequeuestorage/... ./gcppubsubclient/...
+  ./rabbitmq/... ./awssns/... ./awseventbridge/... ./kafka/... ./diagnostics/... ./grpcbinding/...
   ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/... && go build (same paths) &&
   go test (same paths) -race -cover` before considering a task
   complete - `./...` from the root does not cross a nested
