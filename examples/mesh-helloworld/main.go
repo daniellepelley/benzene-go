@@ -134,6 +134,9 @@ func newService(name, meshdEndpoint string, provisionDescriptor bool, registerHa
 
 	mux := http.NewServeMux()
 	mux.Handle(httpbinding.EnvelopePath, httpbinding.EnvelopeHandler(builder))
+	// The derived spec document (Cloud Service Profile R5): the same registry-derived descriptor R6
+	// serves on the benzene:mesh topic, offered as a plain GET at the default /benzene/spec mount.
+	mux.Handle(httpbinding.SpecPath, mesh.SpecHandler(descriptor))
 	mux.Handle("/", httpbinding.Handler(builder, routes))
 	return &service{
 		handler:       mux,

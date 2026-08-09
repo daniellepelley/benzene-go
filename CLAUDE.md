@@ -163,7 +163,12 @@ alongside the shared spec.
   break the service. The `benzene:mesh:*` wire topics and shapes (wire.go) are shared with the
   collector and promoted to the main repo's spec (`docs/specification/mesh.md` there, now
   the normative text; `docs/design/mesh-spec-draft.md` is the historical draft), pinned by
-  the vendored `mesh-*.json` fixtures in `conformance/`.
+  the vendored `mesh-*.json` fixtures in `conformance/`. `SpecHandler(descriptor)` serves the same
+  registry-derived descriptor as the Cloud Service Profile's R5 derived-spec document over a plain
+  GET (mounted at `httpbinding.SpecPath`, `/benzene/spec`) - the profile permits Benzene's own
+  derived format, and R5/R6 are then two surfaces onto the one registry-derived truth (GET spec vs
+  the reserved `benzene:mesh` topic). Opt-in like the descriptor middleware - don't mount it and R5
+  is simply reduced, per the profile's §4 exposure-control rule.
 - `meshd/` - Phases 3-4 of `docs/design/mesh.md`: the collector - an ordinary Benzene
   service (register/heartbeat/traces/issues ingest + `benzene:mesh:query:*` read models over an
   in-memory store with a bounded trace ring; the `benzene:mesh:issues` feed of mesh.md §4.1
