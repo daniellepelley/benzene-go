@@ -3,6 +3,7 @@ package awssqs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -32,86 +33,97 @@ type ReceiveDeleteAPI interface {
 // alternative to the Lambda-trigger Handler for a service that owns its own compute (a container,
 // an EC2 worker) rather than being invoked by an event source mapping.
 type Consumer struct {
-	api     ReceiveDeleteAPI
-	queue   string
-	builder *benzene.ApplicationBuilder
+	// API is the SQS client (typically an *sqs.Client). Required.
+	API ReceiveDeleteAPI
+	// QueueURL is the queue to poll. Required.
+	QueueURL string
+	// Builder is the application whose pipeline each message dispatches through. Required.
+	Builder *benzene.ApplicationBuilder
 
-	maxMessages       int32
-	waitTime          int32
-	visibilityTimeout int32
-	errorBackoff      time.Duration
-	reservedNames     wire.ReservedNames
-	onFailure         func(messageID string, response wire.Response)
-	sleep             func(ctx context.Context, d time.Duration)
+	// MaxMessages is how many messages one ReceiveMessage call may return (1-10, SQS's cap).
+	// Default 10 when <= 0.
+	MaxMessages int32
+	// WaitTimeSeconds is the long-poll wait (1-20). Long polling is cheaper and lower-latency than
+	// busy short polling and (because ReceiveMessage then blocks server-side) is what throttles
+	// Run's loop. Default 20 when <= 0; leave it zero for the default. (Short polling - a literal
+	// 0 - is not settable via this field on purpose: on an idle queue it spins Run at high CPU.)
+	WaitTimeSeconds int32
+	// VisibilityTimeout is the per-receive visibility timeout in seconds (0 uses the queue's
+	// configured default). It must exceed the handler's worst-case processing time, or SQS will
+	// redeliver a message that is still being handled.
+	VisibilityTimeout int32
+	// ErrorBackoff is how long Run waits after a ReceiveMessage/DeleteMessageBatch error before
+	// polling again, so a transient AWS outage doesn't become a hot error loop. Default 1s when 0.
+	ErrorBackoff time.Duration
+	// ReservedNames overrides the reserved metadata names (wire-contracts.md §2) used to read the
+	// topic attribute. Leave it zero to inherit the Builder's reserved names (so topic resolution
+	// matches the sibling Lambda Handler out of the box); set it only to differ from the Builder.
+	ReservedNames wire.ReservedNames
+	// OnFailure, when non-nil, is called for each message whose dispatch was unsuccessful (the
+	// message is left on the queue for redelivery regardless). Use it to log or emit a metric; SQS
+	// has no broker-side nack, so a failure is "not deleted", not an explicit reject.
+	OnFailure func(messageID string, response wire.Response)
+
+	// sleep is the backoff primitive, injectable for tests. nil means sleepContext.
+	sleep func(ctx context.Context, d time.Duration)
 }
 
-// ConsumerOption configures a Consumer.
-type ConsumerOption func(*Consumer)
+// errMissingDeps guards the required fields with a clear message rather than a nil dereference deep
+// in the poll loop.
+var errMissingDeps = errors.New("awssqs: Consumer requires API, QueueURL, and Builder")
 
-// WithMaxMessages sets how many messages one ReceiveMessage call may return (1-10, SQS's cap).
-// Default 10.
-func WithMaxMessages(n int32) ConsumerOption { return func(c *Consumer) { c.maxMessages = n } }
-
-// WithWaitTimeSeconds sets the long-poll wait (0-20). A non-zero value is long polling, which is
-// cheaper and lower-latency than busy short polling and (because ReceiveMessage then blocks
-// server-side) is what throttles Run's loop. Default 20. Setting 0 is short polling: ReceiveMessage
-// returns immediately, so on an idle queue Run will spin at high CPU - keep the default unless you
-// have a specific reason and your own external pacing.
-func WithWaitTimeSeconds(n int32) ConsumerOption { return func(c *Consumer) { c.waitTime = n } }
-
-// WithVisibilityTimeout sets the per-receive visibility timeout in seconds (0 uses the queue's
-// configured default). It must exceed the handler's worst-case processing time, or SQS will
-// redeliver a message that is still being handled.
-func WithVisibilityTimeout(n int32) ConsumerOption {
-	return func(c *Consumer) { c.visibilityTimeout = n }
-}
-
-// WithErrorBackoff sets how long Run waits after a ReceiveMessage/DeleteMessageBatch error before
-// polling again, so a transient AWS outage doesn't become a hot error loop. Default 1s.
-func WithErrorBackoff(d time.Duration) ConsumerOption {
-	return func(c *Consumer) { c.errorBackoff = d }
-}
-
-// WithConsumerReservedNames overrides the reserved metadata names (wire-contracts.md §2) used to
-// read the topic attribute. Set it to the SAME value the publisher wrote.
-func WithConsumerReservedNames(names wire.ReservedNames) ConsumerOption {
-	return func(c *Consumer) { c.reservedNames = names }
-}
-
-// WithOnFailure registers a hook called for each message whose dispatch was unsuccessful (the
-// message is left on the queue for redelivery regardless). Use it to log or emit a metric; SQS has
-// no broker-side nack, so a failure is "not deleted", not an explicit reject.
-func WithOnFailure(hook func(messageID string, response wire.Response)) ConsumerOption {
-	return func(c *Consumer) { c.onFailure = hook }
-}
-
-// NewConsumer builds a Consumer polling queueURL via api (typically an *sqs.Client) and dispatching
-// through builder's pipeline.
-func NewConsumer(api ReceiveDeleteAPI, queueURL string, builder *benzene.ApplicationBuilder, opts ...ConsumerOption) *Consumer {
-	c := &Consumer{
-		api:     api,
-		queue:   queueURL,
-		builder: builder,
-		// Default to the builder's reserved names (wire-contracts.md §2 / app.go's UseReservedNames)
-		// so topic resolution matches the sibling Lambda Handler out of the box; a service that
-		// overrode the topic key on its builder gets the same key here without extra wiring.
-		// WithConsumerReservedNames still overrides it explicitly.
-		reservedNames: builder.ReservedNames,
-		maxMessages:   10,
-		waitTime:      20,
-		errorBackoff:  time.Second,
-		sleep:         sleepContext,
+// Validate reports whether the Consumer is runnable - call it at startup for a clear error instead
+// of a panic from Run's first poll.
+func (c *Consumer) Validate() error {
+	if c.API == nil || c.QueueURL == "" || c.Builder == nil {
+		return errMissingDeps
 	}
-	for _, opt := range opts {
-		opt(c)
+	return nil
+}
+
+func (c *Consumer) maxMessages() int32 {
+	if c.MaxMessages <= 0 {
+		return 10
 	}
-	return c
+	return c.MaxMessages
+}
+
+func (c *Consumer) waitTime() int32 {
+	if c.WaitTimeSeconds <= 0 {
+		return 20
+	}
+	return c.WaitTimeSeconds
+}
+
+func (c *Consumer) errorBackoff() time.Duration {
+	if c.ErrorBackoff == 0 {
+		return time.Second
+	}
+	return c.ErrorBackoff
+}
+
+// topicKey resolves the reserved topic attribute key: the Consumer's explicit override if set, else
+// the Builder's reserved names (which default to "topic"), so topic resolution matches the sibling
+// Lambda Handler out of the box.
+func (c *Consumer) topicKey() string {
+	if c.ReservedNames.TopicKey != "" {
+		return c.ReservedNames.TopicKey
+	}
+	return c.Builder.ReservedNames.Topic()
+}
+
+func (c *Consumer) sleepFor(ctx context.Context, d time.Duration) {
+	if c.sleep != nil {
+		c.sleep(ctx, d)
+		return
+	}
+	sleepContext(ctx, d)
 }
 
 // Run polls and dispatches until ctx is cancelled, then returns ctx.Err(). A receive or delete
-// error is not fatal: Run backs off (WithErrorBackoff) and keeps polling, so the loop survives a
+// error is not fatal: Run backs off (ErrorBackoff) and keeps polling, so the loop survives a
 // transient AWS outage. Run one Consumer per goroutine; SQS's at-least-once delivery means handlers
-// must be idempotent.
+// must be idempotent. Call Validate first.
 func (c *Consumer) Run(ctx context.Context) error {
 	for {
 		if err := ctx.Err(); err != nil {
@@ -121,7 +133,7 @@ func (c *Consumer) Run(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			c.sleep(ctx, c.errorBackoff)
+			c.sleepFor(ctx, c.errorBackoff())
 		}
 	}
 }
@@ -129,11 +141,11 @@ func (c *Consumer) Run(ctx context.Context) error {
 // poll runs one receive/dispatch/delete cycle. It is exported-in-spirit for tests (a single
 // deterministic cycle) while Run wraps it in the lifecycle loop.
 func (c *Consumer) poll(ctx context.Context) error {
-	out, err := c.api.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
-		QueueUrl:              aws.String(c.queue),
-		MaxNumberOfMessages:   c.maxMessages,
-		WaitTimeSeconds:       c.waitTime,
-		VisibilityTimeout:     c.visibilityTimeout,
+	out, err := c.API.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
+		QueueUrl:              aws.String(c.QueueURL),
+		MaxNumberOfMessages:   c.maxMessages(),
+		WaitTimeSeconds:       c.waitTime(),
+		VisibilityTimeout:     c.VisibilityTimeout,
 		MessageAttributeNames: []string{"All"},
 	})
 	if err != nil {
@@ -142,8 +154,8 @@ func (c *Consumer) poll(ctx context.Context) error {
 
 	var toDelete []types.DeleteMessageBatchRequestEntry
 	for _, message := range out.Messages {
-		req := resolveMessage(message, c.reservedNames.Topic())
-		response, successful := envelope.DispatchResult(ctx, c.builder.Pipeline, c.builder.Container, req)
+		req := resolveMessage(message, c.topicKey())
+		response, successful := envelope.DispatchResult(ctx, c.Builder.Pipeline, c.Builder.Container, req)
 		if successful {
 			toDelete = append(toDelete, types.DeleteMessageBatchRequestEntry{
 				Id:            message.MessageId,
@@ -151,8 +163,8 @@ func (c *Consumer) poll(ctx context.Context) error {
 			})
 			continue
 		}
-		if c.onFailure != nil {
-			c.onFailure(aws.ToString(message.MessageId), response)
+		if c.OnFailure != nil {
+			c.OnFailure(aws.ToString(message.MessageId), response)
 		}
 	}
 
@@ -163,8 +175,8 @@ func (c *Consumer) poll(ctx context.Context) error {
 	// was successfully handled) still acks the completed work, rather than cancelling the delete and
 	// letting SQS redeliver already-processed messages - the same settlement-outlives-cancellation
 	// choice the idempotency package makes. Handlers must be idempotent regardless (at-least-once).
-	deleteOut, err := c.api.DeleteMessageBatch(context.WithoutCancel(ctx), &sqs.DeleteMessageBatchInput{
-		QueueUrl: aws.String(c.queue),
+	deleteOut, err := c.API.DeleteMessageBatch(context.WithoutCancel(ctx), &sqs.DeleteMessageBatchInput{
+		QueueUrl: aws.String(c.QueueURL),
 		Entries:  toDelete,
 	})
 	if err != nil {
@@ -173,9 +185,9 @@ func (c *Consumer) poll(ctx context.Context) error {
 	// A partial batch-delete failure (HTTP 200 with entries in Failed) means those messages were NOT
 	// removed server-side and will redeliver - safe (at-least-once), never a drop. Surface each via the
 	// OnFailure hook so the redelivery is observable rather than silent.
-	if c.onFailure != nil {
+	if c.OnFailure != nil {
 		for _, f := range deleteOut.Failed {
-			c.onFailure(aws.ToString(f.Id), wire.Response{StatusCode: string(benzene.StatusServiceUnavailable)})
+			c.OnFailure(aws.ToString(f.Id), wire.Response{StatusCode: string(benzene.StatusServiceUnavailable)})
 		}
 	}
 	return nil

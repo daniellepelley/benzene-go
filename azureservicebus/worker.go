@@ -3,6 +3,7 @@ package azureservicebus
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus"
@@ -54,79 +55,81 @@ const (
 // never completes an unhandled message. It is the standalone alternative to the Azure Functions
 // Service Bus trigger (azurefunctions.QueueHandler) for a service that owns its own compute.
 type Worker struct {
-	api     ReceiverAPI
-	builder *benzene.ApplicationBuilder
+	// API is the Service Bus receiver (typically an *azservicebus.Receiver). Required.
+	API ReceiverAPI
+	// Builder is the application whose pipeline each message dispatches through. Required.
+	Builder *benzene.ApplicationBuilder
 
-	maxMessages           int
-	errorBackoff          time.Duration
-	reservedNames         wire.ReservedNames
-	ackMode               AckMode
-	deadLetterReason      *string
-	deadLetterDescription *string
-	onFailure             func(messageID string, response wire.Response)
-	sleep                 func(ctx context.Context, d time.Duration)
+	// MaxMessages is the most messages one ReceiveMessages call may return. The SDK caps the wait
+	// internally, so ReceiveMessages returns a partial batch (or none) rather than blocking for the
+	// full count. Default 10 when <= 0.
+	MaxMessages int
+	// ErrorBackoff is how long Run waits after a ReceiveMessages error before receiving again, so a
+	// transient Service Bus outage doesn't become a hot error loop. Default 1s when 0.
+	ErrorBackoff time.Duration
+	// ReservedNames overrides the reserved metadata names (wire-contracts.md §2) used to read the
+	// topic application property. Leave it zero to inherit the Builder's reserved names (so topic
+	// resolution matches the outbound Client out of the box); set it only to differ from the Builder.
+	ReservedNames wire.ReservedNames
+	// AckMode selects how a message whose dispatch failed is settled (AckModeAbandon, the default
+	// zero value, or AckModeDeadLetter). A successful dispatch always completes regardless.
+	AckMode AckMode
+	// DeadLetterReason and DeadLetterDescription are recorded when a failed message is dead-lettered
+	// under AckModeDeadLetter. Both are short diagnostic codes, never secrets; empty ones are omitted.
+	// They have no effect under AckModeAbandon.
+	DeadLetterReason      string
+	DeadLetterDescription string
+	// OnFailure, when non-nil, is called for each message whose dispatch was unsuccessful (the
+	// message is abandoned or dead-lettered per AckMode regardless). Use it to log or emit a metric.
+	OnFailure func(messageID string, response wire.Response)
+
+	// sleep is the backoff primitive, injectable for tests. nil means sleepContext.
+	sleep func(ctx context.Context, d time.Duration)
 }
 
-// WorkerOption configures a Worker.
-type WorkerOption func(*Worker)
+// errMissingDeps guards the required fields with a clear message rather than a nil dereference deep
+// in the receive loop.
+var errMissingDeps = errors.New("azureservicebus: Worker requires both API and Builder")
 
-// WithMaxMessages sets the most messages one ReceiveMessages call may return. The SDK caps the wait
-// internally, so ReceiveMessages returns a partial batch (or none) rather than blocking for the full
-// count. Default 10.
-func WithMaxMessages(n int) WorkerOption { return func(w *Worker) { w.maxMessages = n } }
-
-// WithErrorBackoff sets how long Run waits after a ReceiveMessages error before receiving again, so a
-// transient Service Bus outage doesn't become a hot error loop. Default 1s.
-func WithErrorBackoff(d time.Duration) WorkerOption {
-	return func(w *Worker) { w.errorBackoff = d }
-}
-
-// WithWorkerReservedNames overrides the reserved metadata names (wire-contracts.md §2) used to read
-// the topic application property. Set it to the SAME value the publisher wrote.
-func WithWorkerReservedNames(names wire.ReservedNames) WorkerOption {
-	return func(w *Worker) { w.reservedNames = names }
-}
-
-// WithAckMode selects how a message whose dispatch failed is settled (AckModeAbandon, the default, or
-// AckModeDeadLetter). A successful dispatch always completes regardless.
-func WithAckMode(mode AckMode) WorkerOption {
-	return func(w *Worker) { w.ackMode = mode }
-}
-
-// WithDeadLetter sets the reason and description recorded when a failed message is dead-lettered
-// under AckModeDeadLetter. Both are short diagnostic codes, never secrets. It has no effect under
-// AckModeAbandon.
-func WithDeadLetter(reason, description string) WorkerOption {
-	return func(w *Worker) {
-		w.deadLetterReason = &reason
-		w.deadLetterDescription = &description
+// Validate reports whether the Worker is runnable - call it at startup for a clear error instead of
+// a panic from Run's first receive.
+func (w *Worker) Validate() error {
+	if w.API == nil || w.Builder == nil {
+		return errMissingDeps
 	}
+	return nil
 }
 
-// WithOnFailure registers a hook called for each message whose dispatch was unsuccessful (the message
-// is abandoned or dead-lettered per AckMode regardless). Use it to log or emit a metric.
-func WithOnFailure(hook func(messageID string, response wire.Response)) WorkerOption {
-	return func(w *Worker) { w.onFailure = hook }
+func (w *Worker) maxMessages() int {
+	if w.MaxMessages <= 0 {
+		return 10
+	}
+	return w.MaxMessages
 }
 
-// NewWorker builds a Worker receiving via api (typically an *azservicebus.Receiver) and dispatching
-// through builder's pipeline.
-func NewWorker(api ReceiverAPI, builder *benzene.ApplicationBuilder, opts ...WorkerOption) *Worker {
-	w := &Worker{
-		api:     api,
-		builder: builder,
-		// Default to the builder's reserved names (wire-contracts.md §2 / app.go's UseReservedNames)
-		// so topic resolution matches the outbound Client out of the box; a service that overrode the
-		// topic key on its builder gets the same key here without extra wiring.
-		reservedNames: builder.ReservedNames,
-		maxMessages:   10,
-		errorBackoff:  time.Second,
-		sleep:         sleepContext,
+func (w *Worker) errorBackoff() time.Duration {
+	if w.ErrorBackoff == 0 {
+		return time.Second
 	}
-	for _, opt := range opts {
-		opt(w)
+	return w.ErrorBackoff
+}
+
+// topicKey resolves the reserved topic application-property key: the Worker's explicit override if
+// set, else the Builder's reserved names (which default to "topic"), so topic resolution matches the
+// outbound Client out of the box.
+func (w *Worker) topicKey() string {
+	if w.ReservedNames.TopicKey != "" {
+		return w.ReservedNames.TopicKey
 	}
-	return w
+	return w.Builder.ReservedNames.Topic()
+}
+
+func (w *Worker) sleepFor(ctx context.Context, d time.Duration) {
+	if w.sleep != nil {
+		w.sleep(ctx, d)
+		return
+	}
+	sleepContext(ctx, d)
 }
 
 // Run receives and dispatches until ctx is cancelled, then returns ctx.Err(). A receive error is not
@@ -142,7 +145,7 @@ func (w *Worker) Run(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			w.sleep(ctx, w.errorBackoff)
+			w.sleepFor(ctx, w.errorBackoff())
 		}
 	}
 }
@@ -150,13 +153,13 @@ func (w *Worker) Run(ctx context.Context) error {
 // poll runs one receive/dispatch/settle cycle. It is a single deterministic cycle for tests, while
 // Run wraps it in the lifecycle loop.
 func (w *Worker) poll(ctx context.Context) error {
-	messages, err := w.api.ReceiveMessages(ctx, w.maxMessages, nil)
+	messages, err := w.API.ReceiveMessages(ctx, w.maxMessages(), nil)
 	if err != nil {
 		return err
 	}
 	for _, message := range messages {
-		req := resolveMessage(message, w.reservedNames.Topic())
-		response, successful := envelope.DispatchResult(ctx, w.builder.Pipeline, w.builder.Container, req)
+		req := resolveMessage(message, w.topicKey())
+		response, successful := envelope.DispatchResult(ctx, w.Builder.Pipeline, w.Builder.Container, req)
 		w.settle(ctx, message, response, successful)
 	}
 	return nil
@@ -175,7 +178,7 @@ func (w *Worker) settle(ctx context.Context, message *azservicebus.ReceivedMessa
 		// A failed complete of already-handled work means Service Bus will redeliver it after the lock
 		// expires - safe (at-least-once), never a drop, but surface it via the hook so the redelivery
 		// is observable rather than silent, matching awssqs's partial-delete-failure reporting.
-		if err := w.api.CompleteMessage(settleCtx, message, nil); err != nil {
+		if err := w.API.CompleteMessage(settleCtx, message, nil); err != nil {
 			w.reportFailure(message, wire.Response{StatusCode: string(benzene.StatusServiceUnavailable)})
 		}
 		return
@@ -183,19 +186,28 @@ func (w *Worker) settle(ctx context.Context, message *azservicebus.ReceivedMessa
 
 	w.reportFailure(message, response)
 
-	if w.ackMode == AckModeDeadLetter {
-		_ = w.api.DeadLetterMessage(settleCtx, message, &azservicebus.DeadLetterOptions{
-			Reason:           w.deadLetterReason,
-			ErrorDescription: w.deadLetterDescription,
+	if w.AckMode == AckModeDeadLetter {
+		_ = w.API.DeadLetterMessage(settleCtx, message, &azservicebus.DeadLetterOptions{
+			Reason:           optionalString(w.DeadLetterReason),
+			ErrorDescription: optionalString(w.DeadLetterDescription),
 		})
 		return
 	}
-	_ = w.api.AbandonMessage(settleCtx, message, nil)
+	_ = w.API.AbandonMessage(settleCtx, message, nil)
+}
+
+// optionalString returns a pointer to s, or nil when s is empty, so an unset DeadLetterReason /
+// DeadLetterDescription is omitted from the SDK options rather than sent as an empty string.
+func optionalString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 func (w *Worker) reportFailure(message *azservicebus.ReceivedMessage, response wire.Response) {
-	if w.onFailure != nil {
-		w.onFailure(message.MessageID, response)
+	if w.OnFailure != nil {
+		w.OnFailure(message.MessageID, response)
 	}
 }
 

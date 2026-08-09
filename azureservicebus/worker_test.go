@@ -74,7 +74,7 @@ func received(id, topic, body string) *azservicebus.ReceivedMessage {
 
 func TestWorker_PollDispatchesAndCompletesSuccessful(t *testing.T) {
 	api := &fakeReceiver{batches: [][]*azservicebus.ReceivedMessage{{received("m-1", "greet", `{"name":"World"}`)}}}
-	w := NewWorker(api, newTestBuilder(t))
+	w := &Worker{API: api, Builder: newTestBuilder(t)}
 
 	if err := w.poll(context.Background()); err != nil {
 		t.Fatalf("poll() error = %v", err)
@@ -90,8 +90,8 @@ func TestWorker_PollDispatchesAndCompletesSuccessful(t *testing.T) {
 func TestWorker_PollAbandonsAndReportsFailure(t *testing.T) {
 	var gotID, gotStatus string
 	api := &fakeReceiver{batches: [][]*azservicebus.ReceivedMessage{{received("m-2", "greet", `{"name":""}`)}}}
-	w := NewWorker(api, newTestBuilder(t),
-		WithOnFailure(func(id string, resp wire.Response) { gotID, gotStatus = id, resp.StatusCode }))
+	w := &Worker{API: api, Builder: newTestBuilder(t),
+		OnFailure: func(id string, resp wire.Response) { gotID, gotStatus = id, resp.StatusCode }}
 
 	if err := w.poll(context.Background()); err != nil {
 		t.Fatalf("poll() error = %v", err)
@@ -109,9 +109,9 @@ func TestWorker_PollAbandonsAndReportsFailure(t *testing.T) {
 
 func TestWorker_PollDeadLettersFailureUnderDeadLetterMode(t *testing.T) {
 	api := &fakeReceiver{batches: [][]*azservicebus.ReceivedMessage{{received("m-3", "greet", `{"name":""}`)}}}
-	w := NewWorker(api, newTestBuilder(t),
-		WithAckMode(AckModeDeadLetter),
-		WithDeadLetter("bad-request", "handler rejected the message"))
+	w := &Worker{API: api, Builder: newTestBuilder(t),
+		AckMode:          AckModeDeadLetter,
+		DeadLetterReason: "bad-request", DeadLetterDescription: "handler rejected the message"}
 
 	if err := w.poll(context.Background()); err != nil {
 		t.Fatalf("poll() error = %v", err)
@@ -136,7 +136,7 @@ func TestWorker_PollMixedBatchSettlesEachIndependently(t *testing.T) {
 		received("bad-1", "greet", `{"name":""}`),
 		received("ok-2", "greet", `{"name":"B"}`),
 	}}}
-	w := NewWorker(api, newTestBuilder(t))
+	w := &Worker{API: api, Builder: newTestBuilder(t)}
 
 	if err := w.poll(context.Background()); err != nil {
 		t.Fatalf("poll() error = %v", err)
@@ -150,7 +150,7 @@ func TestWorker_ResolvesTopicFromEnvelopeBodyWhenNoProperty(t *testing.T) {
 	// No topic application property: fall back to parsing the body as a full wire envelope.
 	body := `{"topic":"greet","headers":{"h":"v"},"body":"{\"name\":\"Env\"}"}`
 	api := &fakeReceiver{batches: [][]*azservicebus.ReceivedMessage{{received("env-1", "", body)}}}
-	w := NewWorker(api, newTestBuilder(t))
+	w := &Worker{API: api, Builder: newTestBuilder(t)}
 
 	if err := w.poll(context.Background()); err != nil {
 		t.Fatalf("poll() error = %v", err)
@@ -163,7 +163,7 @@ func TestWorker_ResolvesTopicFromEnvelopeBodyWhenNoProperty(t *testing.T) {
 func TestWorker_UnresolvedTopicFailsAndAbandons(t *testing.T) {
 	// Neither a topic property nor an envelope body -> empty topic -> router validation-error -> abandon.
 	api := &fakeReceiver{batches: [][]*azservicebus.ReceivedMessage{{received("no-1", "", "not json")}}}
-	w := NewWorker(api, newTestBuilder(t))
+	w := &Worker{API: api, Builder: newTestBuilder(t)}
 
 	if err := w.poll(context.Background()); err != nil {
 		t.Fatalf("poll() error = %v", err)
@@ -177,7 +177,7 @@ func TestWorker_NonStringApplicationPropertyIsIgnored(t *testing.T) {
 	m := received("ns-1", "greet", `{"name":"World"}`)
 	m.ApplicationProperties["retry-count"] = 3 // non-string property must be skipped, not a header
 	api := &fakeReceiver{batches: [][]*azservicebus.ReceivedMessage{{m}}}
-	w := NewWorker(api, newTestBuilder(t))
+	w := &Worker{API: api, Builder: newTestBuilder(t)}
 
 	req := resolveMessage(m, "topic")
 	if req.Topic != "greet" {
@@ -204,7 +204,7 @@ func TestWorker_HonorsBuilderReservedNames(t *testing.T) {
 		ApplicationProperties: map[string]any{"x-topic": "greet"},
 	}
 	api := &fakeReceiver{batches: [][]*azservicebus.ReceivedMessage{{m}}}
-	w := NewWorker(api, builder)
+	w := &Worker{API: api, Builder: builder}
 
 	if err := w.poll(context.Background()); err != nil {
 		t.Fatalf("poll() error = %v", err)
@@ -220,8 +220,8 @@ func TestWorker_CompleteErrorOnSuccessIsReported(t *testing.T) {
 		batches:     [][]*azservicebus.ReceivedMessage{{received("c-1", "greet", `{"name":"A"}`)}},
 		completeErr: errors.New("lock lost"),
 	}
-	w := NewWorker(api, newTestBuilder(t),
-		WithOnFailure(func(id string, resp wire.Response) { reported = append(reported, id+":"+resp.StatusCode) }))
+	w := &Worker{API: api, Builder: newTestBuilder(t),
+		OnFailure: func(id string, resp wire.Response) { reported = append(reported, id+":"+resp.StatusCode) }}
 
 	if err := w.poll(context.Background()); err != nil {
 		t.Fatalf("poll() error = %v", err)
@@ -236,7 +236,7 @@ func TestWorker_SettlementUsesDetachedContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	api := &fakeReceiver{batches: [][]*azservicebus.ReceivedMessage{{received("d-1", "greet", `{"name":"A"}`)}}}
-	w := NewWorker(api, newTestBuilder(t))
+	w := &Worker{API: api, Builder: newTestBuilder(t)}
 
 	if err := w.poll(ctx); err != nil {
 		t.Fatalf("poll() error = %v", err)
@@ -251,7 +251,7 @@ func TestWorker_SettlementUsesDetachedContext(t *testing.T) {
 
 func TestWorker_PollReturnsReceiveError(t *testing.T) {
 	wantErr := errors.New("receive failed")
-	w := NewWorker(&fakeReceiver{recvErr: wantErr}, newTestBuilder(t))
+	w := &Worker{API: &fakeReceiver{recvErr: wantErr}, Builder: newTestBuilder(t)}
 
 	if err := w.poll(context.Background()); !errors.Is(err, wantErr) {
 		t.Errorf("poll() error = %v, want %v", err, wantErr)
@@ -261,7 +261,7 @@ func TestWorker_PollReturnsReceiveError(t *testing.T) {
 func TestWorker_RunReturnsOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	w := NewWorker(&fakeReceiver{}, newTestBuilder(t))
+	w := &Worker{API: &fakeReceiver{}, Builder: newTestBuilder(t)}
 
 	if err := w.Run(ctx); !errors.Is(err, context.Canceled) {
 		t.Errorf("Run() error = %v, want context.Canceled", err)
@@ -271,7 +271,7 @@ func TestWorker_RunReturnsOnCancel(t *testing.T) {
 func TestWorker_RunBacksOffOnReceiveErrorThenExits(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	api := &fakeReceiver{recvErr: errors.New("transient")}
-	w := NewWorker(api, newTestBuilder(t), WithErrorBackoff(time.Hour))
+	w := &Worker{API: api, Builder: newTestBuilder(t), ErrorBackoff: time.Hour}
 	// Cancel from within the backoff sleep so Run takes the sleep path once, then exits at the loop top.
 	w.sleep = func(_ context.Context, _ time.Duration) { cancel() }
 
@@ -287,7 +287,7 @@ func TestWorker_RunReturnsCtxErrWhenCancelledDuringReceiveError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	api := &fakeReceiver{recvErr: errors.New("transient")}
 	api.onReceive = func(int) { cancel() } // ctx cancelled by the time the error is handled
-	w := NewWorker(api, newTestBuilder(t))
+	w := &Worker{API: api, Builder: newTestBuilder(t)}
 
 	if err := w.Run(ctx); !errors.Is(err, context.Canceled) {
 		t.Errorf("Run() error = %v, want context.Canceled", err)
@@ -295,18 +295,18 @@ func TestWorker_RunReturnsCtxErrWhenCancelledDuringReceiveError(t *testing.T) {
 }
 
 func TestWorker_OptionsAreApplied(t *testing.T) {
-	w := NewWorker(&fakeReceiver{}, newTestBuilder(t),
-		WithMaxMessages(3),
-		WithErrorBackoff(5*time.Second),
-		WithAckMode(AckModeDeadLetter),
-		WithDeadLetter("r", "d"),
-		WithWorkerReservedNames(wire.ReservedNames{TopicKey: "t"}),
-	)
-	if w.maxMessages != 3 || w.errorBackoff != 5*time.Second || w.ackMode != AckModeDeadLetter {
-		t.Errorf("options not applied: %+v", w)
+	w := &Worker{API: &fakeReceiver{}, Builder: newTestBuilder(t),
+		MaxMessages:      3,
+		ErrorBackoff:     5 * time.Second,
+		AckMode:          AckModeDeadLetter,
+		DeadLetterReason: "r", DeadLetterDescription: "d",
+		ReservedNames: wire.ReservedNames{TopicKey: "t"},
 	}
-	if w.deadLetterReason == nil || *w.deadLetterReason != "r" || w.reservedNames.TopicKey != "t" {
-		t.Errorf("options not applied: %+v", w)
+	if w.MaxMessages != 3 || w.ErrorBackoff != 5*time.Second || w.AckMode != AckModeDeadLetter {
+		t.Errorf("fields not set: %+v", w)
+	}
+	if w.DeadLetterReason != "r" || w.ReservedNames.TopicKey != "t" {
+		t.Errorf("fields not set: %+v", w)
 	}
 }
 
