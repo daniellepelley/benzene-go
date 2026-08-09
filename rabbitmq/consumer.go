@@ -182,8 +182,8 @@ func (c *Consumer) resolveRequest(delivery amqp.Delivery) wire.Request {
 		return wire.Request{Topic: topic, Headers: headers, Body: body}
 	}
 
-	// Routing-key fallback (matching .NET's RabbitMqMessageTopicGetter): a non-Benzene producer
-	// that didn't set the topic header still routes by its natural AMQP routing key.
+	// Routing-key fallback: a non-Benzene producer that didn't set the topic header still routes by
+	// its natural AMQP routing key.
 	if delivery.RoutingKey != "" {
 		return wire.Request{Topic: delivery.RoutingKey, Headers: headers, Body: body}
 	}
@@ -201,8 +201,8 @@ func (c *Consumer) resolveRequest(delivery amqp.Delivery) wire.Request {
 }
 
 // headerString decodes an AMQP header value to a string: RabbitMQ carries header values as []byte
-// on the wire, but a client may set a raw string, so accept both (and stringify anything else),
-// matching .NET's RabbitMqMessageHeadersGetter switch. A nil value becomes the empty string.
+// on the wire, but a client may set a raw string, so accept both (and stringify anything else).
+// A nil value becomes the empty string.
 func headerString(value any) string {
 	switch v := value.(type) {
 	case nil:

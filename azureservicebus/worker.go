@@ -28,9 +28,8 @@ type ReceiverAPI interface {
 }
 
 // AckMode selects how the Worker settles a message whose dispatch was unsuccessful. A successful
-// dispatch always completes the message; this only controls the failure settlement, mirroring the
-// choice the .NET worker's ServiceBusSettlement enum exposes (Complete on success, then Abandon or
-// DeadLetter on failure).
+// dispatch always completes the message; this only controls the failure settlement (Complete on
+// success, then Abandon or DeadLetter on failure).
 type AckMode int
 
 const (
@@ -214,8 +213,8 @@ func (w *Worker) reportFailure(message *azservicebus.ReceivedMessage, response w
 // resolveMessage resolves a Service Bus received message into a wire.Request the same way awssqs's
 // self-hosted Consumer resolves an SQS message: the topic from the reserved topic application property
 // (wire-contracts.md §2), the other string-typed application properties as headers, else the body
-// parsed as a full envelope. Non-string application properties are ignored, matching the .NET
-// ServiceBusConsumerMessageHeadersGetter's "every string-typed application property is a header".
+// parsed as a full envelope. Non-string application properties are ignored: every string-typed
+// application property is a header.
 func resolveMessage(message *azservicebus.ReceivedMessage, topicKey string) wire.Request {
 	metadata := make(map[string]string, len(message.ApplicationProperties))
 	for name, value := range message.ApplicationProperties {
