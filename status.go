@@ -6,9 +6,7 @@ package benzene
 // lowercase-kebab-case and case-sensitive (e.g. "not-found", "validation-error") -
 // that casing is the wire contract shared by every Benzene port, so the Go
 // identifier names are PascalCase per Go convention while the string values are
-// held verbatim to the spec. porting-guide.md §4 calls out emitting the .NET enum's
-// PascalCase member name as a .NET-ism that must not leak; the .NET reference itself
-// stores kebab-case values (Benzene.Results/BenzeneResultStatus.cs).
+// held verbatim to the spec (never emit the identifier name as the wire value).
 type Status string
 
 // The framework-defined status vocabulary (wire-contracts.md §3). The string values
@@ -63,7 +61,7 @@ var failureStatuses = map[Status]bool{
 // narrow classifier the per-protocol mapping tables use for their generic-success row; for
 // deciding whether an invocation succeeded, prefer IsFailure/Result.IsSuccessful, which do
 // not treat an application-defined status as a failure (design-principles.md §"custom
-// statuses"). Mirrors BenzeneResultStatus.IsSuccess in the .NET reference.
+// statuses").
 func (s Status) IsSuccess() bool {
 	return successStatuses[s]
 }
@@ -71,14 +69,13 @@ func (s Status) IsSuccess() bool {
 // IsFailure reports whether status is one of the framework-defined failure statuses. It is
 // false for success, unknown (application-defined), and empty statuses - an application-defined
 // status is not assumed to be a failure, which is what keeps custom statuses flowing through
-// the pipeline, envelope, and mesh untouched (design-principles.md). Mirrors
-// BenzeneResultStatus.IsFailure in the .NET reference.
+// the pipeline, envelope, and mesh untouched (design-principles.md).
 func (s Status) IsFailure() bool {
 	return failureStatuses[s]
 }
 
 // IsKnown reports whether status is part of the framework-defined vocabulary (success or
-// failure). Mirrors BenzeneResultStatus.IsKnown in the .NET reference.
+// failure).
 func (s Status) IsKnown() bool {
 	return s.IsSuccess() || s.IsFailure()
 }
