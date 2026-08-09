@@ -133,19 +133,22 @@ delivery order - just the current honest picture, kept up to date as things land
   .NET package's `CloudServiceProbePaths`).
 - `cloudservice` - the one-call Cloud Service Profile *builder* (zero dependencies), matching
   `Benzene.CloudService` and the assembly counterpart of `cloudserviceprobe`. `New(name, registry,
-  opts...)` wires the reserved `/benzene/*` surface from a registry with profile-conformant defaults -
-  `mesh.Describe`+`mesh.Middleware` (the reserved `benzene:mesh` descriptor, R6-inbound), the R5
-  `mesh.SpecHandler` at `SpecPath`, `healthcheck.Middleware` plus a `HealthPath` route (R3),
-  `EnvelopeHandler` at `EnvelopePath` (R2), and the app routes - over one `ApplicationBuilder`, with
-  descriptor/health interception ordered before `RouterMiddleware`. It returns the `http.Handler`,
-  `Descriptor`, `Builder`, and a wiring-time `ProfileReport` (`Satisfied()`/`Unsatisfied()`; surfaces
-  are `Required`/`Recommended`/`Informational`) - the inside "did I wire this right?" self-check that
-  pairs with `cloudserviceprobe`'s outside audit (`CloudServiceProfileReport` vs `.Probe` in .NET).
-  `WithoutDescriptor()` drops R5/R6 per the profile's §4 exposure control, reported honestly rather
-  than refused. Deliberately a thin assembler over the existing pieces, and deliberately NOT the owner
-  of the outbound mesh feeds (register/heartbeat/traces): those keep their explicit push-exporter
-  lifecycle (as in `mesh-helloworld`) and the report flags them Informational, so nothing here spawns
-  or owns a background goroutine.
+  opts...)` wires the profile's synchronous HTTP surface from a registry - R1 (hosted pipeline), R2
+  (registry handlers via `RouterMiddleware`), R3 (`healthcheck.Middleware` + a `HealthPath` route),
+  R4 (`EnvelopeHandler` at `EnvelopePath`, `/benzene/invoke`), R5 (`mesh.SpecHandler` at `SpecPath`),
+  R7 (default `/benzene/*` paths), plus `mesh.Describe`+`mesh.Middleware` for the `benzene:mesh`
+  descriptor - over one `ApplicationBuilder`, with descriptor/health interception ordered before
+  `RouterMiddleware`. It returns the `http.Handler`, `Descriptor`, `Builder`, and a wiring-time
+  `ProfileReport` - a full **R1-R8** checklist (`Requirement{ID,Name,Satisfied,Detail}`,
+  `Satisfied()`/`Unsatisfied()`), the inside "how far did this builder get me?" self-check that pairs
+  with `cloudserviceprobe`'s outside audit (`CloudServiceProfileReport` vs `.Probe` in .NET). It is
+  honest about scope: `New` deliberately does NOT wire R6's outbound feeds (register/heartbeat/traces
+  - they need a collector + push-exporter lifecycle the app owns) or R8 (trace propagation -
+  `mesh.TraceMiddleware` inbound + the client `TraceContextDecorator` outbound), so `Satisfied()` is
+  false for a `New`-only build and `Unsatisfied()` is the exact to-do list to reach full conformance -
+  the report never reports the HTTP surface as if it were the whole profile. `WithoutDescriptor()`
+  additionally drops R5/R6 per §4 exposure control. A thin assembler over existing pieces; nothing
+  here spawns or owns a background goroutine.
 - `logging` - basic request logging/timing middleware using only `log/slog`: one structured
   line per invocation (topic/version, Benzene status, duration; Info/Warn/Error by outcome).
   The dependency-free visibility option alongside the `diagnostics` module's full OTel feed.

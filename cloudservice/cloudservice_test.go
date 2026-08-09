@@ -100,8 +100,14 @@ func TestNew_ServesReservedSurfaceAndAppRoutes(t *testing.T) {
 		t.Errorf("POST /greet = %d %s, want 200 with 'hi Bo'", rec.Code, rec.Body)
 	}
 
-	if !svc.Report.Satisfied() || len(svc.Report.Unsatisfied()) != 0 {
-		t.Errorf("report = %+v, want fully satisfied", svc.Report)
+	// New wires the synchronous HTTP surface (R1-R5, R7) but deliberately not R6's outbound feeds or
+	// R8, so the honest report is NOT fully satisfied - it names exactly what remains.
+	if svc.Report.Satisfied() {
+		t.Error("report.Satisfied() = true, want false - New alone does not wire R6 feeds or R8")
+	}
+	unsat := requirementIDs(svc.Report.Unsatisfied())
+	if !unsat["R6"] || !unsat["R8"] || unsat["R5"] {
+		t.Errorf("Unsatisfied() = %+v, want R6 and R8 (R5 satisfied - descriptor is on)", svc.Report.Unsatisfied())
 	}
 }
 
@@ -117,16 +123,10 @@ func TestNew_WithoutDescriptorDisablesR5R6(t *testing.T) {
 		t.Errorf("invoke benzene:mesh status = %q, want a failure when the descriptor is disabled", resp.StatusCode)
 	}
 
-	// Required surfaces still hold; the two descriptor surfaces are reported unsatisfied by choice.
-	if !svc.Report.Satisfied() {
-		t.Error("report.Satisfied() = false, want true (required surfaces still present)")
-	}
-	unsat := map[string]bool{}
-	for _, s := range svc.Report.Unsatisfied() {
-		unsat[s.Name] = true
-	}
-	if !unsat["mesh-descriptor"] || !unsat["derived-spec"] {
-		t.Errorf("Unsatisfied() = %+v, want mesh-descriptor and derived-spec", svc.Report.Unsatisfied())
+	// With the descriptor off, R5 joins R6 and R8 as unsatisfied.
+	unsat := requirementIDs(svc.Report.Unsatisfied())
+	if !unsat["R5"] || !unsat["R6"] || !unsat["R8"] {
+		t.Errorf("Unsatisfied() = %+v, want R5, R6, R8 when the descriptor is disabled", svc.Report.Unsatisfied())
 	}
 }
 
@@ -139,9 +139,9 @@ func TestNew_HealthReflectsChecks(t *testing.T) {
 	if rec := get(t, svc.Handler, httpbinding.HealthPath); rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("GET %s = %d, want 503 when a check fails", httpbinding.HealthPath, rec.Code)
 	}
-	health := surfaceByName(svc.Report, "health")
+	health := requirementByID(svc.Report, "R3")
 	if !strings.Contains(health.Detail, "1 health check") {
-		t.Errorf("health surface detail = %q, want it to mention 1 health check", health.Detail)
+		t.Errorf("R3 detail = %q, want it to mention 1 health check", health.Detail)
 	}
 }
 
@@ -163,48 +163,52 @@ func TestNew_PlacementInstanceAndContainer(t *testing.T) {
 	}
 }
 
-func TestProfileReport_StringAndKinds(t *testing.T) {
+func TestProfileReport_StringForNewBuild(t *testing.T) {
 	svc := New("greeter", newRegistry(t))
 	s := svc.Report.String()
-	if !strings.Contains(s, "envelope-invoke") || !strings.Contains(s, "all required surfaces present") {
-		t.Errorf("report String() = %q, want the surface list and a satisfied header", s)
+	// Descriptor on: R1-R5 and R7 wired, R6 and R8 not - 6 of 8.
+	if !strings.Contains(s, "6/8 requirements wired") || !strings.Contains(s, "R4") {
+		t.Errorf("report String() = %q, want a 6/8 header and the R-numbered list", s)
 	}
-	// Informational surfaces never count against conformance.
-	feeds := surfaceByName(svc.Report, "mesh-outbound-feeds")
-	if feeds.Kind != Informational || feeds.Satisfied {
-		t.Errorf("mesh-outbound-feeds = %+v, want informational + unsatisfied", feeds)
+	if requirementByID(svc.Report, "R6").Satisfied || requirementByID(svc.Report, "R8").Satisfied {
+		t.Error("R6 and R8 must be unsatisfied for a New-only build")
 	}
-	for _, k := range []SurfaceKind{Required, Recommended, Informational} {
-		if k.String() == "" {
-			t.Errorf("SurfaceKind %d has empty String()", k)
-		}
+	// R4 is the envelope endpoint (not R2 - R2 is the registry-handlers requirement).
+	if !strings.Contains(requirementByID(svc.Report, "R4").Detail, "/benzene/invoke") {
+		t.Errorf("R4 = %+v, want it to be the /benzene/invoke envelope endpoint", requirementByID(svc.Report, "R4"))
 	}
 }
 
-func TestProfileReport_UnsatisfiedRequired(t *testing.T) {
-	// New never leaves a Required surface unsatisfied, so exercise the report type directly to cover
-	// the "missing required" path (Satisfied=false and its rendering).
-	report := ProfileReport{Surfaces: []Surface{
-		{Name: "envelope-invoke", Kind: Required, Satisfied: false, Detail: "not mounted"},
-		{Name: "derived-spec", Kind: Recommended, Satisfied: true, Detail: "ok"},
+func TestProfileReport_AllSatisfied(t *testing.T) {
+	// Exercise the fully-satisfied path (New alone never reaches it, since R6/R8 are the app's to wire).
+	report := ProfileReport{Requirements: []Requirement{
+		{ID: "R1", Name: "a", Satisfied: true, Detail: "d"},
+		{ID: "R2", Name: "b", Satisfied: true, Detail: "d"},
 	}}
-	if report.Satisfied() {
-		t.Error("Satisfied() = true, want false when a required surface is missing")
+	if !report.Satisfied() {
+		t.Error("Satisfied() = false, want true when every requirement is wired")
 	}
-	unsat := report.Unsatisfied()
-	if len(unsat) != 1 || unsat[0].Name != "envelope-invoke" {
-		t.Errorf("Unsatisfied() = %+v, want just the required envelope-invoke", unsat)
+	if len(report.Unsatisfied()) != 0 {
+		t.Errorf("Unsatisfied() = %+v, want empty", report.Unsatisfied())
 	}
-	if !strings.Contains(report.String(), "MISSING required surfaces") {
-		t.Errorf("String() = %q, want the MISSING header", report.String())
+	if !strings.Contains(report.String(), "2/2 requirements wired") {
+		t.Errorf("String() = %q, want a 2/2 header", report.String())
 	}
 }
 
-func surfaceByName(r ProfileReport, name string) Surface {
-	for _, s := range r.Surfaces {
-		if s.Name == name {
-			return s
+func requirementByID(r ProfileReport, id string) Requirement {
+	for _, req := range r.Requirements {
+		if req.ID == id {
+			return req
 		}
 	}
-	return Surface{}
+	return Requirement{}
+}
+
+func requirementIDs(reqs []Requirement) map[string]bool {
+	ids := map[string]bool{}
+	for _, req := range reqs {
+		ids[req.ID] = true
+	}
+	return ids
 }

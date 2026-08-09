@@ -92,6 +92,10 @@ func WithoutDescriptor() Option { return func(c *config) { c.descriptor = false 
 // New assembles a Cloud Service named serviceName from registry (with its handlers already
 // registered). The reserved /benzene/* surface is wired with profile-conformant defaults; options
 // adjust identity, health checks, routes, and exposure.
+//
+// registry must be non-nil: it backs RouterMiddleware, so an application-topic dispatch on a nil
+// registry would panic (unlike mesh.Describe, which tolerates a nil registry by degrading). A
+// service with no application topics is fine - pass an empty registry - but not a nil one.
 func New(serviceName string, registry *benzene.Registry, opts ...Option) *Service {
 	cfg := config{descriptor: true}
 	for _, opt := range opts {

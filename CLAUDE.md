@@ -172,19 +172,21 @@ alongside the shared spec.
   Cloud Service over HTTP (a non-Go port included); do not couple it back to this port's models.
 - `cloudservice/` - the one-call Cloud Service Profile *builder* (zero-dep), the assembly counterpart
   of `cloudserviceprobe` and the Go form of `Benzene.CloudService`. `New(name, registry, opts...)`
-  wires the reserved `/benzene/*` HTTP surface from a registry with profile-conformant defaults:
-  `mesh.Describe` + `mesh.Middleware` (reserved `benzene:mesh` descriptor, R6-inbound) +
-  `mesh.SpecHandler` at `SpecPath` (R5) + `healthcheck.Middleware` and a `HealthPath` route (R3) +
-  `EnvelopeHandler` at `EnvelopePath` (R2) + the app's routes, over one `ApplicationBuilder`. Pipeline
-  order is descriptor/health interception before `RouterMiddleware` so a reserved topic never falls
-  through. Returns the `http.Handler`, the `Descriptor`, the `Builder`, and a **wiring** `ProfileReport`
-  (`Satisfied()`/`Unsatisfied()`, surfaces classified `Required`/`Recommended`/`Informational`) - a
-  cheap startup self-check ("did I wire this right?"), the inside counterpart to `cloudserviceprobe`'s
-  outside audit. `WithoutDescriptor()` drops R5/R6 per the profile's §4 exposure control (reported
-  honestly, not refused). Deliberately **does not** own the outbound mesh feeds (register/heartbeat/
-  traces to a collector) - those keep their explicit push-exporter lifecycle as in `mesh-helloworld`;
-  the report flags them Informational. It composes the existing pieces, so it stays a thin assembler -
-  don't reimplement descriptor/health/spec logic here.
+  wires the **synchronous HTTP surface** of the profile from a registry: R1 (hosted pipeline), R2
+  (registry handlers via `RouterMiddleware`), R3 (`healthcheck.Middleware` + a `HealthPath` route),
+  R4 (`EnvelopeHandler` at `EnvelopePath`, `/benzene/invoke`), R5 (`mesh.SpecHandler` at `SpecPath`),
+  R7 (default `/benzene/*` paths), plus `mesh.Describe`+`mesh.Middleware` for the `benzene:mesh`
+  descriptor - all over one `ApplicationBuilder`. Pipeline order is descriptor/health interception
+  before `RouterMiddleware` so a reserved topic never falls through. Returns the `http.Handler`, the
+  `Descriptor`, the `Builder`, and a **wiring** `ProfileReport` - a full **R1-R8** checklist
+  (`Requirement{ID,Name,Satisfied,Detail}`, `Satisfied()`/`Unsatisfied()`). Crucially it is **honest**:
+  `New` deliberately does not wire R6's outbound feeds (register/heartbeat/traces need a collector +
+  push-exporter lifecycle the app owns) or R8 (trace propagation - `mesh.TraceMiddleware` inbound +
+  the client `TraceContextDecorator` outbound), so `Satisfied()` is **false** for a `New`-only build
+  and `Unsatisfied()` is the exact to-do list to reach full conformance (mirroring .NET's
+  `CloudServiceProfileReport` evaluating all of R1-R8, not just the HTTP surface). `WithoutDescriptor()`
+  additionally drops R5/R6 per §4 exposure control. It composes the existing pieces - a thin assembler;
+  don't reimplement descriptor/health/spec logic here, and don't let the report over-claim conformance.
 - `mesh/` - Phases 1-2 of `docs/design/mesh.md`: service `Descriptor` derived from the
   `Registry` (topics + JSON Schemas derived at startup from the `TReq`/`TRes` types the
   Registry captures at `Register` time, plus the contract `descriptorHash`),
