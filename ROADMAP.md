@@ -131,6 +131,21 @@ delivery order - just the current honest picture, kept up to date as things land
   profile is language-neutral and this tool must be able to audit ANY Benzene Cloud Service reachable
   over HTTP, a non-Go port included (the same rationale, and the same deliberate duplication, as the
   .NET package's `CloudServiceProbePaths`).
+- `cloudservice` - the one-call Cloud Service Profile *builder* (zero dependencies), matching
+  `Benzene.CloudService` and the assembly counterpart of `cloudserviceprobe`. `New(name, registry,
+  opts...)` wires the reserved `/benzene/*` surface from a registry with profile-conformant defaults -
+  `mesh.Describe`+`mesh.Middleware` (the reserved `benzene:mesh` descriptor, R6-inbound), the R5
+  `mesh.SpecHandler` at `SpecPath`, `healthcheck.Middleware` plus a `HealthPath` route (R3),
+  `EnvelopeHandler` at `EnvelopePath` (R2), and the app routes - over one `ApplicationBuilder`, with
+  descriptor/health interception ordered before `RouterMiddleware`. It returns the `http.Handler`,
+  `Descriptor`, `Builder`, and a wiring-time `ProfileReport` (`Satisfied()`/`Unsatisfied()`; surfaces
+  are `Required`/`Recommended`/`Informational`) - the inside "did I wire this right?" self-check that
+  pairs with `cloudserviceprobe`'s outside audit (`CloudServiceProfileReport` vs `.Probe` in .NET).
+  `WithoutDescriptor()` drops R5/R6 per the profile's §4 exposure control, reported honestly rather
+  than refused. Deliberately a thin assembler over the existing pieces, and deliberately NOT the owner
+  of the outbound mesh feeds (register/heartbeat/traces): those keep their explicit push-exporter
+  lifecycle (as in `mesh-helloworld`) and the report flags them Informational, so nothing here spawns
+  or owns a background goroutine.
 - `logging` - basic request logging/timing middleware using only `log/slog`: one structured
   line per invocation (topic/version, Benzene status, duration; Info/Warn/Error by outcome).
   The dependency-free visibility option alongside the `diagnostics` module's full OTel feed.
@@ -314,16 +329,10 @@ documented, genuinely-unreachable defensive branch - see each package's own comm
 An earlier wave (`client`, `cors`, `benzenetest`, `logging`) plus the large catch-up batch
 (`awskinesis`, `awss3`, `awskafka`, `azurefunctions.Timer`/`EventGrid`, `validation`,
 `idempotency`, `ratelimiting`, `auth`, `cache`, `resilience`, `saga`, `responseevents`,
-`healthcheck.TCP`/`HTTP`, `cloudserviceprobe`, and the R5 `mesh.SpecHandler`) have all landed - see
-Done above. These zero-dependency items remain queued and buildable without any dependency decision:
+`healthcheck.TCP`/`HTTP`, `cloudserviceprobe`, the R5 `mesh.SpecHandler`, and the `cloudservice`
+one-call profile builder) have all landed - see Done above. These zero-dependency items remain
+queued and buildable without any dependency decision:
 
-- **`cloudservice` one-call profile builder** (`Benzene.CloudService`). All the profile surfaces
-  already exist as individual pieces (`mesh.Describe`/`Middleware`/`TraceMiddleware`/`SpecHandler`,
-  `mesh.NewPushExporter` for register/heartbeat/traces, `healthcheck.Middleware`, the `httpbinding`
-  paths). A builder would assemble them into one conformant App + mux from a small config, and
-  emit a wiring-time self-check report - the internal counterpart to the external `cloudserviceprobe`
-  (`Benzene.CloudService.CloudServiceProfileReport` vs `.Probe`). Pure assembly of existing zero-dep
-  parts; the design work is the builder's shape and how it composes with a hand-wired `App`.
 - **OpenAPI/AsyncAPI spec generation** (`Benzene.Schema.OpenApi`). R5 is satisfied today by
   `mesh.SpecHandler` serving the derived descriptor (Benzene's own format, which the profile
   permits). A richer, industry-standard document (OpenAPI for request/response topics, AsyncAPI for

@@ -170,6 +170,21 @@ alongside the shared spec.
   `httpbinding`/`healthcheck`/`mesh` - it keeps its own `/benzene/*` path constants and parses the
   wire shapes itself, because the profile is language-neutral and this tool must audit ANY Benzene
   Cloud Service over HTTP (a non-Go port included); do not couple it back to this port's models.
+- `cloudservice/` - the one-call Cloud Service Profile *builder* (zero-dep), the assembly counterpart
+  of `cloudserviceprobe` and the Go form of `Benzene.CloudService`. `New(name, registry, opts...)`
+  wires the reserved `/benzene/*` HTTP surface from a registry with profile-conformant defaults:
+  `mesh.Describe` + `mesh.Middleware` (reserved `benzene:mesh` descriptor, R6-inbound) +
+  `mesh.SpecHandler` at `SpecPath` (R5) + `healthcheck.Middleware` and a `HealthPath` route (R3) +
+  `EnvelopeHandler` at `EnvelopePath` (R2) + the app's routes, over one `ApplicationBuilder`. Pipeline
+  order is descriptor/health interception before `RouterMiddleware` so a reserved topic never falls
+  through. Returns the `http.Handler`, the `Descriptor`, the `Builder`, and a **wiring** `ProfileReport`
+  (`Satisfied()`/`Unsatisfied()`, surfaces classified `Required`/`Recommended`/`Informational`) - a
+  cheap startup self-check ("did I wire this right?"), the inside counterpart to `cloudserviceprobe`'s
+  outside audit. `WithoutDescriptor()` drops R5/R6 per the profile's §4 exposure control (reported
+  honestly, not refused). Deliberately **does not** own the outbound mesh feeds (register/heartbeat/
+  traces to a collector) - those keep their explicit push-exporter lifecycle as in `mesh-helloworld`;
+  the report flags them Informational. It composes the existing pieces, so it stays a thin assembler -
+  don't reimplement descriptor/health/spec logic here.
 - `mesh/` - Phases 1-2 of `docs/design/mesh.md`: service `Descriptor` derived from the
   `Registry` (topics + JSON Schemas derived at startup from the `TReq`/`TRes` types the
   Registry captures at `Register` time, plus the contract `descriptorHash`),
