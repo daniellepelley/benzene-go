@@ -295,8 +295,29 @@ documented, genuinely-unreachable defensive branch - see each package's own comm
 
 ## Next (zero new dependencies)
 
-Everything previously listed here (`client`, `cors`, `benzenetest`, and the `logging`
-middleware) has landed - see Done above. No zero-dependency candidate is currently queued.
+An earlier wave (`client`, `cors`, `benzenetest`, `logging`) plus the large catch-up batch
+(`awskinesis`, `awss3`, `awskafka`, `azurefunctions.Timer`/`EventGrid`, `validation`,
+`idempotency`, `ratelimiting`, `auth`, `cache`, `resilience`, `saga`, `responseevents`,
+`healthcheck.TCP`/`HTTP`, `cloudserviceprobe`, and the R5 `mesh.SpecHandler`) have all landed - see
+Done above. These zero-dependency items remain queued and buildable without any dependency decision:
+
+- **`cloudservice` one-call profile builder** (`Benzene.CloudService`). All the profile surfaces
+  already exist as individual pieces (`mesh.Describe`/`Middleware`/`TraceMiddleware`/`SpecHandler`,
+  `mesh.NewPushExporter` for register/heartbeat/traces, `healthcheck.Middleware`, the `httpbinding`
+  paths). A builder would assemble them into one conformant App + mux from a small config, and
+  emit a wiring-time self-check report - the internal counterpart to the external `cloudserviceprobe`
+  (`Benzene.CloudService.CloudServiceProfileReport` vs `.Probe`). Pure assembly of existing zero-dep
+  parts; the design work is the builder's shape and how it composes with a hand-wired `App`.
+- **Consumer-side contract-drift health check** (`Benzene.Clients.HealthChecks`). A `healthcheck.Check`
+  that invokes a downstream Benzene service's reserved `benzene:healthcheck` topic via a
+  `client.Sender` and compares the provider's live contract hash (from its `benzene:mesh` descriptor)
+  against a hash the consumer was built against: reachable+matching = ok, reachable+drifted = warning
+  (does not flip health), unreachable = failed. Zero-dep, but needs the descriptor-hash comparison
+  wired in, so it is more than the existing reachability-only `TCPCheck`/`HTTPPingCheck`.
+- **OpenAPI/AsyncAPI spec generation** (`Benzene.Schema.OpenApi`). R5 is satisfied today by
+  `mesh.SpecHandler` serving the derived descriptor (Benzene's own format, which the profile
+  permits). A richer, industry-standard document (OpenAPI for request/response topics, AsyncAPI for
+  event topics) derived from the same registry would be a larger, still-zero-dep feature.
 
 ## Later - needs a dependency decision first
 
