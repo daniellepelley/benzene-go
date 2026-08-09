@@ -387,7 +387,10 @@ func syntheticTraceParent() string {
 	return "00-" + hex.EncodeToString(traceID[:]) + "-" + hex.EncodeToString(spanID[:]) + "-01"
 }
 
-// hasBoolField reports whether raw parses as a JSON object with a boolean field of the given name.
+// hasBoolField reports whether raw parses as a JSON object with a genuinely boolean field of the
+// given name. It unmarshals into `any` and type-asserts bool rather than into a bool directly,
+// because json.Unmarshal of a JSON null into a bool is a no-op that returns nil - so a null-valued
+// field would otherwise be mistaken for a present boolean (wire-contracts.md §5 wants a real bool).
 func hasBoolField(raw, field string) bool {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &obj); err != nil {
@@ -397,8 +400,12 @@ func hasBoolField(raw, field string) bool {
 	if !ok {
 		return false
 	}
-	var b bool
-	return json.Unmarshal(value, &b) == nil
+	// value came from a successfully-parsed object, so it is always valid JSON; a null / string /
+	// number simply leaves parsed non-bool, and the type assertion is the real test.
+	var parsed any
+	_ = json.Unmarshal(value, &parsed)
+	_, isBool := parsed.(bool)
+	return isBool
 }
 
 // isNonEmptyObject reports whether raw parses as a JSON object with at least one field.
@@ -450,11 +457,17 @@ func parseDescriptor(innerBody string) (service string, topicCount int, reason s
 	return service, len(topics), "", true
 }
 
-// jsonField unmarshals a present field into target, erroring if the field is absent or the wrong type.
+// jsonField unmarshals a present, non-null field into target, erroring if the field is absent, JSON
+// null, or the wrong type. The explicit null guard matters because json.Unmarshal of a JSON null is
+// a no-op that returns nil (leaving target at its zero value) - so without it a null-valued
+// statusCode/headers/body would be mistaken for a present, correctly-typed field.
 func jsonField(obj map[string]json.RawMessage, name string, target any) error {
 	raw, ok := obj[name]
 	if !ok {
 		return fmt.Errorf("missing field %q", name)
+	}
+	if strings.TrimSpace(string(raw)) == "null" {
+		return fmt.Errorf("field %q is null", name)
 	}
 	return json.Unmarshal(raw, target)
 }

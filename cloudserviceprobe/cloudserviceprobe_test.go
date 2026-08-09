@@ -299,6 +299,9 @@ func TestParseEnvelope(t *testing.T) {
 		{"not json", `not json`, false, ""},
 		{"not an object", `[1,2]`, false, ""},
 		{"statusCode not a string", `{"statusCode":200,"headers":{},"body":"x"}`, false, ""},
+		{"null statusCode is rejected (not a no-op pass)", `{"statusCode":null,"headers":{},"body":"x"}`, false, ""},
+		{"null headers is rejected", `{"statusCode":"200","headers":null,"body":"x"}`, false, ""},
+		{"null body is rejected", `{"statusCode":"200","headers":{},"body":null}`, false, ""},
 		{"missing statusCode", `{"headers":{},"body":"x"}`, false, ""},
 		{"headers not an object", `{"statusCode":"200","headers":"x","body":"x"}`, false, ""},
 		{"body not a string", `{"statusCode":"200","headers":{},"body":5}`, false, ""},
@@ -351,6 +354,7 @@ func TestHasBoolField(t *testing.T) {
 		`{"isHealthy":true}`:  true,
 		`{"isHealthy":false}`: true,
 		`{"isHealthy":"yes"}`: false,
+		`{"isHealthy":null}`:  false,
 		`{"other":true}`:      false,
 		`not json`:            false,
 	}
