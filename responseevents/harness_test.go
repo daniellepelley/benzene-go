@@ -26,7 +26,7 @@ func TestMiddleware_RepublishesThroughHarness(t *testing.T) {
 			// order:create returns Created, so CrudConvention republishes it as order:created.
 			if err := benzene.Register(r, benzene.NewTopic("order:create"),
 				benzene.Handler[order, order](func(_ context.Context, req order) benzene.Result[order] {
-					return benzene.CreatedResult(req)
+					return benzene.Created(req)
 				})); err != nil {
 				t.Fatalf("Register: %v", err)
 			}

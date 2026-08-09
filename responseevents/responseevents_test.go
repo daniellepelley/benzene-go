@@ -37,7 +37,7 @@ func TestMiddleware_PublishesMatchedEvent(t *testing.T) {
 
 	ic := &benzene.InvocationContext{Topic: benzene.NewTopic("order:create")}
 	order := orderDoc{ID: "o-1"}
-	if err := mw(context.Background(), ic, setResult(ic, benzene.CreatedResult(order))); err != nil {
+	if err := mw(context.Background(), ic, setResult(ic, benzene.Created(order))); err != nil {
 		t.Fatalf("middleware error = %v", err)
 	}
 	if len(pub.published) != 1 || pub.published[0].EventTopic.ID != "order:created" || pub.published[0].Payload != order {
@@ -56,7 +56,7 @@ func TestMiddleware_FanOutAllMatchingMappings(t *testing.T) {
 		Map("order:create", "audit:order-created"),
 	})
 	ic := &benzene.InvocationContext{Topic: benzene.NewTopic("order:create")}
-	if err := mw(context.Background(), ic, setResult(ic, benzene.CreatedResult(orderDoc{ID: "o-1"}))); err != nil {
+	if err := mw(context.Background(), ic, setResult(ic, benzene.Created(orderDoc{ID: "o-1"}))); err != nil {
 		t.Fatalf("middleware error = %v", err)
 	}
 	if len(pub.published) != 2 {
@@ -116,7 +116,7 @@ func TestMiddleware_FailMessageReplacesResultAndStops(t *testing.T) {
 	)
 
 	ic := &benzene.InvocationContext{Topic: benzene.NewTopic("order:create")}
-	if err := mw(context.Background(), ic, setResult(ic, benzene.CreatedResult(orderDoc{ID: "o-1"}))); err != nil {
+	if err := mw(context.Background(), ic, setResult(ic, benzene.Created(orderDoc{ID: "o-1"}))); err != nil {
 		t.Fatalf("middleware error = %v", err)
 	}
 	if ic.Result.ResultStatus() != benzene.StatusUnexpectedError {
@@ -143,7 +143,7 @@ func TestMiddleware_LogAndContinueKeepsResultAndContinues(t *testing.T) {
 	)
 
 	ic := &benzene.InvocationContext{Topic: benzene.NewTopic("order:create")}
-	if err := mw(context.Background(), ic, setResult(ic, benzene.CreatedResult(orderDoc{ID: "o-1"}))); err != nil {
+	if err := mw(context.Background(), ic, setResult(ic, benzene.Created(orderDoc{ID: "o-1"}))); err != nil {
 		t.Fatalf("middleware error = %v", err)
 	}
 	if ic.Result.ResultStatus() != benzene.StatusCreated {
@@ -161,7 +161,7 @@ func TestMiddleware_FailureWithoutErrorHookDoesNotPanic(t *testing.T) {
 	pub := &capturingPublisher{failOn: map[string]error{"order:created": errors.New("down")}}
 	mw := Middleware(pub, []Mapping{Map("order:create", "order:created")}) // no OnPublishError
 	ic := &benzene.InvocationContext{Topic: benzene.NewTopic("order:create")}
-	if err := mw(context.Background(), ic, setResult(ic, benzene.CreatedResult(orderDoc{ID: "o-1"}))); err != nil {
+	if err := mw(context.Background(), ic, setResult(ic, benzene.Created(orderDoc{ID: "o-1"}))); err != nil {
 		t.Fatalf("middleware error = %v", err)
 	}
 	if ic.Result.ResultStatus() != benzene.StatusUnexpectedError {

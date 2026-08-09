@@ -35,21 +35,21 @@ func TestExplicitMapping_Resolve(t *testing.T) {
 			name:    "matches source and publishes on success with payload",
 			mapping: Map("order:create", "order:created"),
 			topic:   benzene.NewTopic("order:create"),
-			result:  benzene.CreatedResult(order),
+			result:  benzene.Created(order),
 			want:    &Publication{EventTopic: benzene.NewTopic("order:created"), Payload: order},
 		},
 		{
 			name:    "source match is case-insensitive",
 			mapping: Map("Order:Create", "order:created"),
 			topic:   benzene.NewTopic("order:create"),
-			result:  benzene.CreatedResult(order),
+			result:  benzene.Created(order),
 			want:    &Publication{EventTopic: benzene.NewTopic("order:created"), Payload: order},
 		},
 		{
 			name:    "different source topic does not fire",
 			mapping: Map("order:create", "order:created"),
 			topic:   benzene.NewTopic("order:update"),
-			result:  benzene.CreatedResult(order),
+			result:  benzene.Created(order),
 			want:    nil,
 		},
 		{
@@ -105,13 +105,13 @@ func TestExplicitMapping_Project(t *testing.T) {
 		mapping := Map("order:create", "order:created", Project(func(p any) any {
 			return orderDoc{ID: p.(orderDoc).ID + "-projected"}
 		}))
-		got := mapping.Resolve(benzene.NewTopic("order:create"), benzene.CreatedResult(orderDoc{ID: "o-1"}))
+		got := mapping.Resolve(benzene.NewTopic("order:create"), benzene.Created(orderDoc{ID: "o-1"}))
 		assertPublication(t, got, &Publication{EventTopic: benzene.NewTopic("order:created"), Payload: orderDoc{ID: "o-1-projected"}})
 	})
 
 	t.Run("nil projection skips the publish", func(t *testing.T) {
 		mapping := Map("order:create", "order:created", Project(func(any) any { return nil }))
-		if got := mapping.Resolve(benzene.NewTopic("order:create"), benzene.CreatedResult(orderDoc{ID: "o-1"})); got != nil {
+		if got := mapping.Resolve(benzene.NewTopic("order:create"), benzene.Created(orderDoc{ID: "o-1"})); got != nil {
 			t.Errorf("Resolve() = %+v, want nil when the projection returns nil", got)
 		}
 	})
@@ -143,13 +143,13 @@ func TestCrudConvention_Resolve(t *testing.T) {
 		result benzene.ResultInfo
 		want   *Publication
 	}{
-		{"create with Created publishes created", "order:create", benzene.CreatedResult(order), &Publication{EventTopic: benzene.NewTopic("order:created"), Payload: order}},
+		{"create with Created publishes created", "order:create", benzene.Created(order), &Publication{EventTopic: benzene.NewTopic("order:created"), Payload: order}},
 		{"update with Updated publishes updated", "order:update", benzene.Updated(order), &Publication{EventTopic: benzene.NewTopic("order:updated"), Payload: order}},
 		{"delete with Deleted publishes deleted", "order:delete", benzene.Deleted(order), &Publication{EventTopic: benzene.NewTopic("order:deleted"), Payload: order}},
-		{"verb match is case-insensitive", "order:Create", benzene.CreatedResult(order), &Publication{EventTopic: benzene.NewTopic("order:Created"), Payload: order}},
+		{"verb match is case-insensitive", "order:Create", benzene.Created(order), &Publication{EventTopic: benzene.NewTopic("order:Created"), Payload: order}},
 		{"create with wrong status does not fire", "order:create", benzene.Ok(order), nil},
 		{"non-crud verb does not fire", "order:get", benzene.Ok(order), nil},
-		{"crud verb but nil payload does not fire", "order:create", benzene.CreatedResult[any](nil), nil},
+		{"crud verb but nil payload does not fire", "order:create", benzene.Created[any](nil), nil},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

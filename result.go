@@ -74,8 +74,8 @@ func SetResult[T any](status Status, payload T, successful bool) Result[T] {
 // Ok returns a successful Result with StatusOk.
 func Ok[T any](payload T) Result[T] { return success(StatusOk, payload) }
 
-// CreatedResult returns a successful Result with StatusCreated.
-func CreatedResult[T any](payload T) Result[T] { return success(StatusCreated, payload) }
+// Created returns a successful Result with StatusCreated.
+func Created[T any](payload T) Result[T] { return success(StatusCreated, payload) }
 
 // Accepted returns a successful Result with StatusAccepted.
 func Accepted[T any](payload T) Result[T] { return success(StatusAccepted, payload) }
