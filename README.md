@@ -54,6 +54,60 @@ func main() {
 See `examples/helloworld/` for a complete version of this with dependency injection, a health
 check, and both HTTP entry points wired through the three-phase `App` lifecycle.
 
+## Design notes for Go developers
+
+Two things surprise Go developers on first read. Both are deliberate, and knowing *why* makes the
+rest of the API predictable. (For the fuller idiom rationale and where the design bends toward Go
+vs. stays consistent across language ports, see [docs/go-idioms-review.md](docs/go-idioms-review.md).)
+
+### Handlers return `Result[T]`, not `(T, error)`
+
+A handler is `func(context.Context, TReq) benzene.Result[TRes]` — there is no `error` return. That
+is not an oversight: `Result[T]` carries a `Status` from a **fixed, wire-level status vocabulary**
+(`ok`, `bad-request`, `not-found`, `unexpected-error`, …) that every Benzene language port and every
+transport shares, so a handler's outcome maps identically onto an HTTP status, a gRPC code, or a
+queue ack/nack. Returning a value instead of an `error` is also what lets a batch consumer turn one
+bad message into a `bad-request` result rather than crashing the whole batch.
+
+```go
+func createOrder(_ context.Context, req orderRequest) benzene.Result[orderResponse] {
+    if req.ID == "" {
+        return benzene.BadRequest[orderResponse]("id is required") // not: return nil, errors.New(...)
+    }
+    return benzene.Ok(orderResponse{...})
+}
+```
+
+Go `error` is still used everywhere it belongs — *infrastructure* speaks `error` (`Register`,
+`Consumer.Run`, request decoding all return `error`); only the *handler boundary* speaks `Result`.
+To map a Go `error` from a dependency at the handler edge, translate it to the status you want:
+`if err != nil { return benzene.UnexpectedError[Res](err.Error()) }`.
+
+### `Container`/`Scope` is DI-lite — prefer closures; use a typed key when you need the container
+
+The `Container`/`Scope` is a small first-party DI helper (a named cross-language concept), **not** a
+reflection framework. For most dependencies you don't need it at all: capture a singleton in the
+handler's closure at registration time — plain Go, no lookup, no key.
+
+```go
+func newApp(orders OrderStore) benzene.App[Config] { /* orders is captured by the handler closure */ }
+```
+
+Reach for the container only for a *scoped* (per-invocation) or *transient* dependency, resolved via
+`benzene.ScopeFromContext(ctx)` + `benzene.GetService[T]`. When you do, prefer a **typed key** over a
+bare string, so keys can't collide and the compiler helps you:
+
+```go
+type orderStoreKey struct{}
+benzene.AddScoped(container, orderStoreKey{}, func(*benzene.Scope) *OrderStore { return &OrderStore{} })
+// in the handler:
+scope, _ := benzene.ScopeFromContext(ctx)
+store := benzene.GetService[*OrderStore](scope, orderStoreKey{})
+```
+
+`GetService` panics if a required service is missing (use `TryGetService` for the optional case) —
+the "required dependency" contract, surfaced loudly at startup rather than as a nil later.
+
 ## Packages
 
 | Package | Coverage | What it is |

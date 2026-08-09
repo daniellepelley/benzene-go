@@ -441,8 +441,9 @@ alongside the shared spec.
   the spec already defines.
 - Read an existing package's pattern (doc comments, error handling, test style) before adding a
   new one - follow it rather than introducing a new convention.
-- Every package's tests are table-driven where the fixture shape allows it, using `t.Run` for
-  subtests. Match this style.
+- Tests are table-driven with `t.Run` subtests where cases share a shape, and named per-scenario
+  test functions where distinct failure paths have distinct setup (both are idiomatic; pick per
+  case). Read an existing package's tests and match its style rather than forcing one form.
 
 ## Conventions
 
