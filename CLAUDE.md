@@ -242,7 +242,14 @@ alongside the shared spec.
 - `awssqs/` - AWS SQS binding, in **its own Go module** (`awssqs/go.mod`) - one of the packages
   with a third-party dependency (`aws-sdk-go-v2/service/sqs`, needed for the outbound publish
   client; the inbound Lambda-trigger `Handler` is zero-dependency, like `awslambda`). See
-  `RELEASING.md` for the multi-module layout and why.
+  `RELEASING.md` for the multi-module layout and why. Also carries `Consumer` - the **self-hosted
+  SQS poller** (matching `Benzene.Aws.Sqs`'s `SqsConsumer`): a `Run(ctx)` loop that long-polls
+  `ReceiveMessage`, dispatches each message through the pipeline in its own scope, and
+  `DeleteMessageBatch`-deletes ONLY the ones whose dispatch succeeded - a failed message is left to
+  reappear after its visibility timeout and go to SQS's own redrive/DLQ, never deleted unhandled. It
+  is the standalone-compute alternative to the Lambda-trigger `Handler` (a container/EC2 worker that
+  owns its poll loop), depends on a narrow `ReceiveDeleteAPI` for fake-based tests, and backs off on
+  a transient AWS error rather than hot-looping.
 - `cloudevents/` - CloudEvents 1.0 mapping, zero-dependency: wire envelope <-> CloudEvents
   (`type` <-> topic, `data` <-> body, other attributes <-> `ce-`-prefixed headers - the
   outbound direction only maps `ce-` headers back, documented lossiness), plus an inbound
