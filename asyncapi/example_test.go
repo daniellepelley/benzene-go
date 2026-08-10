@@ -37,7 +37,7 @@ func ExampleGenerate() {
 	fmt.Println(doc.Operations["send_order_placed"].Action, "on", doc.Operations["send_order_placed"].Channel.Ref)
 	// Output:
 	// 3.0.0
-	// receive on #/channels/order:place
-	// reply: #/channels/order:place:response
-	// send on #/channels/order:placed
+	// receive on #/channels/order_place
+	// reply: #/channels/order_place_response
+	// send on #/channels/order_placed
 }

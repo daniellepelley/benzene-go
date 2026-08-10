@@ -56,25 +56,26 @@ func TestGenerate_TopLevelAndInfo(t *testing.T) {
 func TestGenerate_HandledTopicIsReceiveWithReply(t *testing.T) {
 	doc := asyncapi.Generate(newDescriptor(t))
 
-	req, ok := doc.Channels["order:create"]
+	// Channel MAP KEYS are sanitized (AsyncAPI 3.0 wants [A-Za-z0-9._-]); the raw ':' topic lives in
+	// the channel's address.
+	req, ok := doc.Channels["order_create"]
 	if !ok {
-		t.Fatalf("no request channel order:create; channels=%v", doc.Channels)
+		t.Fatalf("no request channel keyed order_create; channels=%v", doc.Channels)
 	}
 	if req.Address != "order:create" {
-		t.Errorf("address = %q", req.Address)
+		t.Errorf("address = %q, want the raw topic order:create", req.Address)
 	}
 	if _, ok := req.Messages["request"]; !ok {
 		t.Errorf("request channel has no request message: %+v", req.Messages)
 	}
-	// The request payload carries the derived schema (an object with an id property).
 	payload := req.Messages["request"].Payload
 	if payload["type"] != "object" {
 		t.Errorf("request payload type = %v, want object", payload["type"])
 	}
 
-	reply, ok := doc.Channels["order:create:response"]
+	reply, ok := doc.Channels["order_create_response"]
 	if !ok {
-		t.Fatalf("no reply channel order:create:response; channels=%v", doc.Channels)
+		t.Fatalf("no reply channel keyed order_create_response; channels=%v", doc.Channels)
 	}
 	if reply.Address != "order:create:response" {
 		t.Errorf("reply address = %q", reply.Address)
@@ -87,18 +88,41 @@ func TestGenerate_HandledTopicIsReceiveWithReply(t *testing.T) {
 	if op.Action != "receive" {
 		t.Errorf("action = %q, want receive", op.Action)
 	}
-	if op.Channel.Ref != "#/channels/order:create" {
+	if op.Channel.Ref != "#/channels/order_create" {
 		t.Errorf("channel ref = %q", op.Channel.Ref)
 	}
-	if op.Reply == nil || op.Reply.Channel.Ref != "#/channels/order:create:response" {
+	if op.Reply == nil || op.Reply.Channel.Ref != "#/channels/order_create_response" {
 		t.Errorf("reply ref = %+v", op.Reply)
+	}
+}
+
+func TestGenerate_HandledAndSentTopicMergeIntoOneChannel(t *testing.T) {
+	// A topic that is both handled AND declared as a sent event must become ONE channel carrying both
+	// the request and the event message (find-by-address-add-message), not a duplicate or overwrite.
+	doc := asyncapi.Generate(newDescriptor(t, "order:create"),
+		asyncapi.WithSentEvent("order:create", map[string]any{"type": "object"}))
+
+	ch, ok := doc.Channels["order_create"]
+	if !ok {
+		t.Fatalf("no order_create channel; channels=%v", doc.Channels)
+	}
+	if _, ok := ch.Messages["request"]; !ok {
+		t.Error("merged channel lost its request message")
+	}
+	if _, ok := ch.Messages["event"]; !ok {
+		t.Error("merged channel lost its event message")
+	}
+	// Both operations reference the same single channel.
+	if doc.Operations["receive_order_create"].Channel.Ref != "#/channels/order_create" ||
+		doc.Operations["send_order_create"].Channel.Ref != "#/channels/order_create" {
+		t.Error("receive and send operations should both reference #/channels/order_create")
 	}
 }
 
 func TestGenerate_NullableSchemaPassesThrough(t *testing.T) {
 	// AsyncAPI 3.0 is JSON Schema, so mesh's nullable type array survives with no reshaping.
 	doc := asyncapi.Generate(newDescriptor(t))
-	props := doc.Channels["order:create"].Messages["request"].Payload["properties"].(map[string]any)
+	props := doc.Channels["order_create"].Messages["request"].Payload["properties"].(map[string]any)
 	note := props["note"].(map[string]any)
 	types, ok := note["type"].([]string)
 	if !ok || len(types) != 2 {
@@ -114,7 +138,7 @@ func TestGenerate_SentEvent(t *testing.T) {
 	}
 	doc := asyncapi.Generate(newDescriptor(t), asyncapi.WithSentEvent("order:created", eventPayload))
 
-	ch, ok := doc.Channels["order:created"]
+	ch, ok := doc.Channels["order_created"]
 	if !ok {
 		t.Fatalf("no sent-event channel; channels=%v", doc.Channels)
 	}
@@ -130,7 +154,7 @@ func TestGenerate_SentEvent(t *testing.T) {
 	}
 	// Deep copy: mutating the input payload afterward must not affect the document.
 	eventPayload["type"] = "MUTATED"
-	if doc.Channels["order:created"].Messages["event"].Payload["type"] != "object" {
+	if doc.Channels["order_created"].Messages["event"].Payload["type"] != "object" {
 		t.Error("copySchema did not deep-copy the sent-event payload")
 	}
 }
@@ -141,8 +165,8 @@ func TestGenerate_SentEventReplaceAndNilPayload(t *testing.T) {
 		asyncapi.WithSentEvent("order:created", nil), // replaces the earlier declaration
 	)
 	// Only one channel/operation for the topic, and its payload is the replacement (nil).
-	if doc.Channels["order:created"].Messages["event"].Payload != nil {
-		t.Errorf("payload = %v, want nil after replacement", doc.Channels["order:created"].Messages["event"].Payload)
+	if doc.Channels["order_created"].Messages["event"].Payload != nil {
+		t.Errorf("payload = %v, want nil after replacement", doc.Channels["order_created"].Messages["event"].Payload)
 	}
 	count := 0
 	for key := range doc.Operations {
@@ -165,12 +189,12 @@ func TestGenerate_Options(t *testing.T) {
 	if doc.Info.Title != "Custom" || doc.Info.Version != "9.9.9" || doc.Info.Description != "a service" {
 		t.Errorf("info = %+v", doc.Info)
 	}
-	if _, ok := doc.Channels["order:create:reply"]; !ok {
+	if _, ok := doc.Channels["order_create_reply"]; !ok {
 		t.Errorf("custom reply suffix not applied; channels=%v", doc.Channels)
 	}
 	// An empty suffix is ignored (the default is kept).
 	def := asyncapi.Generate(newDescriptor(t), asyncapi.WithResponseTopicSuffix("   "))
-	if _, ok := def.Channels["order:create:response"]; !ok {
+	if _, ok := def.Channels["order_create_response"]; !ok {
 		t.Error("empty suffix should have kept the default 'response'")
 	}
 }
@@ -192,16 +216,45 @@ func TestGenerate_DefaultsForEmptyServiceIdentity(t *testing.T) {
 	if blank.ID != "urn:benzene:service" {
 		t.Errorf("id = %q, want the bare urn fallback", blank.ID)
 	}
+	// The urn slug uses '-' (not '_'), matching the .NET builder, so a service gets the same id
+	// across ports.
+	spaced := asyncapi.Generate(desc, asyncapi.WithTitle("Order Service"))
+	if spaced.ID != "urn:benzene:service:order-service" {
+		t.Errorf("id = %q, want urn:benzene:service:order-service", spaced.ID)
+	}
 }
 
-func TestGenerate_OperationKeyCollisionDisambiguated(t *testing.T) {
-	// "a:b" and "a-b" both slug to "a_b"; the second receive operation gets a _2 suffix.
+func TestGenerate_KeyCollisionDisambiguated(t *testing.T) {
+	// "a:b" and "a-b" both slug to "a_b" for BOTH the operation key and the channel key; the second of
+	// each gets a _2 suffix, and the two distinct addresses stay on distinct channels.
 	doc := asyncapi.Generate(newDescriptor(t, "a:b", "a-b"))
+
 	if _, ok := doc.Operations["receive_a_b"]; !ok {
 		t.Error("missing receive_a_b")
 	}
 	if _, ok := doc.Operations["receive_a_b_2"]; !ok {
-		t.Errorf("collision not disambiguated; operations=%v", doc.Operations)
+		t.Errorf("operation collision not disambiguated; operations=%v", doc.Operations)
+	}
+	// Distinct addresses must not share a channel: the second gets a _2-suffixed channel key.
+	first, ok1 := doc.Channels["a_b"]
+	second, ok2 := doc.Channels["a_b_2"]
+	if !ok1 || !ok2 {
+		t.Fatalf("channel keys not disambiguated; channels=%v", doc.Channels)
+	}
+	if first.Address == second.Address {
+		t.Errorf("two channels share address %q; they should be distinct", first.Address)
+	}
+}
+
+func TestGenerate_AllPunctuationTopicGetsChannelFallback(t *testing.T) {
+	// A sent-event topic with no alphanumerics slugs to "" and falls back to the "channel" key.
+	doc := asyncapi.Generate(newDescriptor(t), asyncapi.WithSentEvent(":::", nil))
+	ch, ok := doc.Channels["channel"]
+	if !ok {
+		t.Fatalf("no fallback channel; channels=%v", doc.Channels)
+	}
+	if ch.Address != ":::" {
+		t.Errorf("fallback channel address = %q, want the raw ':::'", ch.Address)
 	}
 }
 

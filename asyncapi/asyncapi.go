@@ -14,7 +14,11 @@
 //   - Every registered topic is something the service RECEIVES: each becomes a channel carrying the
 //     request message, plus a "receive" operation whose reply is the native AsyncAPI reply object
 //     pointing at a reply channel named "<topic>:<responseSuffix>" (default "response"). This half is
-//     derived entirely from the descriptor - no extra input, no fabrication.
+//     derived entirely from the descriptor - no extra input, no fabrication. (Because the descriptor
+//     does not distinguish request/response from fire-and-forget topics, a reply channel is added for
+//     every handled topic; for a genuinely fire-and-forget handler that reply channel is a
+//     documentation artifact, not a guarantee the topic is request/response - the same limitation the
+//     openapi package notes.)
 //   - What a service SENDS (a fire-and-forget event it publishes, e.g. via responseevents) is NOT in
 //     the descriptor - the registry only knows what a service handles, not what it emits. So sent
 //     events are a caller-declared input: WithSentEvent(topic, payloadSchema) adds a channel + a
@@ -71,9 +75,9 @@ type Message struct {
 // Operation is what the application does with a channel: receive (an inbound handler) or send (a
 // declared outbound event). A receive operation carries a reply referencing the reply channel.
 type Operation struct {
-	Action  string        `json:"action"` // "receive" | "send"
-	Channel Ref           `json:"channel"`
-	Reply   *OperationRef `json:"reply,omitempty"`
+	Action  string `json:"action"` // "receive" | "send"
+	Channel Ref    `json:"channel"`
+	Reply   *Reply `json:"reply,omitempty"`
 }
 
 // Ref is an AsyncAPI reference object ({"$ref": "#/channels/..."}).
@@ -81,8 +85,9 @@ type Ref struct {
 	Ref string `json:"$ref"`
 }
 
-// OperationRef is the reply object: the channel the reply is published on.
-type OperationRef struct {
+// Reply is an AsyncAPI 3.0 Operation Reply Object: the channel a receive operation's reply is
+// published on.
+type Reply struct {
 	Channel Ref `json:"channel"`
 }
 
@@ -162,56 +167,89 @@ func Generate(desc mesh.Descriptor, opts ...Option) *Document {
 		cfg.version = "0.0.0"
 	}
 
-	doc := &Document{
+	book := newChannelBook()
+	operations := map[string]Operation{}
+	usedOps := map[string]bool{}
+
+	// Receive side: every handled topic, derived from the descriptor. Each is a receive operation on
+	// the request channel, replying on a "<topic>:<suffix>" channel.
+	for _, topic := range desc.Topics {
+		reqKey := book.addMessage(topic.ID, "request", Message{Name: "request", Payload: copySchema(topic.RequestSchema)})
+		replyKey := book.addMessage(topic.ID+":"+cfg.responseSuffix, "response", Message{Name: "response", Payload: copySchema(topic.ResponseSchema)})
+		operations[uniqueOp("receive_"+operationSlug(topic.ID), usedOps)] = Operation{
+			Action:  "receive",
+			Channel: Ref{Ref: channelRef(reqKey)},
+			Reply:   &Reply{Channel: Ref{Ref: channelRef(replyKey)}},
+		}
+	}
+
+	// Send side: caller-declared published events. Reusing the channel book by address means a topic
+	// that is BOTH handled and declared as a sent event becomes one channel carrying both the request
+	// and the event message, not two channels or a silent overwrite (matching the .NET builder).
+	for _, ev := range cfg.sentEvents {
+		evKey := book.addMessage(ev.topic, "event", Message{Name: "event", Payload: copySchema(ev.payload)})
+		operations[uniqueOp("send_"+operationSlug(ev.topic), usedOps)] = Operation{
+			Action:  "send",
+			Channel: Ref{Ref: channelRef(evKey)},
+		}
+	}
+
+	return &Document{
 		AsyncAPI:           "3.0.0",
 		ID:                 buildID(cfg.title),
 		DefaultContentType: "application/json",
 		Info:               Info{Title: cfg.title, Version: cfg.version, Description: cfg.description},
-		Channels:           map[string]Channel{},
-		Operations:         map[string]Operation{},
+		Channels:           book.channels,
+		Operations:         operations,
 	}
-
-	usedOps := map[string]bool{}
-
-	// Receive side: every handled topic, derived from the descriptor.
-	for _, topic := range desc.Topics {
-		reqChannel := topic.ID
-		doc.Channels[reqChannel] = Channel{
-			Address:  topic.ID,
-			Messages: map[string]Message{"request": {Name: "request", Payload: copySchema(topic.RequestSchema)}},
-		}
-
-		op := Operation{Action: "receive", Channel: Ref{Ref: channelRef(reqChannel)}}
-
-		// A reply channel for the response, named <topic>:<suffix>.
-		replyChannel := topic.ID + ":" + cfg.responseSuffix
-		doc.Channels[replyChannel] = Channel{
-			Address:  replyChannel,
-			Messages: map[string]Message{"response": {Name: "response", Payload: copySchema(topic.ResponseSchema)}},
-		}
-		op.Reply = &OperationRef{Channel: Ref{Ref: channelRef(replyChannel)}}
-
-		doc.Operations[uniqueOp("receive_"+operationSlug(topic.ID), usedOps)] = op
-	}
-
-	// Send side: caller-declared published events.
-	for _, ev := range cfg.sentEvents {
-		doc.Channels[ev.topic] = Channel{
-			Address:  ev.topic,
-			Messages: map[string]Message{"event": {Name: "event", Payload: copySchema(ev.payload)}},
-		}
-		doc.Operations[uniqueOp("send_"+operationSlug(ev.topic), usedOps)] = Operation{
-			Action:  "send",
-			Channel: Ref{Ref: channelRef(ev.topic)},
-		}
-	}
-
-	return doc
 }
 
-// channelRef builds the JSON-Pointer reference to a channel. Benzene topic ids use ':' separators
-// (e.g. "order:create"), which are valid in a JSON Pointer / URI fragment and need no escaping; a
-// '/' (which Benzene topics do not use, like the openapi package's assumption about '{'/'}') would.
+// channelBook builds the channels map. It keeps channel MAP KEYS sanitized - AsyncAPI 3.0 keys must
+// match [A-Za-z0-9._-], so the raw topic id (which may contain ':') is kept only as the channel's
+// address - and reuses a channel by address, so a topic that is both handled and published (or the
+// same address in two roles) becomes ONE channel carrying both messages rather than a duplicate or a
+// silent overwrite. This mirrors the .NET builder's GetOrAddChannel / SanitizeKey.
+type channelBook struct {
+	byAddress map[string]string // address -> sanitized channel key
+	usedKeys  map[string]bool
+	channels  map[string]Channel
+}
+
+func newChannelBook() *channelBook {
+	return &channelBook{byAddress: map[string]string{}, usedKeys: map[string]bool{}, channels: map[string]Channel{}}
+}
+
+// keyFor returns the stable sanitized map key for address, allocating one on first use. A sanitized
+// key that would collide with a DIFFERENT address gets a "_2", "_3", ... suffix, so distinct
+// addresses never share a channel.
+func (b *channelBook) keyFor(address string) string {
+	if key, ok := b.byAddress[address]; ok {
+		return key
+	}
+	base := operationSlug(address)
+	if base == "" {
+		base = "channel"
+	}
+	key := base
+	for n := 2; b.usedKeys[key]; n++ {
+		key = base + "_" + strconv.Itoa(n)
+	}
+	b.usedKeys[key] = true
+	b.byAddress[address] = key
+	b.channels[key] = Channel{Address: address, Messages: map[string]Message{}}
+	return key
+}
+
+// addMessage adds msg (under name) to the channel for address, creating the channel on first use, and
+// returns the channel's map key for building a $ref. Messages is a map, so mutating it through the
+// map-value copy updates the stored channel in place.
+func (b *channelBook) addMessage(address, name string, msg Message) string {
+	key := b.keyFor(address)
+	b.channels[key].Messages[name] = msg
+	return key
+}
+
+// channelRef builds the JSON-Pointer reference to a channel by its (sanitized) map key.
 func channelRef(channelKey string) string {
 	return "#/channels/" + channelKey
 }
@@ -250,10 +288,20 @@ func copyValue(v any) any {
 	}
 }
 
-// buildID turns the service title into the document's urn id (urn:benzene:service:<slug>), matching
-// the .NET builder.
+// buildID turns the service title into the document's urn id (urn:benzene:service:<slug>). It matches
+// the .NET builder's BuildId exactly - lowercase, each non-alphanumeric character mapped to '-' (runs
+// are NOT collapsed), trimmed of leading/trailing '-' - so the same service gets the same document id
+// across ports.
 func buildID(title string) string {
-	slug := operationSlug(strings.ToLower(title))
+	var b strings.Builder
+	for _, r := range strings.ToLower(title) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	slug := strings.Trim(b.String(), "-")
 	if slug == "" {
 		return "urn:benzene:service"
 	}
