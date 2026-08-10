@@ -17,14 +17,23 @@
 // The Go pipeline expresses a handler outcome two ways: a genuine infrastructure fault propagates
 // as a Go error from next(ctx), while an ordinary application failure lands on ic.Result as an
 // unsuccessful status (the router never returns a Go error for that - see RouterMiddleware). This
-// middleware trips the breaker on BOTH, mirroring resilience's two retry triggers:
+// middleware can trip the breaker on BOTH, mirroring resilience's two retry triggers:
 //
 //   - a genuine error from next() counts as a failure to the breaker AND propagates up unchanged;
-//   - a successful next() whose ic.Result is UNSUCCESSFUL (per the configurable WithTripOnResult
-//     predicate, default TripUnsuccessful) counts as a failure to the breaker, but the unsuccessful
-//     result stays on ic.Result and the middleware returns nil - that result IS the Benzene outcome,
-//     not a transport error;
-//   - a successful result does not count as a failure.
+//   - a next() whose ic.Result matches the configurable WithTripOnResult predicate counts as a
+//     failure to the breaker, but the result stays on ic.Result and the middleware returns nil -
+//     that result IS the Benzene outcome, not a transport error;
+//   - anything else (a success, or a non-matching result) does not count as a failure.
+//
+// The default WithTripOnResult predicate is TripOnServerError - only the dependency-health statuses
+// (service-unavailable, timeout, unexpected-error) count as breaker failures. Client-error results
+// (bad-request, validation-error, unauthorized, forbidden, not-found, conflict) deliberately do NOT:
+// because a circuit breaker sits on the inbound pipeline yet is meant to isolate an unhealthy
+// DEPENDENCY, a flood of malformed or unauthorized client requests must not open the breaker and shed
+// all traffic - client mistakes taking the service down is the opposite of what a breaker is for.
+// Pass WithTripOnResult(TripUnsuccessful) to trip on any unsuccessful result, or TripOnStatus(...) for
+// a custom set. (This mirrors resilience.Middleware, whose result trigger also defaults away from
+// acting on client-error results.)
 //
 // # Short-circuit
 //
@@ -39,9 +48,12 @@
 //
 // Register the breaker ABOVE the outbound/port calls it should protect - it must sit between the
 // caller and the dependency whose failures it counts. Compose it with resilience by ordering: put
-// retry BELOW the breaker (retry -> the call) so a burst of retries against a dead dependency still
-// counts toward tripping and, once open, the breaker fails fast before retry even starts; a timeout
-// belongs below the breaker too, so an elapsed deadline is one of the failures that can trip it.
+// retry BELOW the breaker (breaker -> retry -> the call). The breaker wraps the whole retry sequence
+// in a single cb.Execute, so an exhausted retry loop against a dead dependency counts as ONE breaker
+// failure (not one per attempt) - usually what you want - and, once the breaker is open, it fails
+// fast before retry even starts, sparing the dependency the retry storm entirely. A timeout belongs
+// below the breaker too, so an elapsed deadline is one of the failures that can trip it. Size the
+// breaker's ReadyToTrip threshold in these single-outcome units, not in individual retries.
 package circuitbreaker
 
 import (
@@ -71,8 +83,9 @@ type config struct {
 type Option func(*config)
 
 // WithTripOnResult overrides the predicate deciding whether a (non-error) ic.Result counts as a
-// failure against the breaker. Default: TripUnsuccessful - any result the pipeline treats as
-// unsuccessful. Pass TripOnStatus(...) to trip only on specific transient statuses.
+// failure against the breaker. Default: TripOnServerError - only dependency-health statuses
+// (service-unavailable, timeout, unexpected-error), so client-error results never open the breaker.
+// Pass TripUnsuccessful to trip on any unsuccessful result, or TripOnStatus(...) for a custom set.
 func WithTripOnResult(f func(benzene.ResultInfo) bool) Option {
 	return func(c *config) { c.tripOnResult = f }
 }
@@ -92,13 +105,19 @@ func WithOpenMessages(messages ...string) Option {
 }
 
 // Middleware returns a benzene.Middleware that runs the downstream pipeline inside cb. A genuine
-// next() error and an unsuccessful ic.Result both count as failures against the breaker (see the
-// package doc); once the breaker is open, calls short-circuit to a fail-fast result without touching
-// the downstream. T is the breaker's result type parameter and is irrelevant here - the handler
-// writes ic.Result, not a returned value - so any type works (the caller typically uses struct{}).
+// next() error and a result matching WithTripOnResult (default TripOnServerError) both count as
+// failures against the breaker (see the package doc); once the breaker is open, calls short-circuit
+// to a fail-fast result without touching the downstream. T is the breaker's result type parameter and
+// is irrelevant here - the handler writes ic.Result, not a returned value - so any type works (the
+// caller typically uses struct{}).
+//
+// A result-based trip is signalled to gobreaker by returning an unexported sentinel error from the
+// Execute closure, so the middleware relies on gobreaker's DEFAULT failure classification (a non-nil
+// error is a failure). If you supply a custom gobreaker.Settings.IsSuccessful, it must still treat a
+// non-nil error as a failure, or result-based tripping is silently defeated.
 func Middleware[T any](cb *gobreaker.CircuitBreaker[T], opts ...Option) benzene.Middleware {
 	cfg := config{
-		tripOnResult: TripUnsuccessful,
+		tripOnResult: TripOnServerError,
 		openStatus:   benzene.StatusServiceUnavailable,
 		openMessages: []string{"circuit breaker is open"},
 	}
@@ -144,10 +163,37 @@ func Middleware[T any](cb *gobreaker.CircuitBreaker[T], opts ...Option) benzene.
 	}
 }
 
-// TripUnsuccessful is the default WithTripOnResult predicate: it counts any result the pipeline
-// treats as unsuccessful (via the optional ResultIsSuccessful interface every Result[T] satisfies,
-// falling back to the status class) as a failure against the breaker - the same rule
-// resilience.RetryUnsuccessful, envelope dispatch, and idempotency use to decide success-vs-failure.
+// serverErrorStatuses are the framework failure statuses that signal an unhealthy DEPENDENCY (rather
+// than a client mistake) - the ones a circuit breaker should react to. Excludes the client-error
+// statuses (bad-request, validation-error, unauthorized, forbidden, not-found, conflict), which a
+// breaker must ignore so client traffic can't open it, and too-many-requests / not-implemented, which
+// are a caller-should-back-off and a permanent-gap signal respectively, not a transient dependency
+// fault a breaker helps with.
+var serverErrorStatuses = map[benzene.Status]struct{}{
+	benzene.StatusServiceUnavailable: {},
+	benzene.StatusTimeout:            {},
+	benzene.StatusUnexpectedError:    {},
+}
+
+// TripOnServerError is the DEFAULT WithTripOnResult predicate: it counts only the dependency-health
+// failure statuses (service-unavailable, timeout, unexpected-error) as breaker failures, so a flood
+// of client-error results (bad-request, validation-error, unauthorized, ...) never opens the breaker.
+// This is the safe default for a breaker on the inbound pipeline - see the package doc's Failure
+// model.
+func TripOnServerError(result benzene.ResultInfo) bool {
+	if result == nil {
+		return false
+	}
+	_, ok := serverErrorStatuses[result.ResultStatus()]
+	return ok
+}
+
+// TripUnsuccessful is a WithTripOnResult predicate that counts any result the pipeline treats as
+// unsuccessful (via the optional ResultIsSuccessful interface every Result[T] satisfies, falling back
+// to the status class) as a failure against the breaker - the same rule resilience.RetryUnsuccessful,
+// envelope dispatch, and idempotency use to decide success-vs-failure. Broader than the default
+// TripOnServerError: it also trips on client-error results, so use it only when every unsuccessful
+// outcome genuinely reflects the protected dependency's health.
 func TripUnsuccessful(result benzene.ResultInfo) bool { return !resultSuccessful(result) }
 
 // TripOnStatus builds a WithTripOnResult predicate that counts only the given statuses as failures -

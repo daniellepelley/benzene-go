@@ -49,16 +49,23 @@ handler writes `ic.Result`, not a returned value — so any type works; use `str
 
 ## Failure model
 
-The Go pipeline expresses a handler outcome two ways, and the breaker trips on **both**, mirroring
+The Go pipeline expresses a handler outcome two ways, and the breaker can trip on **both**, mirroring
 `resilience`'s two retry triggers:
 
 - a genuine **error** from `next()` counts as a failure to the breaker **and** propagates up
   unchanged;
-- a successful `next()` whose `ic.Result` is **unsuccessful** (per the configurable
-  `WithTripOnResult` predicate) counts as a failure to the breaker, but the unsuccessful result stays
-  on `ic.Result` and the middleware returns `nil` — that result *is* the Benzene outcome, not a
-  transport error;
-- a **successful** result does not count as a failure.
+- a `next()` whose `ic.Result` matches the configurable `WithTripOnResult` predicate counts as a
+  failure to the breaker, but the result stays on `ic.Result` and the middleware returns `nil` — that
+  result *is* the Benzene outcome, not a transport error;
+- anything else (a success, or a non-matching result) does not count as a failure.
+
+**The default is `TripOnServerError`** — only the dependency-health statuses (`service-unavailable`,
+`timeout`, `unexpected-error`) trip the breaker. Client-error results (`bad-request`,
+`validation-error`, `unauthorized`, `forbidden`, `not-found`, `conflict`) deliberately **do not**:
+the breaker sits on the inbound pipeline but is meant to isolate an unhealthy *dependency*, so a
+flood of malformed or unauthorized client requests must not open it and shed all traffic — client
+mistakes taking the service down is the opposite of a breaker's purpose. Pass
+`WithTripOnResult(TripUnsuccessful)` if you really do want every unsuccessful result to trip it.
 
 ## Short-circuit
 
@@ -72,16 +79,23 @@ too-many-requests rejection). Defaults to `StatusServiceUnavailable` with a
 
 | Option | Purpose | Default |
 | --- | --- | --- |
-| `WithTripOnResult(func(benzene.ResultInfo) bool)` | What counts as a failing result | `TripUnsuccessful` |
+| `WithTripOnResult(func(benzene.ResultInfo) bool)` | What counts as a failing result | `TripOnServerError` |
 | `WithOpenStatus(benzene.Status)` | Status of the fail-fast short-circuit result | `StatusServiceUnavailable` |
 | `WithOpenMessages(...string)` | Error messages on the short-circuit result | `"circuit breaker is open"` |
 
 Ready-made trip predicates:
 
-- `TripUnsuccessful` — trip on any result the pipeline treats as unsuccessful (the default).
-- `TripOnStatus(statuses...)` — trip only on specific statuses, e.g.
-  `TripOnStatus(benzene.StatusServiceUnavailable, benzene.StatusTimeout)` to trip on transient
-  downstream failures while letting a `validation-error` flow through without moving the breaker.
+- `TripOnServerError` — trip only on the dependency-health statuses (`service-unavailable`,
+  `timeout`, `unexpected-error`); client-error results never open the breaker (**the default**).
+- `TripUnsuccessful` — trip on *any* result the pipeline treats as unsuccessful, client errors
+  included. Use only when every unsuccessful outcome reflects the protected dependency's health.
+- `TripOnStatus(statuses...)` — trip only on a custom set of statuses, e.g.
+  `TripOnStatus(benzene.StatusServiceUnavailable, benzene.StatusTimeout)`.
+
+> The middleware relies on gobreaker's **default** failure classification (a non-nil error is a
+> failure): a result-based trip is signalled with an internal sentinel error. If you set a custom
+> `gobreaker.Settings.IsSuccessful`, it must still treat a non-nil error as a failure, or result-based
+> tripping is silently defeated.
 
 ## Placement
 

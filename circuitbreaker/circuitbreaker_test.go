@@ -137,6 +137,59 @@ func TestMiddleware_SuccessfulResultNeverTrips(t *testing.T) {
 	}
 }
 
+// The DEFAULT predicate (TripOnServerError) must NOT trip on client-error results: a flood of
+// bad-requests must leave the breaker closed so client mistakes can't shed all traffic.
+func TestMiddleware_ClientErrorDoesNotTripByDefault(t *testing.T) {
+	ic := newIC()
+	calls := 0
+	next := func(context.Context) error {
+		calls++
+		ic.Result = benzene.BadRequest[any]("nope")
+		return nil
+	}
+	// A breaker that would open on the very first FAILURE - but a client error is not a failure by
+	// default, so it must stay closed no matter how many bad-requests it sees.
+	mw := Middleware(tripAfter(1, time.Hour))
+	for i := 0; i < 10; i++ {
+		if err := mw(context.Background(), ic, next); err != nil {
+			t.Fatalf("err = %v, want nil", err)
+		}
+		if ic.Result.ResultStatus() != benzene.StatusBadRequest {
+			t.Fatalf("status = %q, want bad-request to keep flowing (default does not trip on it)", ic.Result.ResultStatus())
+		}
+	}
+	if calls != 10 {
+		t.Errorf("next called %d times, want 10 (client errors never trip the default breaker)", calls)
+	}
+}
+
+// A downstream that itself returns one of gobreaker's sentinel errors while the breaker is CLOSED
+// must have that error propagate (the call ran), not be mistaken for an open-state short-circuit -
+// the reason the middleware keys off a `called` flag, not errors.Is(err, gobreaker.ErrOpenState).
+func TestMiddleware_DownstreamReturningSentinelWhileClosedPropagates(t *testing.T) {
+	ic := newIC()
+	calls := 0
+	next := func(context.Context) error {
+		calls++
+		return gobreaker.ErrOpenState // a downstream happening to return the sentinel
+	}
+	// A high trip threshold so a single such error does not open the breaker.
+	mw := Middleware(tripAfter(100, time.Hour))
+
+	err := mw(context.Background(), ic, next)
+	if !errors.Is(err, gobreaker.ErrOpenState) {
+		t.Fatalf("err = %v, want the downstream's ErrOpenState propagated (the call ran)", err)
+	}
+	if calls != 1 {
+		t.Errorf("next called %d times, want 1 (the closed breaker admitted the call)", calls)
+	}
+	// No fail-fast result should have been written - this was a real downstream error, not a
+	// short-circuit.
+	if ic.Result != nil {
+		t.Errorf("result = %v, want nil (no short-circuit result on a genuine downstream error)", ic.Result)
+	}
+}
+
 func TestMiddleware_WithTripOnResult(t *testing.T) {
 	ic := newIC()
 	calls := 0
@@ -259,6 +312,28 @@ func TestTripUnsuccessful(t *testing.T) {
 	}
 	if !TripUnsuccessful(nil) {
 		t.Error("a nil result should trip (treated as not-successful)")
+	}
+}
+
+func TestTripOnServerError(t *testing.T) {
+	// Dependency-health statuses trip.
+	for _, s := range []benzene.Status{benzene.StatusServiceUnavailable, benzene.StatusTimeout, benzene.StatusUnexpectedError} {
+		if !TripOnServerError(benzene.Fail[any](s)) {
+			t.Errorf("%q should trip the default breaker", s)
+		}
+	}
+	// Client-error and back-off statuses do not.
+	for _, s := range []benzene.Status{benzene.StatusBadRequest, benzene.StatusValidationError, benzene.StatusUnauthorized, benzene.StatusForbidden, benzene.StatusNotFound, benzene.StatusConflict, benzene.StatusTooManyRequests, benzene.StatusNotImplemented} {
+		if TripOnServerError(benzene.Fail[any](s)) {
+			t.Errorf("%q should NOT trip the default breaker", s)
+		}
+	}
+	// Success and nil do not.
+	if TripOnServerError(benzene.Ok(struct{}{})) {
+		t.Error("a successful result should not trip")
+	}
+	if TripOnServerError(nil) {
+		t.Error("a nil result should not trip TripOnServerError")
 	}
 }
 
