@@ -87,7 +87,7 @@ func runConsumer(t *testing.T, consumer *kafka.Consumer, source *fakeSource) {
 
 func hostWithSpy(spy *spyGreeter) *benzenetest.Host {
 	return benzenetest.NewHost(newApp(), benzenetest.WithServices(func(b *benzene.ApplicationBuilder) {
-		benzene.AddSingleton(b.Container, greeterKey, func(_ *benzene.Scope) Greeter { return spy })
+		benzene.AddSingleton(b.Container, greeterKey{}, func(_ *benzene.Scope) Greeter { return spy })
 	}))
 }
 

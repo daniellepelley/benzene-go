@@ -72,7 +72,7 @@ func TestGreet_UsesTheOverriddenGreeterAdapter(t *testing.T) {
 	// touching the handler. WithServices lands the override after ConfigureServices, before the
 	// pipeline is built - last registration wins.
 	conn := newTestConn(t, benzenetest.WithServices(func(b *benzene.ApplicationBuilder) {
-		benzene.AddSingleton(b.Container, greeterKey, func(_ *benzene.Scope) Greeter { return shoutingGreeter{} })
+		benzene.AddSingleton(b.Container, greeterKey{}, func(_ *benzene.Scope) Greeter { return shoutingGreeter{} })
 	}))
 
 	resp, _, err := greet(withTimeout(t), conn, "World")
