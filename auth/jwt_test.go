@@ -219,7 +219,7 @@ func TestValidator_TimeClaims(t *testing.T) {
 		{"not yet valid", func(c map[string]any) { c["nbf"] = float64(now.Add(time.Hour).Unix()) }, ErrTokenNotYetValid},
 		{"nbf within skew ok", func(c map[string]any) { c["nbf"] = float64(now.Add(time.Minute).Unix()) }, nil},
 		{"issued in future", func(c map[string]any) { c["iat"] = float64(now.Add(time.Hour).Unix()) }, ErrIssuedInFuture},
-		{"non-numeric exp ignored", func(c map[string]any) { c["exp"] = "not-a-number" }, nil},
+		{"non-numeric exp rejected", func(c map[string]any) { c["exp"] = "not-a-number" }, ErrMissingExpiration},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -236,6 +236,37 @@ func TestValidator_TimeClaims(t *testing.T) {
 				t.Fatalf("err = %v, want %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestValidator_ExpirationRequirement(t *testing.T) {
+	t.Run("missing exp rejected by default", func(t *testing.T) {
+		v := fixedValidator(t, HS256, "")
+		c := goodClaims()
+		delete(c, "exp")
+		if _, err := v.Validate(context.Background(), makeToken(t, HS256, "", c)); !errors.Is(err, ErrMissingExpiration) {
+			t.Fatalf("err = %v, want ErrMissingExpiration (a token must expire by default)", err)
+		}
+	})
+	t.Run("missing exp allowed with WithRequireExpiration(false)", func(t *testing.T) {
+		v := fixedValidator(t, HS256, "", WithRequireExpiration(false))
+		c := goodClaims()
+		delete(c, "exp")
+		if _, err := v.Validate(context.Background(), makeToken(t, HS256, "", c)); err != nil {
+			t.Fatalf("err = %v, want nil when expiration is not required", err)
+		}
+	})
+}
+
+func TestValidator_CriticalHeaderRejected(t *testing.T) {
+	v := fixedValidator(t, HS256, "")
+	hdr := map[string]any{"alg": "HS256", "typ": "JWT", "crit": []string{"exp"}}
+	hb, _ := json.Marshal(hdr)
+	pb, _ := json.Marshal(goodClaims())
+	si := b64(hb) + "." + b64(pb)
+	token := si + "." + b64(sign(t, HS256, hmacKey, []byte(si)))
+	if _, err := v.Validate(context.Background(), token); !errors.Is(err, ErrCriticalHeaderUnsupported) {
+		t.Fatalf("err = %v, want ErrCriticalHeaderUnsupported", err)
 	}
 }
 

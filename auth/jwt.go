@@ -53,23 +53,26 @@ const (
 // Validation errors. Each failure mode is a distinct error so tests (and an optional OnError hook)
 // can tell them apart; BearerAuth never surfaces which one occurred to the caller.
 var (
-	ErrMalformedToken      = errors.New("jwt: malformed token")
-	ErrAlgorithmNotAllowed = errors.New("jwt: signing algorithm not allowed")
-	ErrUnknownAlgorithm    = errors.New("jwt: unknown or unsupported signing algorithm")
-	ErrNoKey               = errors.New("jwt: no verification key for token")
-	ErrSignatureInvalid    = errors.New("jwt: signature is invalid")
-	ErrTokenExpired        = errors.New("jwt: token is expired")
-	ErrTokenNotYetValid    = errors.New("jwt: token is not valid yet")
-	ErrIssuedInFuture      = errors.New("jwt: token was issued in the future")
-	ErrIssuerNotAllowed    = errors.New("jwt: issuer is not allowed")
-	ErrAudienceNotAllowed  = errors.New("jwt: audience is not allowed")
+	ErrMalformedToken            = errors.New("jwt: malformed token")
+	ErrAlgorithmNotAllowed       = errors.New("jwt: signing algorithm not allowed")
+	ErrUnknownAlgorithm          = errors.New("jwt: unknown or unsupported signing algorithm")
+	ErrCriticalHeaderUnsupported = errors.New("jwt: token uses an unsupported critical header extension")
+	ErrNoKey                     = errors.New("jwt: no verification key for token")
+	ErrSignatureInvalid          = errors.New("jwt: signature is invalid")
+	ErrMissingExpiration         = errors.New("jwt: token has no expiration and one is required")
+	ErrTokenExpired              = errors.New("jwt: token is expired")
+	ErrTokenNotYetValid          = errors.New("jwt: token is not valid yet")
+	ErrIssuedInFuture            = errors.New("jwt: token was issued in the future")
+	ErrIssuerNotAllowed          = errors.New("jwt: issuer is not allowed")
+	ErrAudienceNotAllowed        = errors.New("jwt: audience is not allowed")
 )
 
 // header is the decoded JWS protected header (only the fields this package uses).
 type header struct {
-	Alg Algorithm `json:"alg"`
-	Typ string    `json:"typ"`
-	Kid string    `json:"kid"`
+	Alg  Algorithm `json:"alg"`
+	Typ  string    `json:"typ"`
+	Kid  string    `json:"kid"`
+	Crit []string  `json:"crit"`
 }
 
 // Claims is a decoded JWT payload. Values keep their JSON types (string, float64, bool, []any,
@@ -130,11 +133,20 @@ type Validator struct {
 	audiences   map[string]bool
 	keys        KeyResolver
 	clockSkew   time.Duration
+	requireExp  bool
 	now         func() time.Time
 }
 
 // ValidatorOption configures a Validator.
 type ValidatorOption func(*Validator)
+
+// WithRequireExpiration controls whether a token MUST carry a numeric "exp" claim. Default true,
+// matching Microsoft.IdentityModel's RequireExpirationTime default: without it, a token with no (or a
+// non-numeric) exp would have no lifetime bound and be valid forever - a leaked token that never
+// expires. Set false only for a token profile that genuinely has no expiry.
+func WithRequireExpiration(require bool) ValidatorOption {
+	return func(v *Validator) { v.requireExp = require }
+}
 
 // WithClockSkew sets the tolerance applied to exp/nbf/iat checks (default 2 minutes, matching the
 // .NET OAuth2BearerOptions default). Clock skew between the issuer and this service is normal; a
@@ -185,6 +197,7 @@ func NewValidator(allowedAlgs []Algorithm, issuers, audiences []string, keys Key
 		audiences:   make(map[string]bool, len(audiences)),
 		keys:        keys,
 		clockSkew:   2 * time.Minute,
+		requireExp:  true,
 		now:         time.Now,
 	}
 	for _, a := range allowedAlgs {
@@ -210,6 +223,12 @@ func (v *Validator) Validate(ctx context.Context, token string) (Claims, error) 
 	hdr, claims, signingInput, sig, err := parseToken(token)
 	if err != nil {
 		return nil, err
+	}
+
+	if len(hdr.Crit) > 0 {
+		// RFC 7515 §4.1.11 / RFC 8725: a "crit" header names extensions the recipient MUST
+		// understand. This validator understands none, so any crit header means reject.
+		return nil, ErrCriticalHeaderUnsupported
 	}
 
 	if !v.allowedAlgs[hdr.Alg] {
@@ -239,7 +258,13 @@ func (v *Validator) Validate(ctx context.Context, token string) (Claims, error) 
 func (v *Validator) validateClaims(claims Claims) error {
 	now := v.now()
 
-	if exp, ok := claims.numericDate("exp"); ok && now.After(exp.Add(v.clockSkew)) {
+	exp, hasExp := claims.numericDate("exp")
+	if v.requireExp && !hasExp {
+		// A missing (or non-numeric - numericDate reports that as absent) exp when one is required:
+		// the token would otherwise never expire.
+		return ErrMissingExpiration
+	}
+	if hasExp && now.After(exp.Add(v.clockSkew)) {
 		return ErrTokenExpired
 	}
 	if nbf, ok := claims.numericDate("nbf"); ok && now.Before(nbf.Add(-v.clockSkew)) {

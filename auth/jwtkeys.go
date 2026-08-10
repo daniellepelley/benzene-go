@@ -12,6 +12,14 @@ import (
 	"math/big"
 )
 
+// RSA modulus / exponent bounds applied when parsing a JWK, to reject weak keys and keep signature
+// verification from becoming an attacker-influenced CPU sink.
+const (
+	minRSABits     = 2048      // reject anything weaker than a modern minimum
+	maxRSABits     = 16384     // cap verification cost
+	maxRSAExponent = 1<<31 - 1 // keep E within a 32-bit int (rsa.PublicKey.E is an int)
+)
+
 // VerificationKey is one candidate key for verifying a JWS signature. Exactly one of the fields is
 // set; the field that is set determines which algorithm family the key can verify (HMAC / RSA /
 // ECDSA), which is what structurally prevents cross-family key confusion (jwt.go).
@@ -111,12 +119,19 @@ func (k jwk) toVerificationKey() (VerificationKey, error) {
 		if err != nil {
 			return VerificationKey{}, fmt.Errorf("jwt: bad RSA modulus in JWK: %w", err)
 		}
+		// Bound the modulus size: reject a weak key (< 2048 bits) and cap the maximum so an
+		// oversized modulus can't turn each rsa.VerifyPKCS1v15 into an attacker-influenced CPU sink.
+		if bits := n.BitLen(); bits < minRSABits || bits > maxRSABits {
+			return VerificationKey{}, fmt.Errorf("jwt: RSA modulus of %d bits is outside the allowed [%d,%d]", bits, minRSABits, maxRSABits)
+		}
 		eBytes, err := base64.RawURLEncoding.DecodeString(k.E)
 		if err != nil {
 			return VerificationKey{}, fmt.Errorf("jwt: bad RSA exponent in JWK: %w", err)
 		}
 		e := new(big.Int).SetBytes(eBytes)
-		if !e.IsInt64() || e.Int64() < 2 {
+		// The exponent must be a sane, small odd integer that fits a platform int on 32-bit too
+		// (rsa.PublicKey.E is an int), so cap it well below math.MaxInt32.
+		if !e.IsInt64() || e.Int64() < 3 || e.Int64() > maxRSAExponent {
 			return VerificationKey{}, fmt.Errorf("jwt: implausible RSA exponent in JWK")
 		}
 		return VerificationKey{RSA: &rsa.PublicKey{N: n, E: int(e.Int64())}}, nil

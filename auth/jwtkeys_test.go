@@ -110,6 +110,8 @@ func TestJWK_SkippedAndMalformed(t *testing.T) {
 		{name: "encryption use skipped", jwk: jwk{Kty: "RSA", Use: "enc"}, wantSkip: true},
 		{name: "unknown kty skipped", jwk: jwk{Kty: "oct"}, wantSkip: true},
 		{name: "bad rsa modulus", jwk: jwk{Kty: "RSA", N: "!!!", E: "AQAB"}, wantErr: true},
+		{name: "rsa modulus too small", jwk: jwk{Kty: "RSA", N: base64.RawURLEncoding.EncodeToString([]byte{1, 2, 3, 4}), E: "AQAB"}, wantErr: true},
+		{name: "rsa modulus too large", jwk: jwk{Kty: "RSA", N: base64.RawURLEncoding.EncodeToString(new(big.Int).Lsh(big.NewInt(1), 20000).Bytes()), E: "AQAB"}, wantErr: true},
 		{name: "bad rsa exponent", jwk: jwk{Kty: "RSA", N: base64.RawURLEncoding.EncodeToString(rk.N.Bytes()), E: "!!!"}, wantErr: true},
 		{name: "implausible rsa exponent", jwk: jwk{Kty: "RSA", N: base64.RawURLEncoding.EncodeToString(rk.N.Bytes()), E: base64.RawURLEncoding.EncodeToString([]byte{1})}, wantErr: true},
 		{name: "unknown ec curve", jwk: jwk{Kty: "EC", Crv: "P-999", X: "AA", Y: "AA"}, wantErr: true},

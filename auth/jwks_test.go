@@ -105,7 +105,9 @@ func TestJWKSResolver_KidRotationRefetch(t *testing.T) {
 	}
 }
 
-func TestJWKSResolver_RefetchError(t *testing.T) {
+// A failing endpoint after the cache is primed: the refetch is throttled (one attempt per window,
+// stamped even on failure) and the known kid keeps resolving from the stale cache.
+func TestJWKSResolver_RefetchFailureThrottledAndServesStale(t *testing.T) {
 	rk, _ := keys(t)
 	js := newJWKSServer(t, jwksDoc(t, rsaJWK(t, "r1", &rk.PublicKey)))
 	now := time.Unix(1_700_000_000, 0)
@@ -115,12 +117,41 @@ func TestJWKSResolver_RefetchError(t *testing.T) {
 	if _, err := r.ResolveKeys(context.Background(), "r1"); err != nil {
 		t.Fatal(err)
 	}
-	// The endpoint starts failing; an unknown kid past the throttle window triggers a refetch that
-	// now errors, and that error surfaces.
 	js.status.Store(http.StatusInternalServerError)
 	now = now.Add(2 * time.Minute)
-	if _, err := r.ResolveKeys(context.Background(), "unknown"); err == nil {
-		t.Error("want the refetch error surfaced")
+
+	// Two unknown-kid requests in the same window trigger only ONE refetch attempt (throttle stamped
+	// on the failing attempt), so a flood of unknown kids can't hammer the endpoint.
+	for i := 0; i < 2; i++ {
+		if got, err := r.ResolveKeys(context.Background(), "unknown"); err != nil || len(got) != 0 {
+			t.Fatalf("unknown kid #%d = %v,%v, want empty + no error (stale cache served)", i, got, err)
+		}
+	}
+	if js.hits.Load() != 2 { // 1 prime + 1 throttled refetch
+		t.Errorf("hits = %d, want 2 (prime + a single throttled refetch)", js.hits.Load())
+	}
+	// The known kid still resolves from the stale cache despite the endpoint being down.
+	if got, err := r.ResolveKeys(context.Background(), "r1"); err != nil || len(got) != 1 {
+		t.Errorf("known kid during outage = %v,%v, want the stale cached key", got, err)
+	}
+}
+
+// After a failed INITIAL fetch, a second call within the throttle window does not refetch - it
+// returns no keys (fail-closed) rather than hammering a down endpoint.
+func TestJWKSResolver_ThrottledAfterFailedInitialFetch(t *testing.T) {
+	js := newJWKSServer(t, "")
+	js.status.Store(http.StatusInternalServerError)
+	r, _ := NewJWKSResolver(js.server.URL, WithRequireHTTPS(false))
+
+	if _, err := r.ResolveKeys(context.Background(), "x"); err == nil {
+		t.Fatal("want the initial-fetch error surfaced")
+	}
+	got, err := r.ResolveKeys(context.Background(), "x")
+	if err != nil || len(got) != 0 {
+		t.Errorf("second call = %v,%v, want empty + nil (throttled, fail-closed)", got, err)
+	}
+	if js.hits.Load() != 1 {
+		t.Errorf("hits = %d, want 1 (the second call was throttled, not refetched)", js.hits.Load())
 	}
 }
 
@@ -175,10 +206,12 @@ func TestNewJWKSFromAuthority(t *testing.T) {
 
 	t.Run("discovers jwks_uri then resolves", func(t *testing.T) {
 		jwks := newJWKSServer(t, jwksDoc(t, rsaJWK(t, "r1", &rk.PublicKey)))
+		var issuer string
 		disco := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			_ = json.NewEncoder(w).Encode(map[string]any{"jwks_uri": jwks.server.URL})
+			_ = json.NewEncoder(w).Encode(map[string]any{"issuer": issuer, "jwks_uri": jwks.server.URL})
 		}))
 		t.Cleanup(disco.Close)
+		issuer = disco.URL // the discovery doc's issuer must match the authority
 
 		r, err := NewJWKSFromAuthority(context.Background(), disco.URL, WithRequireHTTPS(false))
 		if err != nil {
@@ -190,6 +223,16 @@ func TestNewJWKSFromAuthority(t *testing.T) {
 		}
 	})
 
+	t.Run("issuer mismatch rejected", func(t *testing.T) {
+		disco := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{"issuer": "https://evil.example", "jwks_uri": "https://evil.example/jwks"})
+		}))
+		t.Cleanup(disco.Close)
+		if _, err := NewJWKSFromAuthority(context.Background(), disco.URL, WithRequireHTTPS(false)); err == nil {
+			t.Error("want an error when the discovery issuer does not match the authority")
+		}
+	})
+
 	t.Run("discovery https required", func(t *testing.T) {
 		if _, err := NewJWKSFromAuthority(context.Background(), "http://insecure.example"); err == nil {
 			t.Error("want an error for a plain-http authority with https required")
@@ -197,10 +240,12 @@ func TestNewJWKSFromAuthority(t *testing.T) {
 	})
 
 	t.Run("discovery document without jwks_uri", func(t *testing.T) {
+		var issuer string
 		disco := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			_, _ = w.Write([]byte(`{}`))
+			_ = json.NewEncoder(w).Encode(map[string]any{"issuer": issuer}) // matching issuer, but no jwks_uri
 		}))
 		t.Cleanup(disco.Close)
+		issuer = disco.URL
 		if _, err := NewJWKSFromAuthority(context.Background(), disco.URL, WithRequireHTTPS(false)); err == nil {
 			t.Error("want an error when the discovery document has no jwks_uri")
 		}

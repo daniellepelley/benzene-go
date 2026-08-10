@@ -24,11 +24,11 @@ type JWKSResolver struct {
 	minRefetch   time.Duration
 	now          func() time.Time
 
-	mu        sync.Mutex
-	byKid     map[string][]VerificationKey
-	keyless   []VerificationKey
-	fetched   bool
-	lastFetch time.Time
+	mu          sync.Mutex
+	byKid       map[string][]VerificationKey
+	keyless     []VerificationKey
+	fetched     bool
+	lastAttempt time.Time // stamped on every fetch attempt (success or failure) to throttle both
 }
 
 // JWKSOption configures a JWKSResolver.
@@ -96,24 +96,31 @@ func NewJWKSFromAuthority(ctx context.Context, authority string, opts ...JWKSOpt
 	if err := tmp.checkScheme(discoveryURL); err != nil {
 		return nil, err
 	}
-	jwksURL, err := tmp.discoverJWKSURL(ctx, discoveryURL)
+	jwksURL, err := tmp.discoverJWKSURL(ctx, authority, discoveryURL)
 	if err != nil {
 		return nil, err
 	}
 	return NewJWKSResolver(jwksURL, opts...)
 }
 
-// discoverJWKSURL fetches the OIDC discovery document and returns its jwks_uri.
-func (r *JWKSResolver) discoverJWKSURL(ctx context.Context, discoveryURL string) (string, error) {
+// discoverJWKSURL fetches the OIDC discovery document and returns its jwks_uri, after verifying the
+// document's issuer matches the configured authority (RFC 8414 §3 requires this - it stops a rogue
+// discovery endpoint from pointing this service at an attacker-controlled JWKS under a different
+// issuer's name).
+func (r *JWKSResolver) discoverJWKSURL(ctx context.Context, authority, discoveryURL string) (string, error) {
 	body, err := r.get(ctx, discoveryURL)
 	if err != nil {
 		return "", err
 	}
 	var doc struct {
+		Issuer  string `json:"issuer"`
 		JWKSURI string `json:"jwks_uri"`
 	}
 	if err := json.Unmarshal(body, &doc); err != nil {
 		return "", fmt.Errorf("jwt: OIDC discovery document is not valid JSON: %w", err)
+	}
+	if strings.TrimRight(doc.Issuer, "/") != strings.TrimRight(authority, "/") {
+		return "", fmt.Errorf("jwt: OIDC discovery issuer %q does not match the configured authority %q", doc.Issuer, authority)
 	}
 	if doc.JWKSURI == "" {
 		return "", fmt.Errorf("jwt: OIDC discovery document has no jwks_uri")
@@ -121,31 +128,42 @@ func (r *JWKSResolver) discoverJWKSURL(ctx context.Context, discoveryURL string)
 	return doc.JWKSURI, nil
 }
 
-// ResolveKeys returns the cached keys for kid (plus keyless keys), fetching the JWKS on first use
-// and refetching once - throttled by the min-refetch window - when kid is unknown, to pick up a
-// rotated key. It holds a lock across the network fetch so concurrent unknown-kid misses collapse to
-// a single refetch instead of a stampede; fetches are rare (cache hit is the norm), so the brief
-// serialization is acceptable.
+// ResolveKeys returns the cached keys for kid (plus keyless keys), fetching the JWKS on first use and
+// refetching - to pick up a rotated key - when a token presents a kid the cache doesn't hold.
+//
+// Both the initial fetch and the unknown-kid refetch are gated by the same min-refetch window, and
+// the window is stamped on every ATTEMPT (success OR failure). That is the load-bearing detail: a
+// down or slow identity provider - or a flood of tokens bearing random unknown kids - can therefore
+// trigger at most one fetch per window, never one fetch per request, so it can't be turned into a
+// DoS against the JWKS endpoint (or against this service). A refetch that fails keeps serving the
+// existing (stale) cache rather than failing every request while the IdP is briefly unavailable;
+// only a failed INITIAL fetch (no cache to fall back on) surfaces its error.
+//
+// The lock is held across the fetch so concurrent misses collapse to a single fetch instead of a
+// stampede. Because the throttle bounds a fetch to at most once per window, the interval during
+// which concurrent callers can block on that lock is correspondingly rare; keep the http.Client
+// timeout short so even that rare fetch can't stall authentication for long.
 func (r *JWKSResolver) ResolveKeys(ctx context.Context, kid string) ([]VerificationKey, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// Fast path: a cached key already satisfies this token - no fetch, no throttle interaction.
+	if r.fetched {
+		if keys := r.lookupLocked(kid); len(keys) > 0 {
+			return keys, nil
+		}
+	}
+
+	// (Re)fetch when we have no cache yet, or the token carries a specific kid we don't hold - but
+	// only once per throttle window, stamped on the attempt regardless of outcome.
+	if (!r.fetched || kid != "") && r.now().Sub(r.lastAttempt) >= r.minRefetch {
+		r.lastAttempt = r.now()
+		if err := r.fetch(ctx); err != nil && !r.fetched {
+			return nil, err // failed initial fetch: no stale cache to serve
+		}
+	}
 	if !r.fetched {
-		if err := r.fetch(ctx); err != nil {
-			return nil, err
-		}
-	}
-
-	if keys := r.lookupLocked(kid); len(keys) > 0 {
-		return keys, nil
-	}
-
-	// Unknown kid: the signing key may have rotated. Refetch once if the throttle window has passed.
-	if kid != "" && r.now().Sub(r.lastFetch) >= r.minRefetch {
-		if err := r.fetch(ctx); err != nil {
-			return nil, err
-		}
-		return r.lookupLocked(kid), nil
+		return nil, nil // throttled after a failed initial fetch; caller resolves this to ErrNoKey
 	}
 	return r.lookupLocked(kid), nil
 }
@@ -173,7 +191,6 @@ func (r *JWKSResolver) fetch(ctx context.Context) error {
 	r.byKid = byKid
 	r.keyless = keyless
 	r.fetched = true
-	r.lastFetch = r.now()
 	return nil
 }
 
