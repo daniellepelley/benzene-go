@@ -169,13 +169,15 @@ func TestValidator_ValidTokenAllAlgorithms(t *testing.T) {
 func TestValidator_TamperedSignatureRejected(t *testing.T) {
 	v := fixedValidator(t, RS256, "")
 	token := makeToken(t, RS256, "", goodClaims())
-	// Flip the last character of the signature segment.
-	tampered := token[:len(token)-1]
-	if token[len(token)-1] == 'A' {
-		tampered += "B"
-	} else {
-		tampered += "A"
+	parts := strings.Split(token, ".")
+	// Flip the FIRST character of the signature segment - its 6 bits always land in byte 0, so the
+	// decoded signature always changes (unlike the last char, which encodes only a couple of
+	// significant bits and can flip to the same bytes).
+	first := "A"
+	if parts[2][0] == 'A' {
+		first = "B"
 	}
+	tampered := parts[0] + "." + parts[1] + "." + first + parts[2][1:]
 	if _, err := v.Validate(context.Background(), tampered); !errors.Is(err, ErrSignatureInvalid) {
 		t.Fatalf("err = %v, want ErrSignatureInvalid", err)
 	}
