@@ -15,14 +15,14 @@ func okSender() Sender {
 	})
 }
 
-func TestCorrelationDecorator_InjectsGeneratedIDWhenAbsent(t *testing.T) {
+func TestWithCorrelationID_InjectsGeneratedIDWhenAbsent(t *testing.T) {
 	var seenHeaders map[string]string
 	captor := SenderFunc(func(ctx context.Context, topic benzene.Topic, headers map[string]string, message []byte) benzene.Result[json.RawMessage] {
 		seenHeaders = headers
 		return benzene.Result[json.RawMessage]{Status: benzene.StatusOk}
 	})
 
-	decorated := CorrelationDecorator(captor, func() string { return "fixed-id" })
+	decorated := WithCorrelationID(captor, func() string { return "fixed-id" })
 	decorated.Send(context.Background(), benzene.NewTopic("t"), map[string]string{}, nil)
 
 	if seenHeaders["x-correlation-id"] != "fixed-id" {
@@ -30,14 +30,14 @@ func TestCorrelationDecorator_InjectsGeneratedIDWhenAbsent(t *testing.T) {
 	}
 }
 
-func TestCorrelationDecorator_PreservesExistingHeaderCaseInsensitively(t *testing.T) {
+func TestWithCorrelationID_PreservesExistingHeaderCaseInsensitively(t *testing.T) {
 	var seenHeaders map[string]string
 	captor := SenderFunc(func(ctx context.Context, topic benzene.Topic, headers map[string]string, message []byte) benzene.Result[json.RawMessage] {
 		seenHeaders = headers
 		return benzene.Result[json.RawMessage]{Status: benzene.StatusOk}
 	})
 
-	decorated := CorrelationDecorator(captor, func() string { return "should-not-be-used" })
+	decorated := WithCorrelationID(captor, func() string { return "should-not-be-used" })
 	original := map[string]string{"X-Correlation-Id": "caller-provided"}
 	decorated.Send(context.Background(), benzene.NewTopic("t"), original, nil)
 
@@ -49,8 +49,8 @@ func TestCorrelationDecorator_PreservesExistingHeaderCaseInsensitively(t *testin
 	}
 }
 
-func TestCorrelationDecorator_DoesNotMutateCallersHeaderMap(t *testing.T) {
-	decorated := CorrelationDecorator(okSender(), func() string { return "generated" })
+func TestWithCorrelationID_DoesNotMutateCallersHeaderMap(t *testing.T) {
+	decorated := WithCorrelationID(okSender(), func() string { return "generated" })
 	original := map[string]string{"other": "value"}
 
 	decorated.Send(context.Background(), benzene.NewTopic("t"), original, nil)
@@ -63,14 +63,14 @@ func TestCorrelationDecorator_DoesNotMutateCallersHeaderMap(t *testing.T) {
 	}
 }
 
-func TestCorrelationDecorator_NilHeadersIsHandled(t *testing.T) {
+func TestWithCorrelationID_NilHeadersIsHandled(t *testing.T) {
 	var seenHeaders map[string]string
 	captor := SenderFunc(func(ctx context.Context, topic benzene.Topic, headers map[string]string, message []byte) benzene.Result[json.RawMessage] {
 		seenHeaders = headers
 		return benzene.Result[json.RawMessage]{Status: benzene.StatusOk}
 	})
 
-	decorated := CorrelationDecorator(captor, func() string { return "generated" })
+	decorated := WithCorrelationID(captor, func() string { return "generated" })
 	decorated.Send(context.Background(), benzene.NewTopic("t"), nil, nil)
 
 	if seenHeaders["x-correlation-id"] != "generated" {
@@ -78,7 +78,7 @@ func TestCorrelationDecorator_NilHeadersIsHandled(t *testing.T) {
 	}
 }
 
-func TestCorrelationDecorator_NilGenerateDoesNotFabricate(t *testing.T) {
+func TestWithCorrelationID_NilGenerateDoesNotFabricate(t *testing.T) {
 	// With no generator the decorator propagates only - it must NOT invent a correlation value
 	// the application never populated (wire-contracts.md §2: Benzene does not fabricate one).
 	var seenHeaders map[string]string
@@ -87,7 +87,7 @@ func TestCorrelationDecorator_NilGenerateDoesNotFabricate(t *testing.T) {
 		return benzene.Result[json.RawMessage]{Status: benzene.StatusOk}
 	})
 
-	decorated := CorrelationDecorator(captor, nil)
+	decorated := WithCorrelationID(captor, nil)
 	decorated.Send(context.Background(), benzene.NewTopic("t"), map[string]string{}, nil)
 
 	if got, ok := seenHeaders["x-correlation-id"]; ok {
@@ -95,14 +95,14 @@ func TestCorrelationDecorator_NilGenerateDoesNotFabricate(t *testing.T) {
 	}
 }
 
-func TestCorrelationDecoratorWithKey_HonoursOverriddenHeaderName(t *testing.T) {
+func TestWithCorrelationIDKey_HonoursOverriddenHeaderName(t *testing.T) {
 	var seenHeaders map[string]string
 	captor := SenderFunc(func(ctx context.Context, topic benzene.Topic, headers map[string]string, message []byte) benzene.Result[json.RawMessage] {
 		seenHeaders = headers
 		return benzene.Result[json.RawMessage]{Status: benzene.StatusOk}
 	})
 
-	decorated := CorrelationDecoratorWithKey(captor, "x-my-correlation", func() string { return "cid-1" })
+	decorated := WithCorrelationIDKey(captor, "x-my-correlation", func() string { return "cid-1" })
 	decorated.Send(context.Background(), benzene.NewTopic("t"), map[string]string{}, nil)
 
 	if seenHeaders["x-my-correlation"] != "cid-1" {
@@ -124,7 +124,7 @@ func TestRandomCorrelationID_GeneratesDistinctHexValues(t *testing.T) {
 	}
 }
 
-func TestCorrelationDecorator_ExplicitGeneratorStartsAChain(t *testing.T) {
+func TestWithCorrelationID_ExplicitGeneratorStartsAChain(t *testing.T) {
 	// Passing a generator opts into edge-generation when the caller supplied none.
 	var seenHeaders map[string]string
 	captor := SenderFunc(func(ctx context.Context, topic benzene.Topic, headers map[string]string, message []byte) benzene.Result[json.RawMessage] {
@@ -132,7 +132,7 @@ func TestCorrelationDecorator_ExplicitGeneratorStartsAChain(t *testing.T) {
 		return benzene.Result[json.RawMessage]{Status: benzene.StatusOk}
 	})
 
-	decorated := CorrelationDecorator(captor, RandomCorrelationID)
+	decorated := WithCorrelationID(captor, RandomCorrelationID)
 	decorated.Send(context.Background(), benzene.NewTopic("t"), map[string]string{}, nil)
 
 	if matched, _ := regexp.MatchString("^[0-9a-f]{32}$", seenHeaders["x-correlation-id"]); !matched {

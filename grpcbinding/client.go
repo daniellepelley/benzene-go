@@ -28,7 +28,7 @@ type ClientRoute struct {
 }
 
 // Client publishes outbound Benzene messages as gRPC unary calls. It satisfies
-// client.Sender, so it can be wrapped in client.CorrelationDecorator/RetryDecorator like any
+// client.Sender, so it can be wrapped in client.WithCorrelationID/WithRetry like any
 // other Sender.
 type Client struct {
 	Conn   grpc.ClientConnInterface
