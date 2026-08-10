@@ -22,11 +22,15 @@ type App[TConfig any] struct {
 
 // Run executes the three-phase lifecycle once and returns the built ApplicationBuilder,
 // ready for a transport binding to attach entry points to (e.g. an http.Handler for the
-// HTTP binding). ConfigureServices and Configure are optional - an application with no
-// dependencies to register, or nothing further to configure beyond the defaults, may leave
-// either nil.
+// HTTP binding). All three phases are optional: GetConfiguration, ConfigureServices, and
+// Configure may each be left nil - an application with no configuration yields the zero value
+// of TConfig, and one with no dependencies to register (or nothing further to configure beyond
+// the defaults) simply skips that phase.
 func (a App[TConfig]) Run() *ApplicationBuilder {
-	config := a.GetConfiguration()
+	var config TConfig
+	if a.GetConfiguration != nil {
+		config = a.GetConfiguration()
+	}
 
 	registry := NewRegistry()
 	container := NewContainer()

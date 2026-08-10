@@ -60,6 +60,23 @@ func TestApp_Run_ConfigureServicesAndConfigureAreOptional(t *testing.T) {
 	}
 }
 
+func TestApp_Run_NilGetConfigurationYieldsZeroConfig(t *testing.T) {
+	// All three phases are optional; a nil GetConfiguration must not panic - it yields the zero
+	// value of TConfig, which ConfigureServices/Configure then see.
+	var seen testConfig
+	app := App[testConfig]{
+		ConfigureServices: func(_ *Registry, _ *Container, config testConfig) { seen = config },
+	}
+
+	builder := app.Run()
+	if builder == nil {
+		t.Fatal("Run() with a nil GetConfiguration should still return a builder, not panic")
+	}
+	if seen != (testConfig{}) {
+		t.Errorf("ConfigureServices saw %+v, want the zero testConfig", seen)
+	}
+}
+
 func TestApp_Run_RegistrySurvivesFromConfigureServicesToConfigure(t *testing.T) {
 	topic := NewTopic("hello:world")
 
