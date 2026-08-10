@@ -1,10 +1,10 @@
-// Package resilience provides a retry middleware for the Benzene pipeline: Middleware(opts...)
-// re-invokes the downstream pipeline with exponential backoff when an attempt fails. It is
-// zero-dependency and matches Benzene.Resilience - which is retry-ONLY and deliberately stays that
-// way: circuit breaker, timeout, bulkhead, hedging, and fallback live in the sibling
-// Benzene.Resilience.Polly (a Polly-backed package). This port keeps the retry piece, the one that
-// needs no third-party library, and leaves the richer toolkit for a later dependency decision
-// (ROADMAP.md).
+// Package resilience provides resilience middleware for the Benzene pipeline that needs no
+// third-party library: Middleware(opts...) re-invokes the downstream pipeline with exponential
+// backoff when an attempt fails, and Timeout(d) bounds it to a deadline (a cooperative
+// context.WithTimeout, presented as a StatusTimeout result). Both are zero-dependency. The richer
+// toolkit the .NET Benzene.Resilience.Polly package delegates to Polly for - circuit breaker,
+// bulkhead, hedging, fallback - stays deferred to a later dependency decision (ROADMAP.md), since
+// unlike retry and a plain deadline those genuinely want a library.
 //
 // # Failure model
 //

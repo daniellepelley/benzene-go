@@ -65,15 +65,19 @@ delivery order - just the current honest picture, kept up to date as things land
   `System.Threading.RateLimiting`; this stays dependency-free with a `Limiter` interface + a
   standard-library `TokenBucket` default (plug a different algorithm behind the interface). Per
   instance, so a fleet of N admits up to N× the rate - authoritative limiting belongs at the gateway.
-- `resilience` - retry middleware (zero dependencies), matching `Benzene.Resilience` (which is
-  retry-ONLY: circuit breaker/timeout/hedging/fallback live in the Polly-backed sibling, deferred
-  here pending a dependency decision). `Middleware(opts...)` re-invokes the downstream pipeline with
-  exponential backoff. The Go router funnels application failures onto `ic.Result` (not a Go error),
-  so retry has two triggers mirroring .NET's `shouldRetry`/`shouldRetryContext`: `WithRetryOnError`
-  (default: any error except context cancellation) and `WithRetryOnResult` (default: never; the lever
-  services set - `RetryUnsuccessful` / `RetryOnStatus(...)`). Backoff caps and jitters the sleep while
-  growing the exponential curve uncapped (AWS "full jitter", `FullJitter` helper), with a
-  context-cancellable sleep and an injectable `WithSleep` for tests.
+- `resilience` - retry + timeout middleware (zero dependencies), matching `Benzene.Resilience`
+  (circuit breaker/bulkhead/hedging/fallback live in the Polly-backed sibling, deferred here pending
+  a dependency decision - unlike retry and a plain deadline, they want a library). `Middleware(opts...)`
+  re-invokes the downstream pipeline with exponential backoff. The Go router funnels application
+  failures onto `ic.Result` (not a Go error), so retry has two triggers mirroring .NET's
+  `shouldRetry`/`shouldRetryContext`: `WithRetryOnError` (default: any error except context
+  cancellation) and `WithRetryOnResult` (default: never; the lever services set - `RetryUnsuccessful`
+  / `RetryOnStatus(...)`). Backoff caps and jitters the sleep while growing the exponential curve
+  uncapped (AWS "full jitter", `FullJitter` helper), with a context-cancellable sleep and an
+  injectable `WithSleep` for tests. `Timeout(d)` bounds the downstream to a deadline via a
+  cooperative `context.WithTimeout` (a ctx-ignoring handler can't be forcibly stopped in Go, so the
+  wait is bounded once it returns; ctx-honoring handlers are bounded as expected), presenting the
+  timed-out outcome as a `StatusTimeout` result without a goroutine or an `ic.Result` race.
 - `auth` - authentication/authorization building block (zero dependencies), matching
   `Benzene.Auth.Core`+`.Basic`: a `Principal` (name/roles/claims) threaded on the context,
   `BasicAuth(validate, realm)` RFC 7617 authentication middleware (validates via an app-supplied
@@ -387,13 +391,12 @@ unilateral add:
   which needs the Azure SDK (`azblob` / `azeventhubs`) - the same own-module shape as `awssqs`. Not
   started, and deliberately not faked: this repo has no way to verify a fabricated custom-handler
   shape for them (see the no-fabricated-deployment-config rule).
-- **Richer resilience** (circuit breaker, timeout, bulkhead, hedging, fallback), the equivalent of
-  `Benzene.Resilience.Polly`. The retry piece already ships zero-dependency (`resilience` - see
-  Done). The rest is what .NET delegates to Polly; the Go analogue would wrap a library such as
+- **Richer resilience** (circuit breaker, bulkhead, hedging, fallback), the equivalent of
+  `Benzene.Resilience.Polly`. The retry piece **and** a plain cooperative timeout already ship
+  zero-dependency (`resilience.Middleware` + `resilience.Timeout` - see Done), since neither needs a
+  library. The rest is what .NET delegates to Polly; the Go analogue would wrap a library such as
   `github.com/sony/gobreaker` (or `failsafe-go`) behind the same middleware surface, in its own
-  module so the dependency doesn't spread - the same shape as `awssqs`/`awssns`. A plain
-  timeout/deadline needs no dependency at all (`context.WithTimeout`), so that slice could land in
-  the root `resilience` package first if wanted.
+  module so the dependency doesn't spread - the same shape as `awssqs`/`awssns`.
 
 ## Deliberately out of scope (not a "later" - a "no, and here's why")
 

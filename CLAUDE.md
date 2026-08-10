@@ -82,10 +82,15 @@ alongside the shared spec.
   different algorithm - e.g. a `golang.org/x/time/rate` adapter - behind the interface). Per-instance
   only: a fleet of N instances admits up to N× the rate - authoritative limiting belongs at the
   gateway.
-- `resilience/` - retry middleware, matching `Benzene.Resilience` (retry-ONLY, zero-dep; circuit
-  breaker/timeout/hedging/fallback are the Polly package's job in .NET, deferred here pending a
-  dependency decision). `Middleware(opts...)` re-invokes the downstream pipeline with exponential
-  backoff. Because the Go router funnels application failures onto `ic.Result` (not a Go error),
+- `resilience/` - retry + timeout middleware, matching `Benzene.Resilience` (zero-dep; circuit
+  breaker/bulkhead/hedging/fallback are the Polly package's job in .NET, deferred here pending a
+  dependency decision - unlike retry and a plain deadline, they want a library). `Middleware(opts...)`
+  re-invokes the downstream pipeline with exponential backoff. `Timeout(d)` bounds the downstream to
+  a deadline via a **cooperative** `context.WithTimeout` (a handler that ignores its context can't be
+  forcibly stopped in Go, so the wait is bounded only once such a handler returns; ctx-honoring
+  handlers are bounded as expected), presenting the timed-out outcome as a `StatusTimeout` result -
+  it calls `next` synchronously and never races on `ic.Result`, and a parent-ctx cancellation is not
+  relabeled as a timeout. Because the Go router funnels application failures onto `ic.Result` (not a Go error),
   retry has two triggers mirroring .NET's `shouldRetry`/`shouldRetryContext`: `WithRetryOnError`
   (default: any error except context cancellation) for a `next()` error, and `WithRetryOnResult`
   (default: never - the lever services actually set: `RetryUnsuccessful` or
