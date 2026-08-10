@@ -1,17 +1,25 @@
 // Package auth is the authentication/authorization building block, matching Benzene.Auth.Core (+
-// Benzene.Auth.Basic). It is zero-dependency: a Principal is a small value on the invocation
-// context, authentication is a middleware that sets it, and authorization is a middleware that
-// short-circuits with unauthorized/forbidden when the caller isn't permitted - the framework owns
-// the enforcement mechanism, the application owns what a credential and a policy mean.
+// Benzene.Auth.Basic and Benzene.Auth.OAuth2). It is zero-dependency: a Principal is a small value on
+// the invocation context, authentication is a middleware that sets it, and authorization is a
+// middleware that short-circuits with unauthorized/forbidden when the caller isn't permitted - the
+// framework owns the enforcement mechanism, the application owns what a credential and a policy mean.
 //
 // Go has no ClaimsPrincipal, so Principal here is a plain struct (name + roles + claims). The
 // authenticated principal rides on the context (ContextWithPrincipal), set by an authentication
-// middleware and read downstream by authorization middleware and by handlers
-// (PrincipalFromContext). Authentication middleware (BasicAuth, basic.go) reads a credential from
-// the message headers - so it is for HTTP-fronted pipelines, where the transport carries an
-// Authorization header - and either sets the principal and calls next, or short-circuits with an
-// unauthorized result. Authorization middleware (Authorize / RequireRole) runs after it and gates
-// the handler on the principal.
+// middleware and read downstream by authorization middleware and by handlers (PrincipalFromContext).
+//
+// Two authentication middlewares ship, both reading a credential from the message headers - so both
+// are for HTTP-fronted pipelines, where the transport carries an Authorization header:
+//
+//   - BasicAuth (basic.go) - RFC 7617 Basic auth, validated by an app-supplied credential check.
+//   - BearerAuth (bearer.go) - OAuth2/JWT bearer tokens, validated by a Validator (jwt.go) against a
+//     signing-algorithm allowlist and iss/aud/exp checks, with keys from StaticKeys or a JWKS
+//     resolver. The security-critical JWT validation is pure standard library, so this stays
+//     zero-dependency (where the .NET Benzene.Auth.OAuth2 leans on Microsoft.IdentityModel).
+//
+// Each sets the principal and calls next, or short-circuits with an unauthorized result. Authorization
+// middleware (Authorize / RequireRole / RequireScope) runs after authentication and gates the handler
+// on the principal.
 package auth
 
 import (

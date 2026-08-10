@@ -97,12 +97,20 @@ delivery order - just the current honest picture, kept up to date as things land
   a `service-unavailable` result (overridable via `WithOpenStatus`/`WithOpenMessages`). Its own module
   so the `gobreaker` dependency doesn't spread - the same shape as `awssqs`/`awssns`.
 - `auth` - authentication/authorization building block (zero dependencies), matching
-  `Benzene.Auth.Core`+`.Basic`: a `Principal` (name/roles/claims) threaded on the context,
+  `Benzene.Auth.Core`+`.Basic`+`.OAuth2`: a `Principal` (name/roles/claims) threaded on the context;
   `BasicAuth(validate, realm)` RFC 7617 authentication middleware (validates via an app-supplied
   `BasicValidator` - no default credential - and short-circuits `unauthorized` with a
-  `WWW-Authenticate` challenge, or sets the principal), and `Authorize(predicate)`/`RequireRole(role)`
-  authorization middleware (`forbidden` when not permitted). Header-based; authentication is for
-  HTTP-fronted pipelines.
+  `WWW-Authenticate` challenge, or sets the principal); `BearerAuth(validator, opts...)` OAuth2/JWT
+  bearer-token authentication (the Go form of `OAuth2BearerMiddleware`) - validates a JWT with a
+  `Validator` and either sets the principal from its claims or short-circuits with a generic
+  `unauthorized` (the real reason only reaches `WithOnError`, never the caller). The JWT validation is
+  pure standard library, so it stays zero-dependency where .NET uses `Microsoft.IdentityModel`: an
+  explicit algorithm allowlist (RFC 8725 §3.1 - `none`/off-list rejected up front), signature verify
+  for HS/RS/ES 256/384/512 with a per-family typed key (no cross-family confusion), and iss/aud/exp/
+  nbf/iat checks with clock skew; keys from `StaticKeys` or a caching `JWKSResolver`
+  (`NewJWKSFromAuthority` does OIDC discovery). `Authorize(predicate)`/`RequireRole(role)`/
+  `RequireScope(scope)` are the authorization middleware (`forbidden` when not permitted). Header-based;
+  authentication is for HTTP-fronted pipelines.
 - `cache` - caching building block (zero dependencies), matching the essence of `Benzene.Cache.Core`:
   a pluggable `Store` (Get/Set/Delete with TTL) + a generic read-through helper `GetOrLoad[T]` (the
   Go form of `CacheEntry.LazyLoad`). `InMemoryStore` (thread-safe, TTL + clock) is the default; a

@@ -129,16 +129,29 @@ alongside the shared spec.
   construction, never per-request). Its own module because gobreaker is third-party; the circuit
   breaker is the piece that genuinely wants a library (retry + a plain deadline do not - those stay
   zero-dep in `resilience`). Bulkhead/hedging/fallback remain deferred.
-- `auth/` - authentication/authorization building block, matching `Benzene.Auth.Core`+`.Basic`
-  (zero-dep). Go has no `ClaimsPrincipal`, so a `Principal` (name/roles/claims) is a plain value
-  threaded on the context (`ContextWithPrincipal`/`PrincipalFromContext`). `BasicAuth(validate,
+- `auth/` - authentication/authorization building block, matching `Benzene.Auth.Core`+`.Basic`+
+  `.OAuth2` (zero-dep). Go has no `ClaimsPrincipal`, so a `Principal` (name/roles/claims) is a plain
+  value threaded on the context (`ContextWithPrincipal`/`PrincipalFromContext`). `BasicAuth(validate,
   realm)` is the RFC 7617 authentication middleware (reads `Authorization: Basic`, validates via a
   `BasicValidator` the app supplies - no default, no hardcoded-credential footgun - and either sets
   the principal + calls next, or short-circuits `unauthorized` with a `WWW-Authenticate` challenge;
-  splits on the first `:` so a password may contain one). `Authorize(predicate)` /
-  `RequireRole(role)` are the authorization middleware (`forbidden` when the principal is present
-  but not permitted, `unauthorized` when absent). Header-based, so authentication is for
-  HTTP-fronted pipelines.
+  splits on the first `:` so a password may contain one). `BearerAuth(validator, opts...)` (`bearer.go`) is the OAuth2/JWT bearer-token
+  authentication middleware, the Go form of `Benzene.Auth.OAuth2`'s `OAuth2BearerMiddleware`: reads
+  `Authorization: Bearer <jwt>`, validates via a `Validator` (`jwt.go`) and either sets the principal
+  from the token's claims or short-circuits `unauthorized` with a **generic** message (never an
+  oracle - the real reason only reaches the `WithOnError` hook, matching the .NET package's
+  log-server-side-only stance). The security-critical JWT validation is pure standard library
+  (`crypto/hmac`/`rsa`/`ecdsa` + `encoding/base64`/`json`), so the package stays zero-dependency where
+  .NET leans on `Microsoft.IdentityModel`: `Validator` enforces an explicit **algorithm allowlist**
+  (RFC 8725 §3.1 - `none` and any off-list `alg` rejected before a key is even resolved), verifies the
+  signature for HS/RS/ES 256/384/512 with a strongly-typed `VerificationKey` per family (so an RS
+  token can't be verified against an HMAC secret - the classic confusion), and checks iss/aud/exp/nbf/
+  iat with clock skew. Keys come from `StaticKeys` (pinned HMAC/RSA/ECDSA keys, `jwtkeys.go`) or a
+  `JWKSResolver` (`jwks.go` - fetches + caches a JWKS over HTTPS, refetches on an unknown `kid` for
+  rotation, throttled; `NewJWKSFromAuthority` does OIDC `.well-known` discovery). `Authorize(predicate)`
+  / `RequireRole(role)` / `RequireScope(scope)` are the authorization middleware (`forbidden` when the
+  principal is present but not permitted, `unauthorized` when absent); `GrantedScopes` merges the
+  `scope`/`scp` claim conventions. Header-based, so authentication is for HTTP-fronted pipelines.
 - `cache/` - caching building block, matching the essence of `Benzene.Cache.Core` (zero-dep): a
   pluggable `Store` (Get/Set/Delete with per-entry TTL) + a generic read-through helper
   `GetOrLoad[T](ctx, store, key, ttl, load)` (the Go form of `CacheEntry.LazyLoad` - returns the
