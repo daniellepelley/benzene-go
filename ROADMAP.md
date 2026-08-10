@@ -186,8 +186,16 @@ delivery order - just the current honest picture, kept up to date as things land
   codes `httpstatus.ToHTTP` maps them to), and `Handler` serves it over GET, the OpenAPI sibling of
   `mesh.SpecHandler`. It reuses mesh's startup-derived schemas rather than deriving its own (no new
   reflection), converting only JSON Schema's nullable type-array to OpenAPI 3.0's `nullable: true`.
-  A documentation view of the message contracts, not a claim every topic is HTTP-routed. The
-  AsyncAPI (event-topic) half is a deliberate follow-up - see Next.
+  A documentation view of the message contracts, not a claim every topic is HTTP-routed.
+- `asyncapi` - AsyncAPI 3.0 document generation (zero dependencies), the event-driven sibling of
+  `openapi` and the other half of `Benzene.Schema.OpenApi`. `Generate(desc, opts...)` maps Benzene
+  onto AsyncAPI 3.0's channels + `action: receive`/`send` operations like the .NET builder: every
+  handled topic is a `receive` operation with a `<topic>:<suffix>` reply channel (default `response`),
+  derived from the descriptor; a published event is a caller-declared `WithSentEvent(topic, payload)`
+  (a `send` operation), the send side the descriptor can't carry - so no sync-vs-event classification
+  is fabricated (the reason the split was deferred). Reuses mesh's derived schemas with no reshaping
+  (AsyncAPI 3.0 is JSON Schema Draft 7, so the nullable form is already valid). `Handler` serves it
+  over GET.
 - `logging` - basic request logging/timing middleware using only `log/slog`: one structured
   line per invocation (topic/version, Benzene status, duration; Info/Warn/Error by outcome).
   The dependency-free visibility option alongside the `diagnostics` module's full OTel feed.
@@ -372,15 +380,15 @@ An earlier wave (`client`, `cors`, `benzenetest`, `logging`) plus the large catc
 (`awskinesis`, `awss3`, `awskafka`, `azurefunctions.Timer`/`EventGrid`, `validation`,
 `idempotency`, `ratelimiting`, `auth`, `cache`, `resilience`, `saga`, `responseevents`,
 `healthcheck.TCP`/`HTTP`, `cloudserviceprobe`, the R5 `mesh.SpecHandler`, the `cloudservice`
-one-call profile builder, and `openapi` OpenAPI generation) have all landed - see Done above. These
-zero-dependency items remain queued and buildable without any dependency decision:
+one-call profile builder, `openapi` OpenAPI generation, and `asyncapi` AsyncAPI generation) have all
+landed - see Done above.
 
-- **AsyncAPI spec generation** (the event-topic half of `Benzene.Schema.OpenApi`). The **OpenAPI**
-  half now ships zero-dependency (`openapi` - see Done: each registered topic a POST operation
-  derived from the same mesh descriptor). AsyncAPI (event topics as channels) is the remaining slice,
-  and it needs one more input the descriptor does not carry: which topics are request/response vs
-  fire-and-forget events. Rather than fabricate that classification, it waits until the registry (or
-  a service-supplied hint) distinguishes them - still zero-dependency once that input exists.
+The zero-dependency queue is now essentially clear. The one remaining zero-dependency item that is
+deliberately **not** built is **hedging** (the last `Benzene.Resilience.Polly` primitive): racing a
+second attempt requires each attempt to run on its own `InvocationContext`, but the pipeline threads
+a single shared `ic` through `next`, so a faithful hedging middleware needs per-attempt `ic`
+isolation - a core-concepts change (the `Middleware`/`next` contract), not a package-local one. It is
+flagged for a deliberate design decision rather than forced.
 
 ## Later - needs a dependency decision first
 

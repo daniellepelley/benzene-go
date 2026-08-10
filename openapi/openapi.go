@@ -13,9 +13,11 @@
 // that every topic is reachable over HTTP - a queue-shaped topic is documented the same way, since
 // the value is the request/response shape, not the transport.
 //
-// AsyncAPI generation for event topics (the other half of Benzene.Schema.OpenApi) is a separate
-// follow-up: the descriptor does not classify a topic as request/response vs fire-and-forget, so a
-// faithful AsyncAPI document needs an input this package deliberately does not fabricate yet.
+// AsyncAPI generation (the other half of Benzene.Schema.OpenApi) ships in the sibling asyncapi
+// package: it models every handled topic as a "receive" operation with a reply channel (derived from
+// the descriptor) and takes any published events as an explicit WithSentEvent declaration (the send
+// side the descriptor cannot provide), rather than fabricating a request/response-vs-event
+// classification.
 package openapi
 
 import (

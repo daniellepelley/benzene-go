@@ -263,9 +263,20 @@ alongside the shared spec.
   the `[]string` (straight from `mesh.Describe`) and `[]any` (JSON-round-tripped) forms. `Handler`
   serves the doc over a plain GET, the OpenAPI sibling of `mesh.SpecHandler` (R5 is already satisfied
   by the derived descriptor; this is the richer industry-standard alternative). A documentation view
-  of the message contracts, not a claim every topic is HTTP-routed. **AsyncAPI for event topics is a
-  deliberate follow-up** - the descriptor doesn't classify a topic as request/response vs
-  fire-and-forget, and this port does not fabricate that input.
+  of the message contracts, not a claim every topic is HTTP-routed.
+- `asyncapi/` - AsyncAPI 3.0 document generation (zero-dep), the event-driven sibling of `openapi` and
+  the other half of `Benzene.Schema.OpenApi`. `Generate(desc, opts...)` maps Benzene onto AsyncAPI
+  3.0's channels + `action: receive`/`send` operations exactly as the .NET builder does: every
+  **handled** topic is a `receive` operation on a channel carrying the request, with the native
+  `reply` object pointing at a `<topic>:<suffix>` reply channel (default `response`,
+  `WithResponseTopicSuffix`) - derived entirely from the descriptor. What a service **sends** (a
+  fire-and-forget published event) is **not** in the descriptor, so it is a caller-declared input via
+  `WithSentEvent(topic, payload)` (a `send` operation) - the same explicit input the .NET builder
+  takes from broadcast-event/message-sender definitions, and the reason `openapi` deferred AsyncAPI
+  rather than fabricating a sync-vs-event classification. Reuses mesh's derived schemas with **no**
+  reshaping (AsyncAPI 3.0 schemas are JSON Schema Draft 7, so mesh's nullable `["T","null"]` form is
+  already valid - unlike OpenAPI 3.0), deep-copied so `Generate` never mutates the descriptor.
+  `Handler` serves it over a plain GET, the AsyncAPI sibling of `openapi.Handler`/`mesh.SpecHandler`.
 - `meshd/` - Phases 3-4 of `docs/design/mesh.md`: the collector - an ordinary Benzene
   service (register/heartbeat/traces/issues ingest + `benzene:mesh:query:*` read models over an
   in-memory store with a bounded trace ring; the `benzene:mesh:issues` feed of mesh.md §4.1
