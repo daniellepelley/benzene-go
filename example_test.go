@@ -42,3 +42,54 @@ func ExampleRegister() {
 	// ok
 	// Hello, World!
 }
+
+// ExampleResult shows how a handler signals its outcome with the shared, wire-level status
+// vocabulary rather than a Go error: Ok for success and BadRequest/NotFound/... for the failure
+// modes. Every transport maps the same status the same way (an HTTP code, a gRPC code, a queue
+// ack/nack), so the handler names the outcome once and stays transport-agnostic.
+func ExampleResult() {
+	lookup := func(_ context.Context, req greetReq) benzene.Result[greetResp] {
+		switch req.Name {
+		case "":
+			return benzene.BadRequest[greetResp]("name is required")
+		case "nobody":
+			return benzene.NotFound[greetResp]("no such user")
+		default:
+			return benzene.Ok(greetResp{Greeting: "Hello, " + req.Name + "!"})
+		}
+	}
+
+	for _, name := range []string{"World", "", "nobody"} {
+		result := lookup(context.Background(), greetReq{Name: name})
+		fmt.Printf("%-8q -> %s\n", name, result.ResultStatus())
+	}
+	// Output:
+	// "World"  -> ok
+	// ""       -> bad-request
+	// "nobody" -> not-found
+}
+
+type greetingCount struct{ n int }
+
+// countKey is a typed DI key (a struct key can't collide with another package's key the way a bare
+// string could).
+type countKey struct{}
+
+// ExampleGetService shows the DI-lite Container/Scope. Register a per-invocation (scoped) dependency
+// under a typed key; a handler then resolves it from the context via ScopeFromContext + GetService.
+// Resolving twice inside one scope returns the same instance. (For a singleton you don't need the
+// container at all - capture it in the handler's closure at registration time.)
+func ExampleGetService() {
+	container := benzene.NewContainer()
+	benzene.AddScoped(container, countKey{}, func(*benzene.Scope) *greetingCount {
+		return &greetingCount{}
+	})
+
+	scope := container.NewScope() // one scope per invocation; a transport binding creates it for you
+	first := benzene.GetService[*greetingCount](scope, countKey{})
+	first.n++
+	second := benzene.GetService[*greetingCount](scope, countKey{})
+
+	fmt.Println(first == second, second.n)
+	// Output: true 1
+}
