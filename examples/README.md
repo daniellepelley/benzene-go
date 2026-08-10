@@ -25,6 +25,9 @@ Each example is its own buildable Go module (wired into the repo's `go.work`) wi
 | [`aws-sqs-helloworld`](aws-sqs-helloworld) | A full SQS round trip — publisher Lambda → queue → consumer Lambda |
 | [`aws-sns-helloworld`](aws-sns-helloworld) | The same round trip over SNS |
 | [`aws-dynamodb-helloworld`](aws-dynamodb-helloworld) | A DynamoDB Streams consumer Lambda |
+| [`aws-s3-helloworld`](aws-s3-helloworld) | An S3 event-notification consumer Lambda |
+| [`aws-kinesis-helloworld`](aws-kinesis-helloworld) | A Kinesis Data Streams consumer Lambda |
+| [`aws-kafka-helloworld`](aws-kafka-helloworld) | A Kafka (Amazon MSK) consumer Lambda |
 | [`azure-functions-helloworld`](azure-functions-helloworld) | Azure Functions custom handler |
 | [`gcp-cloudrun-helloworld`](gcp-cloudrun-helloworld) | Google Cloud Run |
 | [`gcp-pubsub-helloworld`](gcp-pubsub-helloworld) | A Google Cloud Pub/Sub push subscriber |
