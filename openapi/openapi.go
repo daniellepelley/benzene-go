@@ -124,9 +124,13 @@ func Generate(desc mesh.Descriptor, opts ...Option) *Document {
 		Info:    Info{Title: cfg.title, Version: cfg.version, Description: cfg.description},
 		Paths:   make(map[string]PathItem, len(desc.Topics)),
 	}
+	// operationId MUST be unique across the whole document (OpenAPI 3.0). Distinct topic ids can
+	// sanitize to the same id ("user:get" and "user-get" both -> "user_get") while still producing
+	// distinct path keys, so track assigned ids and disambiguate with a suffix in topic order.
+	usedIDs := make(map[string]bool, len(desc.Topics))
 	for _, topic := range desc.Topics {
 		op := &Operation{
-			OperationID: operationID(topic.ID),
+			OperationID: uniqueOperationID(topic.ID, usedIDs),
 			Summary:     "Handle " + topic.ID,
 			Responses:   responsesFor(topic),
 		}
@@ -293,9 +297,28 @@ func splitNullableType(value any) (any, bool) {
 	return value, false
 }
 
-// operationID turns a topic id into a valid, stable operationId: non-alphanumeric runs become a
-// single underscore (so "order:create" -> "order_create"), matching how an OpenAPI operationId is
-// conventionally a bare identifier.
+// uniqueOperationID returns operationID(topicID), guaranteed non-empty and unique among the ids
+// already in used: an empty base (a topic id with no alphanumerics, e.g. ":") falls back to
+// "operation", and a collision gets a "_2", "_3", ... suffix. This keeps the document valid per
+// OpenAPI 3.0's operationId-uniqueness rule regardless of topic naming. Disambiguation follows the
+// descriptor's topic order, so it is stable for a given descriptor.
+func uniqueOperationID(topicID string, used map[string]bool) string {
+	base := operationID(topicID)
+	if base == "" {
+		base = "operation"
+	}
+	id := base
+	for n := 2; used[id]; n++ {
+		id = base + "_" + strconv.Itoa(n)
+	}
+	used[id] = true
+	return id
+}
+
+// operationID turns a topic id into a valid operationId: non-alphanumeric runs become a single
+// underscore (so "order:create" -> "order_create"), matching how an OpenAPI operationId is
+// conventionally a bare identifier. It may return "" for a topic id with no alphanumerics; callers
+// go through uniqueOperationID, which supplies a non-empty fallback.
 func operationID(topicID string) string {
 	var b strings.Builder
 	lastUnderscore := false
@@ -314,7 +337,10 @@ func operationID(topicID string) string {
 }
 
 // pathFor joins the configured prefix and the topic id into an OpenAPI path key, collapsing a
-// double slash so a prefix of "/" or "/api/" both yield a single separator.
+// double slash so a prefix of "/" or "/api/" both yield a single separator. The topic id is used
+// verbatim (a colon is a valid path character, so "order:create" -> "/order:create"); a topic id
+// containing "{" or "}" would read as OpenAPI path templating, but Benzene topic ids are
+// conventionally "name:action" and do not, so no escaping is applied.
 func pathFor(prefix, topicID string) string {
 	if prefix == "" {
 		prefix = "/"

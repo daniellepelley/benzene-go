@@ -90,6 +90,43 @@ func TestGenerate_HandBuiltSchemaEdges(t *testing.T) {
 	}
 }
 
+// TestGenerate_OperationIDsUniqueAndNonEmpty covers the OpenAPI 3.0 operationId-uniqueness rule:
+// distinct topic ids that sanitize to the same base get disambiguated, and a topic id with no
+// alphanumerics falls back to a non-empty id rather than an (invalid) empty operationId.
+func TestGenerate_OperationIDsUniqueAndNonEmpty(t *testing.T) {
+	desc := mesh.Descriptor{Topics: []mesh.TopicDescriptor{
+		{ID: "user:get"}, // -> user_get
+		{ID: "user-get"}, // -> user_get (collision) -> user_get_2
+		{ID: ":"},        // -> "" -> operation
+		{ID: "::"},       // -> "" -> operation (collision) -> operation_2
+	}}
+	doc := openapi.Generate(desc)
+
+	for _, p := range []string{"/user:get", "/user-get", "/:", "/::"} {
+		if _, ok := doc.Paths[p]; !ok {
+			t.Errorf("missing path %q; paths = %v", p, doc.Paths)
+		}
+	}
+
+	seen := map[string]bool{}
+	for path, item := range doc.Paths {
+		id := item.Post.OperationID
+		if id == "" {
+			t.Errorf("empty operationId for path %q (invalid OpenAPI)", path)
+		}
+		if seen[id] {
+			t.Errorf("duplicate operationId %q (violates OpenAPI 3.0 uniqueness)", id)
+		}
+		seen[id] = true
+	}
+	if id := doc.Paths["/user-get"].Post.OperationID; id != "user_get_2" {
+		t.Errorf("collision id = %q, want user_get_2", id)
+	}
+	if id := doc.Paths["/::"].Post.OperationID; id != "operation_2" {
+		t.Errorf("empty-base collision id = %q, want operation_2", id)
+	}
+}
+
 // TestGenerate_EmptyPrefixNormalizes covers pathFor's empty-prefix branch (WithPathPrefix("")).
 func TestGenerate_EmptyPrefixNormalizes(t *testing.T) {
 	desc := mesh.Descriptor{Topics: []mesh.TopicDescriptor{{ID: "t"}}}
