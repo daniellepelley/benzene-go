@@ -116,9 +116,9 @@ func newService(name, meshdEndpoint string, provisionDescriptor bool, registerHa
 	exporter := mesh.NewPushExporter(httpclient.NewClient(meshdEndpoint), mesh.PushExporterOptions{FlushInterval: time.Second})
 	issueExporter := mesh.NewPushIssueExporter(httpclient.NewClient(meshdEndpoint), name, mesh.PushIssueExporterOptions{FlushInterval: time.Second})
 
-	checks := []healthcheck.Check{healthcheck.CheckFunc{CheckName: "self", Fn: func(context.Context) healthcheck.CheckResult {
+	checks := []healthcheck.Check{healthcheck.NamedCheck("self", func(context.Context) healthcheck.CheckResult {
 		return healthcheck.CheckResult{Status: healthcheck.StatusOk, Type: "self"}
-	}}}
+	})}
 
 	middlewares := []benzene.Middleware{mesh.TraceMiddleware(info, exporter), mesh.IssueMiddleware(info, issueExporter)}
 	if provisionDescriptor {

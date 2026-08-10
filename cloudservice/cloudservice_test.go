@@ -131,9 +131,9 @@ func TestNew_WithoutDescriptorDisablesR5R6(t *testing.T) {
 }
 
 func TestNew_HealthReflectsChecks(t *testing.T) {
-	failing := healthcheck.CheckFunc{CheckName: "db", Fn: func(context.Context) healthcheck.CheckResult {
+	failing := healthcheck.NamedCheck("db", func(context.Context) healthcheck.CheckResult {
 		return healthcheck.CheckResult{Status: healthcheck.StatusFailed, Type: "db"}
-	}}
+	})
 	svc := New("greeter", newRegistry(t), WithHealthChecks(failing))
 
 	if rec := get(t, svc.Handler, httpbinding.HealthPath); rec.Code != http.StatusServiceUnavailable {

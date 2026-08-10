@@ -17,12 +17,12 @@ import (
 // HTTP 503 (so a load balancer drains the instance) while the report body still renders
 // (isHealthy:false), not an error payload. Healthy stays 200.
 func TestHealthEndToEnd_UnhealthyMapsTo503WithReportBody(t *testing.T) {
-	failing := healthcheck.CheckFunc{CheckName: "db", Fn: func(context.Context) healthcheck.CheckResult {
+	failing := healthcheck.NamedCheck("db", func(context.Context) healthcheck.CheckResult {
 		return healthcheck.CheckResult{Status: healthcheck.StatusFailed, Type: "database"}
-	}}
-	ok := healthcheck.CheckFunc{CheckName: "db", Fn: func(context.Context) healthcheck.CheckResult {
+	})
+	ok := healthcheck.NamedCheck("db", func(context.Context) healthcheck.CheckResult {
 		return healthcheck.CheckResult{Status: healthcheck.StatusOk, Type: "database"}
-	}}
+	})
 
 	dispatch := func(checks ...healthcheck.Check) wire.Response {
 		container := benzene.NewContainer()

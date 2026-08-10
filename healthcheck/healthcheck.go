@@ -47,15 +47,21 @@ type Check interface {
 	Check(ctx context.Context) CheckResult
 }
 
-// CheckFunc adapts a name and a plain function into a Check, for callers who don't need a
-// dedicated type.
-type CheckFunc struct {
-	CheckName string
-	Fn        func(ctx context.Context) CheckResult
+// NamedCheck adapts a name and a plain function into a Check, for callers who don't need a
+// dedicated Check type - the func-adapter idiom (cf. http.HandlerFunc), so a one-off check reads
+// healthcheck.NamedCheck("db", func(ctx context.Context) healthcheck.CheckResult { ... }).
+func NamedCheck(name string, fn func(ctx context.Context) CheckResult) Check {
+	return namedCheck{name: name, fn: fn}
 }
 
-func (f CheckFunc) Name() string                          { return f.CheckName }
-func (f CheckFunc) Check(ctx context.Context) CheckResult { return f.Fn(ctx) }
+// namedCheck is the Check NamedCheck returns.
+type namedCheck struct {
+	name string
+	fn   func(ctx context.Context) CheckResult
+}
+
+func (c namedCheck) Name() string                          { return c.name }
+func (c namedCheck) Check(ctx context.Context) CheckResult { return c.fn(ctx) }
 
 // Response is the aggregate health-check response (wire-contracts.md §5).
 type Response struct {

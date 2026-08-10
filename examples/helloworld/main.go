@@ -86,9 +86,9 @@ func newApp() benzene.App[struct{}] {
 		},
 		Configure: func(builder *benzene.ApplicationBuilder, _ struct{}) {
 			checks := []healthcheck.Check{
-				healthcheck.CheckFunc{CheckName: "memory", Fn: func(context.Context) healthcheck.CheckResult {
+				healthcheck.NamedCheck("memory", func(context.Context) healthcheck.CheckResult {
 					return healthcheck.CheckResult{Status: healthcheck.StatusOk, Type: "memory"}
-				}},
+				}),
 			}
 			builder.UsePipeline(benzene.NewPipeline(
 				healthcheck.Middleware(checks),

@@ -8,9 +8,9 @@ import (
 )
 
 func okCheck(name string) Check {
-	return CheckFunc{CheckName: name, Fn: func(ctx context.Context) CheckResult {
+	return NamedCheck(name, func(ctx context.Context) CheckResult {
 		return CheckResult{Status: StatusOk, Type: "test", Data: map[string]any{"ok": true}}
-	}}
+	})
 }
 
 func runMiddleware(t *testing.T, checks []Check, topic string, aliases ...string) (*benzene.InvocationContext, bool) {
@@ -58,9 +58,9 @@ func TestMiddleware_AllHealthyChecksAreHealthy(t *testing.T) {
 }
 
 func TestMiddleware_FailedCheckMakesResponseUnhealthy(t *testing.T) {
-	failing := CheckFunc{CheckName: "db", Fn: func(ctx context.Context) CheckResult {
+	failing := NamedCheck("db", func(ctx context.Context) CheckResult {
 		return CheckResult{Status: StatusFailed, Type: "database", Data: map[string]any{"CanConnect": false}}
-	}}
+	})
 	ic, _ := runMiddleware(t, []Check{okCheck("cache"), failing}, "benzene:healthcheck")
 
 	resp := resultPayload(t, ic)
@@ -75,12 +75,12 @@ func TestMiddleware_FailedCheckMakesResponseUnhealthy(t *testing.T) {
 func TestMiddleware_ResultStatusReflectsHealth(t *testing.T) {
 	// Healthy -> ok (HTTP 200). Unhealthy -> service-unavailable (HTTP 503 to probes) but still
 	// carries the report body (the result is explicitly successful). A warning stays ok.
-	failing := CheckFunc{CheckName: "db", Fn: func(context.Context) CheckResult {
+	failing := NamedCheck("db", func(context.Context) CheckResult {
 		return CheckResult{Status: StatusFailed, Type: "database"}
-	}}
-	warning := CheckFunc{CheckName: "queue", Fn: func(context.Context) CheckResult {
+	})
+	warning := NamedCheck("queue", func(context.Context) CheckResult {
 		return CheckResult{Status: StatusWarning, Type: "queue"}
-	}}
+	})
 
 	healthy, _ := runMiddleware(t, []Check{okCheck("db")}, "benzene:healthcheck")
 	if got := healthy.Result.ResultStatus(); got != benzene.StatusOk {
@@ -106,9 +106,9 @@ func TestMiddleware_ResultStatusReflectsHealth(t *testing.T) {
 }
 
 func TestMiddleware_WarningDoesNotFlipHealthy(t *testing.T) {
-	warning := CheckFunc{CheckName: "queue", Fn: func(ctx context.Context) CheckResult {
+	warning := NamedCheck("queue", func(ctx context.Context) CheckResult {
 		return CheckResult{Status: StatusWarning, Type: "queue"}
-	}}
+	})
 	ic, _ := runMiddleware(t, []Check{okCheck("db"), warning}, "benzene:healthcheck")
 
 	resp := resultPayload(t, ic)
@@ -118,9 +118,9 @@ func TestMiddleware_WarningDoesNotFlipHealthy(t *testing.T) {
 }
 
 func TestMiddleware_PanickingCheckIsRecordedAsFailed(t *testing.T) {
-	panicking := CheckFunc{CheckName: "broken", Fn: func(ctx context.Context) CheckResult {
+	panicking := NamedCheck("broken", func(ctx context.Context) CheckResult {
 		panic("boom")
-	}}
+	})
 	ic, _ := runMiddleware(t, []Check{panicking}, "benzene:healthcheck")
 
 	resp := resultPayload(t, ic)

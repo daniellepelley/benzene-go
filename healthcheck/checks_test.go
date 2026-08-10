@@ -178,7 +178,7 @@ func TestErrorCategory(t *testing.T) {
 }
 
 // TestTCPCheck_IntegratesWithMiddleware proves a ready-made check plugs into the health endpoint
-// exactly like a bespoke CheckFunc.
+// exactly like a NamedCheck.
 func TestTCPCheck_IntegratesWithMiddleware(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

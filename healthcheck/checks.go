@@ -14,7 +14,7 @@ import (
 // This file holds ready-made Check implementations for probing a downstream dependency's
 // reachability, the Go equivalents of Benzene.HealthChecks.Tcp / .Http. They are zero-dependency
 // (net / net/http) and each implements the package's Check interface, so they plug straight into
-// Middleware alongside any bespoke CheckFunc. (The host self-check on free space,
+// Middleware alongside any bespoke Check or a NamedCheck. (The host self-check on free space,
 // Benzene.HealthChecks.Disk, lives in disk.go - also zero-dependency, with the one platform-specific
 // call behind build tags.)
 
