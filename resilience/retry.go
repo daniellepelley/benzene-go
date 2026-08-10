@@ -1,10 +1,21 @@
 // Package resilience provides resilience middleware for the Benzene pipeline that needs no
-// third-party library: Middleware(opts...) re-invokes the downstream pipeline with exponential
-// backoff when an attempt fails, and Timeout(d) bounds it to a deadline (a cooperative
-// context.WithTimeout, presented as a StatusTimeout result). Both are zero-dependency. The richer
-// toolkit the .NET Benzene.Resilience.Polly package delegates to Polly for - circuit breaker,
-// bulkhead, hedging, fallback - stays deferred to a later dependency decision (ROADMAP.md), since
-// unlike retry and a plain deadline those genuinely want a library.
+// third-party library:
+//
+//   - Middleware(opts...) re-invokes the downstream pipeline with exponential backoff when an
+//     attempt fails (retry);
+//   - Timeout(d) bounds it to a deadline (a cooperative context.WithTimeout, presented as a
+//     StatusTimeout result);
+//   - Bulkhead(maxConcurrency, opts...) caps concurrent invocations, shedding load past the cap;
+//   - Fallback(fn, opts...) substitutes a degraded outcome when an attempt fails.
+//
+// All four are zero-dependency, covering most of what the .NET Benzene.Resilience.Polly package
+// delegates to Polly for. The one piece that genuinely wants a battle-tested library, the circuit
+// breaker, ships in the sibling circuitbreaker module (wrapping github.com/sony/gobreaker/v2) so its
+// dependency does not spread to this zero-dependency package; hedging stays deferred (ROADMAP.md).
+//
+// Retry, bulkhead, and fallback share one failure vocabulary - an unsuccessful ic.Result via the
+// *Unsuccessful / *OnStatus predicates, plus a next() error - so they compose predictably; see each
+// constructor's own doc for its triggers and placement guidance.
 //
 // # Failure model
 //

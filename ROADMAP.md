@@ -65,19 +65,24 @@ delivery order - just the current honest picture, kept up to date as things land
   `System.Threading.RateLimiting`; this stays dependency-free with a `Limiter` interface + a
   standard-library `TokenBucket` default (plug a different algorithm behind the interface). Per
   instance, so a fleet of N admits up to N× the rate - authoritative limiting belongs at the gateway.
-- `resilience` - retry + timeout middleware (zero dependencies), matching `Benzene.Resilience`
-  (circuit breaker/bulkhead/hedging/fallback live in the Polly-backed sibling, deferred here pending
-  a dependency decision - unlike retry and a plain deadline, they want a library). `Middleware(opts...)`
-  re-invokes the downstream pipeline with exponential backoff. The Go router funnels application
-  failures onto `ic.Result` (not a Go error), so retry has two triggers mirroring .NET's
-  `shouldRetry`/`shouldRetryContext`: `WithRetryOnError` (default: any error except context
-  cancellation) and `WithRetryOnResult` (default: never; the lever services set - `RetryUnsuccessful`
-  / `RetryOnStatus(...)`). Backoff caps and jitters the sleep while growing the exponential curve
-  uncapped (AWS "full jitter", `FullJitter` helper), with a context-cancellable sleep and an
-  injectable `WithSleep` for tests. `Timeout(d)` bounds the downstream to a deadline via a
-  cooperative `context.WithTimeout` (a ctx-ignoring handler can't be forcibly stopped in Go, so the
-  wait is bounded once it returns; ctx-honoring handlers are bounded as expected), presenting the
-  timed-out outcome as a `StatusTimeout` result without a goroutine or an `ic.Result` race.
+- `resilience` - retry + timeout + bulkhead + fallback middleware (zero dependencies), matching most
+  of `Benzene.Resilience`(`.Polly`); only the circuit breaker (own `circuitbreaker` module, needs a
+  library) and hedging (still to do) live elsewhere. `Middleware(opts...)` re-invokes the downstream
+  pipeline with exponential backoff. The Go router funnels application failures onto `ic.Result` (not
+  a Go error), so retry has two triggers mirroring .NET's `shouldRetry`/`shouldRetryContext`:
+  `WithRetryOnError` (default: any error except context cancellation) and `WithRetryOnResult` (default:
+  never; the lever services set - `RetryUnsuccessful` / `RetryOnStatus(...)`). Backoff caps and jitters
+  the sleep while growing the exponential curve uncapped (AWS "full jitter", `FullJitter` helper), with
+  a context-cancellable sleep and an injectable `WithSleep` for tests. `Timeout(d)` bounds the
+  downstream to a deadline via a cooperative `context.WithTimeout` (a ctx-ignoring handler can't be
+  forcibly stopped in Go, so the wait is bounded once it returns; ctx-honoring handlers are bounded as
+  expected), presenting the timed-out outcome as a `StatusTimeout` result without a goroutine or an
+  `ic.Result` race. `Bulkhead(maxConcurrency, opts...)` caps concurrent invocations with a two-permit
+  semaphore (Polly's shape) - past the cap it sheds load fast to a `too-many-requests` result, or
+  `WithMaxQueue(n)` lets up to n callers wait (context-bounded). `Fallback(fn, opts...)` substitutes a
+  degraded outcome when an attempt fails (a next() error or an unsuccessful result, via the same
+  `*Unsuccessful`/`*OnStatus` trigger vocabulary), e.g. degrading an open circuit breaker's fail-fast
+  to a cached response.
 - `circuitbreaker` - circuit-breaker middleware (**own module**, needs `github.com/sony/gobreaker/v2`),
   the library-backed slice of `Benzene.Resilience.Polly` and the sibling of the zero-dep `resilience`
   package. `Middleware[T](cb, opts...)` runs the downstream pipeline inside a `gobreaker.CircuitBreaker`
@@ -388,15 +393,14 @@ change-feed worker, and `gcpfunctions` Cloud Functions Gen2.)
   which needs the Azure SDK (`azblob` / `azeventhubs`) - the same own-module shape as `awssqs`. Not
   started, and deliberately not faked: this repo has no way to verify a fabricated custom-handler
   shape for them (see the no-fabricated-deployment-config rule).
-- **Richer resilience** (bulkhead, hedging, fallback), the remaining equivalent of
-  `Benzene.Resilience.Polly`. The retry piece **and** a plain cooperative timeout ship
-  zero-dependency in the root `resilience` package (`resilience.Middleware` + `resilience.Timeout` -
-  see Done), and the **circuit breaker** now ships in its own `circuitbreaker` module (see Done),
-  wrapping `github.com/sony/gobreaker/v2` behind the same middleware surface. Bulkhead/hedging/
-  fallback are what remains of what .NET delegates to Polly; bulkhead and fallback are expressible
-  zero-dependency (a semaphore, a second pipeline) and belong in the root `resilience` package,
-  while anything needing a library follows the `circuitbreaker` shape - its own module so the
-  dependency doesn't spread.
+- **Hedging** (the last remaining `Benzene.Resilience.Polly` primitive). Retry, timeout, **bulkhead**,
+  and **fallback** now ship zero-dependency in the root `resilience` package, and the **circuit
+  breaker** ships in its own `circuitbreaker` module wrapping `github.com/sony/gobreaker/v2` (all in
+  Done). Hedging - racing a second attempt after a short delay and taking the first to answer - is the
+  one piece still to do; it is expressible zero-dependency (a timer + a goroutine racing a second
+  next() invocation), but it wants care around cancelling the loser and the `ic.Result` write race, so
+  it is called out here rather than rushed. It belongs in the root `resilience` package like bulkhead
+  and fallback.
 
 ## Deliberately out of scope (not a "later" - a "no, and here's why")
 

@@ -82,9 +82,9 @@ alongside the shared spec.
   different algorithm - e.g. a `golang.org/x/time/rate` adapter - behind the interface). Per-instance
   only: a fleet of N instances admits up to N× the rate - authoritative limiting belongs at the
   gateway.
-- `resilience/` - retry + timeout middleware, matching `Benzene.Resilience` (zero-dep; circuit
-  breaker/bulkhead/hedging/fallback are the Polly package's job in .NET, deferred here pending a
-  dependency decision - unlike retry and a plain deadline, they want a library). `Middleware(opts...)`
+- `resilience/` - retry + timeout + bulkhead + fallback middleware, matching most of
+  `Benzene.Resilience`(`.Polly`) (zero-dep; only the circuit breaker lives in its own
+  `circuitbreaker` module for its library, and hedging is still to do). `Middleware(opts...)`
   re-invokes the downstream pipeline with exponential backoff. `Timeout(d)` bounds the downstream to
   a deadline via a **cooperative** `context.WithTimeout` (a handler that ignores its context can't be
   forcibly stopped in Go, so the wait is bounded only once such a handler returns; ctx-honoring
@@ -99,6 +99,17 @@ alongside the shared spec.
   uncapped - AWS "full jitter", `FullJitter` helper provided), a context-cancellable sleep, and an
   injectable `WithSleep` for tests. Re-invokes the whole downstream pipeline, so place it above
   idempotent outbound/port calls, never on an inbound step that already wrote a response.
+  `Bulkhead(maxConcurrency, opts...)` caps concurrent invocations with a Polly-shaped two-permit
+  semaphore (an execution pool + an admission pool of `maxConcurrency+WithMaxQueue`): past the cap it
+  sheds load fast to a `too-many-requests` result (short-circuit-as-Result, like `ratelimiting`), and
+  `WithMaxQueue(n)` lets up to n callers wait for a slot, each still context-bounded (a cancelled
+  queued caller surfaces its cancellation and never takes a slot). `Fallback(fn, opts...)` substitutes
+  a degraded `ic.Result` when an attempt is deemed a failure - a `next()` error (default: any except
+  context cancellation) or an unsuccessful result (default `FallbackUnsuccessful`, narrow with
+  `FallbackOnStatus(...)`) - the `fn` receives the cause and sets the substitute; place it above retry
+  (fires after retries exhaust) or above a circuit breaker (degrades the open-state fail-fast to a
+  cached response). Bulkhead and fallback share retry's `*Unsuccessful`/`*OnStatus` trigger vocabulary
+  so the four compose predictably.
 - `circuitbreaker/` - circuit-breaker middleware, in its **own Go module** (needs
   `github.com/sony/gobreaker/v2`), the library-backed slice of `Benzene.Resilience.Polly` that
   complements the zero-dep `resilience` (retry + timeout). `Middleware[T](cb, opts...)` runs the
