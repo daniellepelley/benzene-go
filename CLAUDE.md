@@ -312,6 +312,35 @@ alongside the shared spec.
   `Client` (satisfies `client.Sender`): `EnqueueMessage` with the **whole `wire.Request` envelope** as
   the message text (verbatim, not base64) - the same envelope-as-message-body convention the queue
   workers rehydrate. Successful enqueue → `accepted`, transport failure → `service-unavailable`.
+- `azurecosmos/` - **self-hosted** Azure Cosmos DB Change Feed worker, in its **own Go module** (needs
+  `azure-sdk-for-go/.../data/azcosmos`), matching `Benzene.Azure.CosmosDb` (the non-Functions flavor) -
+  the standalone-compute counterpart of the zero-dep `azurefunctions.CosmosHandler` (where the
+  Functions host owns the feed). A struct-fields + `Validate()` `Worker` (the unified self-hosted-worker
+  convention) reads the change feed over a narrow `ChangeFeedReader` interface (`ReadNext(ctx,
+  continuation, maxItems) (ChangeFeedPage, error)`; a fake tests it, no live Cosmos) and dispatches
+  each page as **fan-in**, exactly like `CosmosHandler`: the whole batch of changed documents is ONE
+  `envelope.DispatchTopicResult` invocation to the code-named `Topic` (body = JSON array, header
+  `cosmos-document-count`), not one per document. Stop-at-batch-failure: an unsuccessful dispatch or a
+  checkpoint error does NOT advance the continuation token, so the batch redelivers. Checkpointing is
+  **caller-owned** (Cosmos needs an app-owned lease container) via a `Checkpoint(ctx, continuation)`
+  hook run on a cancellation-detached context - the same divergence `azureeventhub.Consumer` documents.
+  A `PollInterval` (no Event Hub equivalent) paces empty polls, since a caught-up change-feed read
+  returns immediately rather than blocking. `NewChangeFeedReader` is the live-only SDK adapter
+  (`adapter.go`, uncovered by design).
+- `gcpfunctions/` - Google Cloud **Functions Gen2** inbound binding, in its **own Go module** (needs
+  `GoogleCloudPlatform/functions-framework-go` + `cloudevents/sdk-go/v2`), the Go form of
+  `GoogleCloud.Functions.Http` + `GoogleCloud.Functions.PubSub`. `RegisterHTTP(name, builder, routes)`
+  registers a Gen2 HTTP function serving `httpbinding.Handler` (thin pass-through). `RegisterCloudEvent(
+  name, builder, opts...)` registers a CloudEvent-triggered function (Pub/Sub/Eventarc): it maps the
+  framework's `cloudevents.Event` onto a `wire.Request` by **reusing the root `cloudevents.ToRequest`**
+  (type→topic, data→body, id/source/subject/extensions→`ce-`-prefixed headers) so the mapping is
+  identical to this port's other CloudEvents surface, dispatches, and returns nil on a successful
+  result / an error on an unsuccessful one - so a failure is retried by the platform, never silently
+  dropped (the same outer-retry posture as `azurefunctions.EventGridHandler`). `WithReservedNames`
+  (defaults to `builder.ReservedNames`; drives the no-`type` topic fallback to the reserved extension
+  attribute) and `WithOnFailure`. The core `dispatchCloudEvent` is testable against a hand-built
+  `event.Event`; the `functions.HTTP`/`functions.CloudEvent` registration is the thin live-only glue,
+  pinned by compile-time signature assertions.
 - `gcppubsubclient/` - Google Cloud Pub/Sub **outbound** client, in its **own Go module** (needs
   `cloud.google.com/go/pubsub`, which requires **go 1.25** - the one module forcing the workspace's
   go directive and CI `setup-go` to 1.25; the root and every other module still declare 1.24.7, so
@@ -517,9 +546,10 @@ alongside the shared spec.
 
 - Run `gofmt -w .` before every commit; CI fails on unformatted files.
 - Run `go vet ./... ./awssqs/... ./awslambdaclient/... ./awsstepfunctions/... ./azureservicebus/...
-  ./azureeventhub/... ./azureeventgrid/... ./azurequeuestorage/... ./gcppubsubclient/...
-  ./rabbitmq/... ./awssns/... ./awseventbridge/... ./kafka/... ./diagnostics/... ./grpcbinding/...
-  ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/... && go build (same paths) &&
+  ./azureeventhub/... ./azureeventgrid/... ./azurequeuestorage/... ./azurecosmos/... ./gcpfunctions/...
+  ./gcppubsubclient/... ./rabbitmq/... ./awssns/... ./awseventbridge/... ./kafka/... ./diagnostics/...
+  ./grpcbinding/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/... && go build
+  (same paths) &&
   go test (same paths) -race -cover` before considering a task
   complete - `./...` from the root does not cross a nested
   module boundary even with `go.work` present, so the nested modules need their own explicit

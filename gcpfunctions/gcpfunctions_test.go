@@ -257,6 +257,18 @@ func TestRegisterHTTP_ServesHTTPBindingHandler(t *testing.T) {
 // functions.HTTP / functions.CloudEvent register into the framework's process-global registry
 // (they do not start a server), so this is the one place the live-only glue runs; each name is
 // unique because a duplicate registration log.Fatalf-exits the process.
+func TestCloudEventHandler_BindsConfigToDispatch(t *testing.T) {
+	builder := newTestBuilder(t, wire.ReservedNames{})
+	handler := cloudEventHandler(builder, cloudEventConfig{names: builder.ReservedNames})
+
+	if err := handler(context.Background(), newGreetEvent(t, "Bound")); err != nil {
+		t.Fatalf("handler() error = %v, want nil", err)
+	}
+	if err := handler(context.Background(), newGreetEvent(t, "")); err == nil {
+		t.Fatal("handler() error = nil, want non-nil for an unsuccessful dispatch")
+	}
+}
+
 func TestRegistration_DoesNotPanic(t *testing.T) {
 	builder := newTestBuilder(t, wire.ReservedNames{})
 	RegisterHTTP("gcpfunctions-test-http", builder, []httpbinding.Route{{Method: http.MethodPost, Path: "/greet", Topic: benzene.NewTopic("greet")}})

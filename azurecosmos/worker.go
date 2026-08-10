@@ -204,15 +204,20 @@ func (w *Worker) pollAndDispatch(ctx context.Context, continuation string) (next
 
 // buildBatch resolves the fan-in batch for a change-feed page exactly as azurefunctions.CosmosHandler
 // does: the changed documents marshalled as one JSON array become the body, and cosmos-document-count
-// is the only synthesized header (useful to logging/middleware without re-parsing the batch). The
-// documents are already valid JSON, so marshalling a []json.RawMessage cannot fail in practice;
-// degrade to an empty array rather than panic if it somehow ever does.
+// is the only synthesized header (useful to logging/middleware without re-parsing the batch). An empty
+// batch normalizes to "[]" (not JSON null), matching CosmosHandler, so a []TDoc handler always sees a
+// valid array. The documents are already valid JSON, so marshalling a []json.RawMessage cannot fail in
+// practice; degrade to an empty array rather than panic if it somehow ever does.
 func buildBatch(documents []json.RawMessage) (map[string]string, string) {
+	headers := map[string]string{"cosmos-document-count": strconv.Itoa(len(documents))}
+	if len(documents) == 0 {
+		return headers, "[]"
+	}
 	body, err := json.Marshal(documents)
 	if err != nil {
 		body = []byte("[]")
 	}
-	return map[string]string{"cosmos-document-count": strconv.Itoa(len(documents))}, string(body)
+	return headers, string(body)
 }
 
 // sleepContext sleeps for d or until ctx is cancelled, whichever comes first.

@@ -7,6 +7,7 @@ use (
 	./awssns
 	./awssqs
 	./awsstepfunctions
+	./azurecosmos
 	./azureeventgrid
 	./azureeventhub
 	./azurequeuestorage
@@ -14,6 +15,7 @@ use (
 	./diagnostics
 	./examples/aws-sns-helloworld
 	./examples/aws-sqs-helloworld
+	./gcpfunctions
 	./gcppubsubclient
 	./grpcbinding
 	./kafka
@@ -32,11 +34,13 @@ replace (
 	github.com/daniellepelley/benzene-go/awssns v0.1.0 => ./awssns
 	github.com/daniellepelley/benzene-go/awssqs v0.1.0 => ./awssqs
 	github.com/daniellepelley/benzene-go/awsstepfunctions v0.1.0 => ./awsstepfunctions
+	github.com/daniellepelley/benzene-go/azurecosmos v0.1.0 => ./azurecosmos
 	github.com/daniellepelley/benzene-go/azureeventgrid v0.1.0 => ./azureeventgrid
 	github.com/daniellepelley/benzene-go/azureeventhub v0.1.0 => ./azureeventhub
 	github.com/daniellepelley/benzene-go/azurequeuestorage v0.1.0 => ./azurequeuestorage
 	github.com/daniellepelley/benzene-go/azureservicebus v0.1.0 => ./azureservicebus
 	github.com/daniellepelley/benzene-go/diagnostics v0.1.0 => ./diagnostics
+	github.com/daniellepelley/benzene-go/gcpfunctions v0.1.0 => ./gcpfunctions
 	github.com/daniellepelley/benzene-go/gcppubsubclient v0.1.0 => ./gcppubsubclient
 	github.com/daniellepelley/benzene-go/grpcbinding v0.1.0 => ./grpcbinding
 	github.com/daniellepelley/benzene-go/kafka v0.1.0 => ./kafka

@@ -360,22 +360,10 @@ zero-dependency items remain queued and buildable without any dependency decisio
 
 Per `CLAUDE.md`: no third-party dependency without asking first. These are real, valuable
 extensions, but each needs an explicit yes on a specific dependency before starting, not a
-unilateral add:
+unilateral add. (Several once-listed here have since been approved and shipped, each in its own
+module - see `PARITY.md`: `gcppubsubclient` Pub/Sub outbound, `azurecosmos` self-hosted Cosmos
+change-feed worker, and `gcpfunctions` Cloud Functions Gen2.)
 
-- **Pub/Sub outbound (publish) client.** The inbound half is done with zero dependencies
-  (`gcppubsub` - a push subscription is just HTTPS in). Publishing needs OAuth-signed API
-  calls, i.e. `cloud.google.com/go/pubsub` - the same shape as `awssqs`/`awssns`'s outbound
-  clients, and like them it would live in its own module so the dependency doesn't spread.
-- **Cosmos DB Change Feed self-hosted worker** (`Benzene.Azure.CosmosDb`, the non-Functions
-  flavor). The Azure Functions trigger flavor already ships zero-dependency (`azurefunctions.
-  CosmosHandler` - the Functions host owns the change-feed connection). A self-hosted worker
-  instead opens the change feed itself and owns the lease container + checkpoint hook, which
-  needs the Cosmos SDK (`github.com/Azure/azure-sdk-for-go/sdk/data/azcosmos`) - the same
-  own-module shape as `awssqs`/`awssns`'s outbound clients.
-- **Google Cloud Functions Gen2 (buildpack) deploy**, as opposed to the Cloud Run path already
-  documented in `examples/gcp-cloudrun-helloworld` - needs
-  `github.com/GoogleCloudPlatform/functions-framework-go`, the one Google-specific dependency
-  this port has avoided by targeting Cloud Run instead.
 - **Disk-space health check** (`Benzene.HealthChecks.Disk`). Not a dependency decision but a
   portability one: .NET's `DriveInfo.AvailableFreeSpace` has no portable Go equivalent - free space
   comes from `syscall.Statfs` on unix and `GetDiskFreeSpaceEx` on Windows, so a faithful port needs

@@ -46,13 +46,13 @@ jobs:
           fi
 
       - name: go vet
-        run: go vet ./... ./awssqs/... ./awslambdaclient/... ./awsstepfunctions/... ./azureservicebus/... ./azureeventgrid/... ./azureeventhub/... ./azurequeuestorage/... ./gcppubsubclient/... ./rabbitmq/... ./awssns/... ./awseventbridge/... ./kafka/... ./diagnostics/... ./grpcbinding/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/...
+        run: go vet ./... ./awssqs/... ./awslambdaclient/... ./awsstepfunctions/... ./azureservicebus/... ./azureeventgrid/... ./azureeventhub/... ./azurequeuestorage/... ./azurecosmos/... ./gcpfunctions/... ./gcppubsubclient/... ./rabbitmq/... ./awssns/... ./awseventbridge/... ./kafka/... ./diagnostics/... ./grpcbinding/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/...
 
       - name: go build
-        run: go build ./... ./awssqs/... ./awslambdaclient/... ./awsstepfunctions/... ./azureservicebus/... ./azureeventgrid/... ./azureeventhub/... ./azurequeuestorage/... ./gcppubsubclient/... ./rabbitmq/... ./awssns/... ./awseventbridge/... ./kafka/... ./diagnostics/... ./grpcbinding/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/...
+        run: go build ./... ./awssqs/... ./awslambdaclient/... ./awsstepfunctions/... ./azureservicebus/... ./azureeventgrid/... ./azureeventhub/... ./azurequeuestorage/... ./azurecosmos/... ./gcpfunctions/... ./gcppubsubclient/... ./rabbitmq/... ./awssns/... ./awseventbridge/... ./kafka/... ./diagnostics/... ./grpcbinding/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/...
 
       - name: go test
-        run: go test ./... ./awssqs/... ./awslambdaclient/... ./awsstepfunctions/... ./azureservicebus/... ./azureeventgrid/... ./azureeventhub/... ./azurequeuestorage/... ./gcppubsubclient/... ./rabbitmq/... ./awssns/... ./awseventbridge/... ./kafka/... ./diagnostics/... ./grpcbinding/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/... -race -cover
+        run: go test ./... ./awssqs/... ./awslambdaclient/... ./awsstepfunctions/... ./azureservicebus/... ./azureeventgrid/... ./azureeventhub/... ./azurequeuestorage/... ./azurecosmos/... ./gcpfunctions/... ./gcppubsubclient/... ./rabbitmq/... ./awssns/... ./awseventbridge/... ./kafka/... ./diagnostics/... ./grpcbinding/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/... -race -cover
 
       - name: cross-compile cloud examples
         run: |

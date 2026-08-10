@@ -83,9 +83,16 @@ func RegisterCloudEvent(name string, builder *benzene.ApplicationBuilder, opts .
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	functions.CloudEvent(name, func(ctx context.Context, e cloudevents.Event) error {
+	functions.CloudEvent(name, cloudEventHandler(builder, cfg))
+}
+
+// cloudEventHandler builds the framework handler RegisterCloudEvent registers: it binds builder
+// and the resolved config to dispatchCloudEvent. Factored out so the binding is testable without
+// registering with (or being invoked by) the live framework.
+func cloudEventHandler(builder *benzene.ApplicationBuilder, cfg cloudEventConfig) func(context.Context, cloudevents.Event) error {
+	return func(ctx context.Context, e cloudevents.Event) error {
 		return dispatchCloudEvent(ctx, e, builder, cfg.names, cfg.onFailure)
-	})
+	}
 }
 
 // dispatchCloudEvent is the conversion-and-dispatch core RegisterCloudEvent installs, factored
