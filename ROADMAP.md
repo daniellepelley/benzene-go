@@ -78,6 +78,15 @@ delivery order - just the current honest picture, kept up to date as things land
   cooperative `context.WithTimeout` (a ctx-ignoring handler can't be forcibly stopped in Go, so the
   wait is bounded once it returns; ctx-honoring handlers are bounded as expected), presenting the
   timed-out outcome as a `StatusTimeout` result without a goroutine or an `ic.Result` race.
+- `circuitbreaker` - circuit-breaker middleware (**own module**, needs `github.com/sony/gobreaker/v2`),
+  the library-backed slice of `Benzene.Resilience.Polly` and the sibling of the zero-dep `resilience`
+  package. `Middleware[T](cb, opts...)` runs the downstream pipeline inside a `gobreaker.CircuitBreaker`
+  so a run of failures trips the breaker and subsequent messages fail fast without touching the
+  handler. Because the Go router funnels application failures onto `ic.Result` (not a Go error), a
+  configurable `WithTripOnResult` decides what counts as a failure the breaker records
+  (`TripUnsuccessful` default / `TripOnStatus(...)`), and the fast-fail short-circuit is presented as
+  a `service-unavailable` result (overridable via `WithOpenStatus`/`WithOpenMessages`). Its own module
+  so the `gobreaker` dependency doesn't spread - the same shape as `awssqs`/`awssns`.
 - `auth` - authentication/authorization building block (zero dependencies), matching
   `Benzene.Auth.Core`+`.Basic`: a `Principal` (name/roles/claims) threaded on the context,
   `BasicAuth(validate, realm)` RFC 7617 authentication middleware (validates via an app-supplied
@@ -379,12 +388,15 @@ change-feed worker, and `gcpfunctions` Cloud Functions Gen2.)
   which needs the Azure SDK (`azblob` / `azeventhubs`) - the same own-module shape as `awssqs`. Not
   started, and deliberately not faked: this repo has no way to verify a fabricated custom-handler
   shape for them (see the no-fabricated-deployment-config rule).
-- **Richer resilience** (circuit breaker, bulkhead, hedging, fallback), the equivalent of
-  `Benzene.Resilience.Polly`. The retry piece **and** a plain cooperative timeout already ship
-  zero-dependency (`resilience.Middleware` + `resilience.Timeout` - see Done), since neither needs a
-  library. The rest is what .NET delegates to Polly; the Go analogue would wrap a library such as
-  `github.com/sony/gobreaker` (or `failsafe-go`) behind the same middleware surface, in its own
-  module so the dependency doesn't spread - the same shape as `awssqs`/`awssns`.
+- **Richer resilience** (bulkhead, hedging, fallback), the remaining equivalent of
+  `Benzene.Resilience.Polly`. The retry piece **and** a plain cooperative timeout ship
+  zero-dependency in the root `resilience` package (`resilience.Middleware` + `resilience.Timeout` -
+  see Done), and the **circuit breaker** now ships in its own `circuitbreaker` module (see Done),
+  wrapping `github.com/sony/gobreaker/v2` behind the same middleware surface. Bulkhead/hedging/
+  fallback are what remains of what .NET delegates to Polly; bulkhead and fallback are expressible
+  zero-dependency (a semaphore, a second pipeline) and belong in the root `resilience` package,
+  while anything needing a library follows the `circuitbreaker` shape - its own module so the
+  dependency doesn't spread.
 
 ## Deliberately out of scope (not a "later" - a "no, and here's why")
 

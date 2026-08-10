@@ -12,6 +12,7 @@ use (
 	./azureeventhub
 	./azurequeuestorage
 	./azureservicebus
+	./circuitbreaker
 	./diagnostics
 	./examples/aws-sns-helloworld
 	./examples/aws-sqs-helloworld
@@ -39,6 +40,7 @@ replace (
 	github.com/daniellepelley/benzene-go/azureeventhub v0.1.0 => ./azureeventhub
 	github.com/daniellepelley/benzene-go/azurequeuestorage v0.1.0 => ./azurequeuestorage
 	github.com/daniellepelley/benzene-go/azureservicebus v0.1.0 => ./azureservicebus
+	github.com/daniellepelley/benzene-go/circuitbreaker v0.1.0 => ./circuitbreaker
 	github.com/daniellepelley/benzene-go/diagnostics v0.1.0 => ./diagnostics
 	github.com/daniellepelley/benzene-go/gcpfunctions v0.1.0 => ./gcpfunctions
 	github.com/daniellepelley/benzene-go/gcppubsubclient v0.1.0 => ./gcppubsubclient

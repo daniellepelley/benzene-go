@@ -99,6 +99,20 @@ alongside the shared spec.
   uncapped - AWS "full jitter", `FullJitter` helper provided), a context-cancellable sleep, and an
   injectable `WithSleep` for tests. Re-invokes the whole downstream pipeline, so place it above
   idempotent outbound/port calls, never on an inbound step that already wrote a response.
+- `circuitbreaker/` - circuit-breaker middleware, in its **own Go module** (needs
+  `github.com/sony/gobreaker/v2`), the library-backed slice of `Benzene.Resilience.Polly` that
+  complements the zero-dep `resilience` (retry + timeout). `Middleware[T](cb, opts...)` runs the
+  downstream inside `cb.Execute`: a genuine `next()` error counts as a breaker failure and propagates;
+  a successful `next()` whose `ic.Result` is unsuccessful (per `WithTripOnResult`, default
+  `TripUnsuccessful`; `TripOnStatus(...)` provided) counts as a breaker failure but returns nil with
+  the result left on `ic.Result`; when the breaker is open/half-open-rejecting it **short-circuits
+  without invoking the downstream** to a fail-fast status (`WithOpenStatus`, default
+  `service-unavailable`; `WithOpenMessages`). Open-state is detected via a `called` flag captured in
+  the `Execute` closure (robust against a downstream that itself returns gobreaker's sentinel errors),
+  and the fail-fast result is built once at wiring time (a success-class open status panics at
+  construction, never per-request). Its own module because gobreaker is third-party; the circuit
+  breaker is the piece that genuinely wants a library (retry + a plain deadline do not - those stay
+  zero-dep in `resilience`). Bulkhead/hedging/fallback remain deferred.
 - `auth/` - authentication/authorization building block, matching `Benzene.Auth.Core`+`.Basic`
   (zero-dep). Go has no `ClaimsPrincipal`, so a `Principal` (name/roles/claims) is a plain value
   threaded on the context (`ContextWithPrincipal`/`PrincipalFromContext`). `BasicAuth(validate,
@@ -546,7 +560,8 @@ alongside the shared spec.
 
 - Run `gofmt -w .` before every commit; CI fails on unformatted files.
 - Run `go vet ./... ./awssqs/... ./awslambdaclient/... ./awsstepfunctions/... ./azureservicebus/...
-  ./azureeventhub/... ./azureeventgrid/... ./azurequeuestorage/... ./azurecosmos/... ./gcpfunctions/...
+  ./azureeventhub/... ./azureeventgrid/... ./azurequeuestorage/... ./azurecosmos/... ./circuitbreaker/...
+  ./gcpfunctions/...
   ./gcppubsubclient/... ./rabbitmq/... ./awssns/... ./awseventbridge/... ./kafka/... ./diagnostics/...
   ./grpcbinding/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/... && go build
   (same paths) &&
