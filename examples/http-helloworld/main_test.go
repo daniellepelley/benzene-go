@@ -42,7 +42,7 @@ func TestGreetEndpoint_UsesOverriddenGreeter(t *testing.T) {
 	host := benzenetest.NewHost(newApp(),
 		benzenetest.WithRoutes(routes()...),
 		benzenetest.WithServices(func(b *benzene.ApplicationBuilder) {
-			benzene.AddSingleton(b.Container, greeterKey, func(_ *benzene.Scope) Greeter { return fixedGreeter{} })
+			benzene.AddSingleton(b.Container, greeterKey{}, func(_ *benzene.Scope) Greeter { return fixedGreeter{} })
 		}))
 
 	resp := benzenetest.SendHTTP(t, host, http.MethodPost, "/greet", greetRequest{Name: "World"}, nil)

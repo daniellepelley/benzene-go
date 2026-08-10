@@ -45,7 +45,9 @@ func (g *recordingGreeter) Greet(name string) string {
 	return greeting
 }
 
-const greeterKey = "greeter"
+// greeterKey is the typed DI key for the Greeter dependency - a struct key can't collide with
+// another package's key, unlike a bare string (see helloworld's main.go for the rationale).
+type greeterKey struct{}
 
 // greetTopic is both the Benzene topic and (per the kafka package's one-Kafka-topic-per-Benzene-topic
 // mapping) the Kafka topic name the consumer subscribes to and the client publishes to.
@@ -70,7 +72,7 @@ func greetHandler(ctx context.Context, req greetRequest) benzene.Result[greetRes
 	if !ok {
 		return benzene.UnexpectedError[greetResponse]("no DI scope on context")
 	}
-	greeter := benzene.GetService[Greeter](scope, greeterKey)
+	greeter := benzene.GetService[Greeter](scope, greeterKey{})
 	return benzene.Ok(greetResponse{Greeting: greeter.Greet(req.Name)})
 }
 
@@ -79,7 +81,7 @@ func newApp() benzene.App[struct{}] {
 	return benzene.App[struct{}]{
 		GetConfiguration: func() struct{} { return struct{}{} },
 		ConfigureServices: func(registry *benzene.Registry, container *benzene.Container, _ struct{}) {
-			benzene.AddSingleton(container, greeterKey, func(_ *benzene.Scope) Greeter { return &recordingGreeter{} })
+			benzene.AddSingleton(container, greeterKey{}, func(_ *benzene.Scope) Greeter { return &recordingGreeter{} })
 			if err := benzene.Register(registry, benzene.NewTopic(greetTopic), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
 				log.Fatalf("register greet handler: %v", err)
 			}

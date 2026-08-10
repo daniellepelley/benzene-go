@@ -197,9 +197,9 @@ func Middleware(checks []Check, aliases ...string) benzene.Middleware
 
 ```go
 checks := []healthcheck.Check{
-    healthcheck.CheckFunc{CheckName: "memory", Fn: func(context.Context) healthcheck.CheckResult {
+    healthcheck.NamedCheck("memory", func(context.Context) healthcheck.CheckResult {
         return healthcheck.CheckResult{Status: healthcheck.StatusOk, Type: "memory"}
-    }},
+    }),
 }
 
 builder.UsePipeline(benzene.NewPipeline(
@@ -208,7 +208,7 @@ builder.UsePipeline(benzene.NewPipeline(
 ))
 ```
 
-A `Check` is any type with `Name() string` and `Check(ctx) CheckResult`; `healthcheck.CheckFunc`
+A `Check` is any type with `Name() string` and `Check(ctx) CheckResult`; `healthcheck.NamedCheck`
 adapts a name + plain function when you don't need a dedicated type. Each check reports one of
 `healthcheck.StatusOk`, `StatusWarning`, or `StatusFailed`. A healthy report becomes `benzene.Ok`
 (HTTP 200); any failed check flips the aggregate to `ServiceUnavailable` (HTTP 503) while still

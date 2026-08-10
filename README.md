@@ -51,8 +51,12 @@ func main() {
 }
 ```
 
-See `examples/helloworld/` for a complete version of this with dependency injection, a health
-check, and both HTTP entry points wired through the three-phase `App` lifecycle.
+This Quickstart wires the `ApplicationBuilder` directly, which is the shortest thing that runs.
+A real service usually wraps that wiring in the three-phase `App[TConfig]` lifecycle
+(`GetConfiguration` → `ConfigureServices` → `Configure`) instead — `App.Run()` produces the very
+same `ApplicationBuilder`, just with a place for configuration and dependency registration to live.
+See `examples/helloworld/` for the complete version with dependency injection, a health check, and
+both HTTP entry points wired through that lifecycle.
 
 ## Scaffold a new service
 

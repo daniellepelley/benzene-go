@@ -51,7 +51,9 @@ func (tracingGreeter) Greet(ctx context.Context, name string) string {
 // tracerName identifies this example's own instrumentation (the child span) to the tracer provider.
 const tracerName = "github.com/daniellepelley/benzene-go/examples/opentelemetry-helloworld"
 
-const greeterKey = "greeter"
+// greeterKey is the typed DI key for the Greeter dependency - a struct key can't collide with
+// another package's key, unlike a bare string (see helloworld's main.go for the rationale).
+type greeterKey struct{}
 
 type greetRequest struct {
 	Name string `json:"name"`
@@ -72,7 +74,7 @@ func greetHandler(ctx context.Context, req greetRequest) benzene.Result[greetRes
 	if !ok {
 		return benzene.UnexpectedError[greetResponse]("no DI scope on context")
 	}
-	greeter := benzene.GetService[Greeter](scope, greeterKey)
+	greeter := benzene.GetService[Greeter](scope, greeterKey{})
 	return benzene.Ok(greetResponse{Greeting: greeter.Greet(ctx, req.Name)})
 }
 
@@ -83,16 +85,16 @@ func newApp(opts ...diagnostics.Option) benzene.App[struct{}] {
 	return benzene.App[struct{}]{
 		GetConfiguration: func() struct{} { return struct{}{} },
 		ConfigureServices: func(registry *benzene.Registry, container *benzene.Container, _ struct{}) {
-			benzene.AddSingleton(container, greeterKey, func(_ *benzene.Scope) Greeter { return tracingGreeter{} })
+			benzene.AddSingleton(container, greeterKey{}, func(_ *benzene.Scope) Greeter { return tracingGreeter{} })
 			if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
 				log.Fatalf("register greet handler: %v", err)
 			}
 		},
 		Configure: func(builder *benzene.ApplicationBuilder, _ struct{}) {
 			checks := []healthcheck.Check{
-				healthcheck.CheckFunc{CheckName: "memory", Fn: func(context.Context) healthcheck.CheckResult {
+				healthcheck.NamedCheck("memory", func(context.Context) healthcheck.CheckResult {
 					return healthcheck.CheckResult{Status: healthcheck.StatusOk, Type: "memory"}
-				}},
+				}),
 			}
 			builder.UsePipeline(benzene.NewPipeline(
 				diagnostics.Middleware(opts...),

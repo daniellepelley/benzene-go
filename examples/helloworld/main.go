@@ -37,7 +37,10 @@ func (c *inMemoryGreetingCounter) Increment() int {
 	return c.n
 }
 
-const greetingCounterKey = "greeting-counter"
+// greetingCounterKey is a typed DI key: an unexported zero-size struct used as the container
+// key. A struct key can't collide with another package's key the way a bare string could, and
+// the compiler catches a typo - the idiom the design notes recommend over a stringly-typed key.
+type greetingCounterKey struct{}
 
 type greetRequest struct {
 	Name string `json:"name"`
@@ -61,7 +64,7 @@ func greetHandler(ctx context.Context, req greetRequest) benzene.Result[greetRes
 	if !ok {
 		return benzene.UnexpectedError[greetResponse]("no DI scope on context")
 	}
-	counter := benzene.GetService[GreetingCounter](scope, greetingCounterKey)
+	counter := benzene.GetService[GreetingCounter](scope, greetingCounterKey{})
 
 	return benzene.Ok(greetResponse{
 		Greeting: "Hello, " + req.Name + "!",
@@ -77,7 +80,7 @@ func newApp() benzene.App[struct{}] {
 	return benzene.App[struct{}]{
 		GetConfiguration: func() struct{} { return struct{}{} },
 		ConfigureServices: func(registry *benzene.Registry, container *benzene.Container, _ struct{}) {
-			benzene.AddSingleton(container, greetingCounterKey, func(_ *benzene.Scope) GreetingCounter {
+			benzene.AddSingleton(container, greetingCounterKey{}, func(_ *benzene.Scope) GreetingCounter {
 				return &inMemoryGreetingCounter{}
 			})
 			if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
@@ -86,9 +89,9 @@ func newApp() benzene.App[struct{}] {
 		},
 		Configure: func(builder *benzene.ApplicationBuilder, _ struct{}) {
 			checks := []healthcheck.Check{
-				healthcheck.CheckFunc{CheckName: "memory", Fn: func(context.Context) healthcheck.CheckResult {
+				healthcheck.NamedCheck("memory", func(context.Context) healthcheck.CheckResult {
 					return healthcheck.CheckResult{Status: healthcheck.StatusOk, Type: "memory"}
-				}},
+				}),
 			}
 			builder.UsePipeline(benzene.NewPipeline(
 				healthcheck.Middleware(checks),

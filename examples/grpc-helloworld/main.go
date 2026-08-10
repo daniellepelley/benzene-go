@@ -40,7 +40,9 @@ type politeGreeter struct{}
 
 func (politeGreeter) Greet(name string) string { return "Hello, " + name + ", this is Benzene" }
 
-const greeterKey = "greeter"
+// greeterKey is the typed DI key for the Greeter dependency - a struct key can't collide with
+// another package's key, unlike a bare string (see helloworld's main.go for the rationale).
+type greeterKey struct{}
 
 // greetMethod is the full gRPC method path (generated code's own routing key). It is the topic
 // key on the server Route and the target method on the client ClientRoute - the two ends agree on
@@ -65,7 +67,7 @@ func greetHandler(ctx context.Context, req greetRequest) benzene.Result[greetRes
 	if !ok {
 		return benzene.UnexpectedError[greetResponse]("no DI scope on context")
 	}
-	greeter := benzene.GetService[Greeter](scope, greeterKey)
+	greeter := benzene.GetService[Greeter](scope, greeterKey{})
 	return benzene.Ok(greetResponse{Greeting: greeter.Greet(req.Name)})
 }
 
@@ -75,7 +77,7 @@ func newApp() benzene.App[struct{}] {
 	return benzene.App[struct{}]{
 		GetConfiguration: func() struct{} { return struct{}{} },
 		ConfigureServices: func(registry *benzene.Registry, container *benzene.Container, _ struct{}) {
-			benzene.AddSingleton(container, greeterKey, func(_ *benzene.Scope) Greeter { return politeGreeter{} })
+			benzene.AddSingleton(container, greeterKey{}, func(_ *benzene.Scope) Greeter { return politeGreeter{} })
 			if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
 				log.Fatalf("register greet handler: %v", err)
 			}
