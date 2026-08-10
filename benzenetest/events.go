@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/wire"
@@ -257,6 +258,102 @@ func jsonToAttributeValue(t TB, raw json.RawMessage) any {
 	default:
 		return map[string]any{"N": string(trimmed)}
 	}
+}
+
+// NewKinesisStreamEvent builds the Lambda Kinesis stream event-source-mapping payload for one
+// record - the shape awskinesis.Handler parses. The topic it resolves to is the stream name (e.g.
+// "orders"); payload is the plain record body, which this marshals and base64-encodes into the
+// record's data field (as Lambda delivers it) so the binding decodes it back for the handler.
+// sequenceNumber identifies the record in a batch-item-failure report.
+func NewKinesisStreamEvent(t TB, streamName, sequenceNumber string, payload any) json.RawMessage {
+	t.Helper()
+	arn := "arn:aws:kinesis:us-east-1:000000000000:stream/" + streamName
+	event := map[string]any{
+		"Records": []map[string]any{{
+			"eventID":        "evt-" + sequenceNumber,
+			"eventName":      "aws:kinesis:record",
+			"eventSource":    "aws:kinesis",
+			"eventSourceARN": arn,
+			"awsRegion":      "us-east-1",
+			"kinesis": map[string]any{
+				"partitionKey":   "pk-" + sequenceNumber,
+				"sequenceNumber": sequenceNumber,
+				"data":           base64.StdEncoding.EncodeToString([]byte(marshalBody(t, payload))),
+			},
+		}},
+	}
+	return mustMarshal(t, event)
+}
+
+// NewS3Event builds the Lambda S3 event-notification payload for one record - the shape
+// awss3.Handler parses. The topic it resolves to is "{bucket}:{eventName}" (e.g.
+// "uploads:ObjectCreated:Put"); the object metadata (key, a fixed size and etag) becomes the body.
+func NewS3Event(t TB, bucket, eventName, key string) json.RawMessage {
+	t.Helper()
+	event := map[string]any{
+		"Records": []map[string]any{{
+			"eventSource": "aws:s3",
+			"eventName":   eventName,
+			"awsRegion":   "us-east-1",
+			"s3": map[string]any{
+				"bucket": map[string]any{"name": bucket},
+				"object": map[string]any{"key": key, "size": 42, "eTag": "test-etag"},
+			},
+		}},
+	}
+	return mustMarshal(t, event)
+}
+
+// NewTimerEvent builds the Azure Functions custom-handler invocation payload for a Timer trigger
+// tick: the tick's schedule info under Data[dataName] - the shape azurefunctions.TimerHandler
+// parses. tick is the schedule info (e.g. a struct with IsPastDue), or nil for a handler that
+// ignores it. It is delivered as a JSON string wrapping the object, the same double-encoding the
+// Functions host applies to a trigger input (and that NewCosmosChangeFeedEvent reproduces).
+func NewTimerEvent(t TB, dataName string, tick any) json.RawMessage {
+	t.Helper()
+	event := map[string]any{
+		"Data": map[string]json.RawMessage{dataName: mustMarshal(t, marshalBody(t, tick))},
+	}
+	return mustMarshal(t, event)
+}
+
+// NewKafkaEvent builds the Lambda MSK/Kafka event-source-mapping payload for one record - the shape
+// awskafka.Handler parses. The Benzene topic it resolves to is the Kafka topic; payload is the plain
+// record body, marshaled and base64-encoded into the record's value (as Lambda delivers it). The
+// record is filed under the "{topic}-{partition}" group key at the given offset.
+func NewKafkaEvent(t TB, topic string, partition int, offset int64, payload any) json.RawMessage {
+	t.Helper()
+	event := map[string]any{
+		"eventSource": "aws:kafka",
+		"records": map[string]any{
+			fmt.Sprintf("%s-%d", topic, partition): []map[string]any{{
+				"topic":     topic,
+				"partition": partition,
+				"offset":    offset,
+				"timestamp": 1700000000000,
+				"value":     base64.StdEncoding.EncodeToString([]byte(marshalBody(t, payload))),
+			}},
+		},
+	}
+	return mustMarshal(t, event)
+}
+
+// NewEventGridEvent builds the Azure Functions custom-handler invocation payload for an Event Grid
+// trigger: one Event Grid-schema event under Data[dataName] - the shape azurefunctions.EventGridHandler
+// parses. eventType is the event's type (which the binding resolves as the Benzene topic); payload is
+// the event's data. The event is delivered as a JSON object (the way the host forwards a structured
+// trigger input); the binding also accepts a string-wrapped object, exercised in its own tests.
+func NewEventGridEvent(t TB, dataName, eventType string, payload any) json.RawMessage {
+	t.Helper()
+	event := map[string]any{
+		"id":        "evt-1",
+		"eventType": eventType,
+		"subject":   eventType,
+		"topic":     "/subscriptions/test/resourceGroups/test",
+		"eventTime": "2024-01-01T00:00:00Z",
+		"data":      json.RawMessage(marshalBody(t, payload)),
+	}
+	return mustMarshal(t, map[string]any{"Data": map[string]any{dataName: event}})
 }
 
 func mustMarshal(t TB, v any) json.RawMessage {

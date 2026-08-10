@@ -15,10 +15,8 @@ type senderKey struct{}
 // capturing it at handler-construction time - is what makes the egress edge swappable in a
 // test: benzenetest's WithServices calls RegisterSender again with a
 // benzenetest.FakeMessageSender, and last-registration-wins replaces the real client without
-// touching the handler or the pipeline.
-//
-// This mirrors the reference harness's `client.RegisterMessageSender(builder, fake)` seam: the
-// outbound client is a registered dependency like any other, faked at the container edge.
+// touching the handler or the pipeline - the outbound client is a registered dependency like any
+// other, faked at the container edge.
 func RegisterSender(container *benzene.Container, sender Sender) {
 	benzene.AddSingleton(container, senderKey{}, func(*benzene.Scope) Sender { return sender })
 }

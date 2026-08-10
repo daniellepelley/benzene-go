@@ -1,0 +1,42 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  benzene-go aws-kinesis-helloworld example - a Kinesis `orders` data stream, and a consumer Lambda
+  triggered by that stream's records.
+
+Globals:
+  Function:
+    Timeout: 5
+    MemorySize: 128
+    Architectures:
+      - arm64
+
+Resources:
+  OrdersStream:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      StreamModeDetails:
+        StreamMode: ON_DEMAND
+
+  ConsumerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      Events:
+        OrdersStreamEvent:
+          Type: Kinesis
+          Properties:
+            Stream: !GetAtt OrdersStream.Arn
+            StartingPosition: LATEST
+            BatchSize: 100
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+    Metadata:
+      DockerTag: aws-kinesis-helloworld
+      DockerContext: ../..
+      Dockerfile: examples/aws-kinesis-helloworld/Dockerfile
+
+Outputs:
+  OrdersStreamName:
+    Description: The Kinesis stream to PutRecord orders onto (each record is delivered to the consumer)
+    Value: !Ref OrdersStream

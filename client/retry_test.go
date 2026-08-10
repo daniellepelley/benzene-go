@@ -25,9 +25,9 @@ func countingSender(statuses ...benzene.Status) (Sender, func() int) {
 
 func noBackoff(int) time.Duration { return 0 }
 
-func TestRetryDecorator_SuccessOnFirstAttemptDoesNotRetry(t *testing.T) {
+func TestWithRetry_SuccessOnFirstAttemptDoesNotRetry(t *testing.T) {
 	sender, calls := countingSender(benzene.StatusOk)
-	decorated := RetryDecorator(sender, RetryOptions{Backoff: noBackoff})
+	decorated := WithRetry(sender, RetryOptions{Backoff: noBackoff})
 
 	result := decorated.Send(context.Background(), benzene.NewTopic("t"), nil, nil)
 
@@ -39,9 +39,9 @@ func TestRetryDecorator_SuccessOnFirstAttemptDoesNotRetry(t *testing.T) {
 	}
 }
 
-func TestRetryDecorator_RetriesUntilSuccess(t *testing.T) {
+func TestWithRetry_RetriesUntilSuccess(t *testing.T) {
 	sender, calls := countingSender(benzene.StatusServiceUnavailable, benzene.StatusServiceUnavailable, benzene.StatusOk)
-	decorated := RetryDecorator(sender, RetryOptions{MaxAttempts: 5, Backoff: noBackoff})
+	decorated := WithRetry(sender, RetryOptions{MaxAttempts: 5, Backoff: noBackoff})
 
 	result := decorated.Send(context.Background(), benzene.NewTopic("t"), nil, nil)
 
@@ -53,9 +53,9 @@ func TestRetryDecorator_RetriesUntilSuccess(t *testing.T) {
 	}
 }
 
-func TestRetryDecorator_ExhaustsAllAttemptsReturnsFinalFailure(t *testing.T) {
+func TestWithRetry_ExhaustsAllAttemptsReturnsFinalFailure(t *testing.T) {
 	sender, calls := countingSender(benzene.StatusServiceUnavailable)
-	decorated := RetryDecorator(sender, RetryOptions{MaxAttempts: 3, Backoff: noBackoff})
+	decorated := WithRetry(sender, RetryOptions{MaxAttempts: 3, Backoff: noBackoff})
 
 	result := decorated.Send(context.Background(), benzene.NewTopic("t"), nil, nil)
 
@@ -67,9 +67,9 @@ func TestRetryDecorator_ExhaustsAllAttemptsReturnsFinalFailure(t *testing.T) {
 	}
 }
 
-func TestRetryDecorator_NonRetryableStatusIsNotRetried(t *testing.T) {
+func TestWithRetry_NonRetryableStatusIsNotRetried(t *testing.T) {
 	sender, calls := countingSender(benzene.StatusBadRequest)
-	decorated := RetryDecorator(sender, RetryOptions{MaxAttempts: 5, Backoff: noBackoff})
+	decorated := WithRetry(sender, RetryOptions{MaxAttempts: 5, Backoff: noBackoff})
 
 	result := decorated.Send(context.Background(), benzene.NewTopic("t"), nil, nil)
 
@@ -81,11 +81,11 @@ func TestRetryDecorator_NonRetryableStatusIsNotRetried(t *testing.T) {
 	}
 }
 
-func TestRetryDecorator_TooManyRequestsIsRetriedByDefault(t *testing.T) {
+func TestWithRetry_TooManyRequestsIsRetriedByDefault(t *testing.T) {
 	// too-many-requests is transient and retry-safe per wire-contracts.md §3 ("back off and
 	// retry"), so the default predicate retries it just like service-unavailable.
 	sender, calls := countingSender(benzene.StatusTooManyRequests, benzene.StatusOk)
-	decorated := RetryDecorator(sender, RetryOptions{MaxAttempts: 5, Backoff: noBackoff})
+	decorated := WithRetry(sender, RetryOptions{MaxAttempts: 5, Backoff: noBackoff})
 
 	result := decorated.Send(context.Background(), benzene.NewTopic("t"), nil, nil)
 
@@ -97,11 +97,11 @@ func TestRetryDecorator_TooManyRequestsIsRetriedByDefault(t *testing.T) {
 	}
 }
 
-func TestRetryDecorator_TimeoutIsNotRetriedByDefault(t *testing.T) {
+func TestWithRetry_TimeoutIsNotRetriedByDefault(t *testing.T) {
 	// timeout is transient but not retry-safe by default (the operation may have been applied),
 	// so the default predicate does not retry it.
 	sender, calls := countingSender(benzene.StatusTimeout)
-	decorated := RetryDecorator(sender, RetryOptions{MaxAttempts: 5, Backoff: noBackoff})
+	decorated := WithRetry(sender, RetryOptions{MaxAttempts: 5, Backoff: noBackoff})
 
 	if result := decorated.Send(context.Background(), benzene.NewTopic("t"), nil, nil); result.Status != benzene.StatusTimeout {
 		t.Errorf("Status = %q, want %q", result.Status, benzene.StatusTimeout)
@@ -111,10 +111,10 @@ func TestRetryDecorator_TimeoutIsNotRetriedByDefault(t *testing.T) {
 	}
 }
 
-func TestRetryDecorator_CustomShouldRetryPredicateIsHonoured(t *testing.T) {
+func TestWithRetry_CustomShouldRetryPredicateIsHonoured(t *testing.T) {
 	// A caller whose operation is idempotent can opt timeout in via a custom predicate.
 	sender, calls := countingSender(benzene.StatusTimeout, benzene.StatusOk)
-	decorated := RetryDecorator(sender, RetryOptions{
+	decorated := WithRetry(sender, RetryOptions{
 		MaxAttempts: 5,
 		Backoff:     noBackoff,
 		ShouldRetry: func(s benzene.Status) bool { return s == benzene.StatusTimeout },
@@ -128,9 +128,9 @@ func TestRetryDecorator_CustomShouldRetryPredicateIsHonoured(t *testing.T) {
 	}
 }
 
-func TestRetryDecorator_DefaultMaxAttemptsIsThree(t *testing.T) {
+func TestWithRetry_DefaultMaxAttemptsIsThree(t *testing.T) {
 	sender, calls := countingSender(benzene.StatusServiceUnavailable)
-	decorated := RetryDecorator(sender, RetryOptions{Backoff: noBackoff})
+	decorated := WithRetry(sender, RetryOptions{Backoff: noBackoff})
 
 	decorated.Send(context.Background(), benzene.NewTopic("t"), nil, nil)
 
@@ -139,9 +139,9 @@ func TestRetryDecorator_DefaultMaxAttemptsIsThree(t *testing.T) {
 	}
 }
 
-func TestRetryDecorator_NegativeMaxAttemptsUsesDefault(t *testing.T) {
+func TestWithRetry_NegativeMaxAttemptsUsesDefault(t *testing.T) {
 	sender, calls := countingSender(benzene.StatusServiceUnavailable)
-	decorated := RetryDecorator(sender, RetryOptions{MaxAttempts: -1, Backoff: noBackoff})
+	decorated := WithRetry(sender, RetryOptions{MaxAttempts: -1, Backoff: noBackoff})
 
 	decorated.Send(context.Background(), benzene.NewTopic("t"), nil, nil)
 
@@ -150,9 +150,9 @@ func TestRetryDecorator_NegativeMaxAttemptsUsesDefault(t *testing.T) {
 	}
 }
 
-func TestRetryDecorator_ContextCancelledDuringBackoffReturnsEarly(t *testing.T) {
+func TestWithRetry_ContextCancelledDuringBackoffReturnsEarly(t *testing.T) {
 	sender, calls := countingSender(benzene.StatusServiceUnavailable)
-	decorated := RetryDecorator(sender, RetryOptions{MaxAttempts: 10, Backoff: func(int) time.Duration { return time.Hour }})
+	decorated := WithRetry(sender, RetryOptions{MaxAttempts: 10, Backoff: func(int) time.Duration { return time.Hour }})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan benzene.Result[json.RawMessage], 1)
@@ -170,17 +170,17 @@ func TestRetryDecorator_ContextCancelledDuringBackoffReturnsEarly(t *testing.T) 
 			t.Errorf("Status = %q, want %q", result.Status, benzene.StatusServiceUnavailable)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("RetryDecorator did not return promptly after context cancellation")
+		t.Fatal("WithRetry did not return promptly after context cancellation")
 	}
 	if calls() != 1 {
 		t.Errorf("calls = %d, want 1 - cancellation during backoff should prevent a second attempt", calls())
 	}
 }
 
-func TestRetryDecorator_NilBackoffUsesDefault(t *testing.T) {
+func TestWithRetry_NilBackoffUsesDefault(t *testing.T) {
 	sender, calls := countingSender(benzene.StatusServiceUnavailable, benzene.StatusOk)
 	start := time.Now()
-	decorated := RetryDecorator(sender, RetryOptions{MaxAttempts: 2})
+	decorated := WithRetry(sender, RetryOptions{MaxAttempts: 2})
 
 	decorated.Send(context.Background(), benzene.NewTopic("t"), nil, nil)
 

@@ -1,0 +1,52 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  benzene-go aws-kafka-helloworld example - a consumer Lambda triggered by records on an `orders`
+  Kafka topic, via an Amazon MSK event source mapping.
+
+# Unlike aws-kinesis-helloworld, this template does NOT create the message source. An MSK cluster
+# needs a VPC, subnets, security groups, and broker provisioning - too much to stand up (and verify)
+# inline - so the cluster is a prerequisite you pass in by ARN. Point MskClusterArn at an existing
+# MSK cluster; the mapping consumes the `orders` topic on it. (For a self-managed Kafka cluster the
+# event is `Type: SelfManagedKafka` with `KafkaBootstrapServers` instead - see the README.)
+
+Parameters:
+  MskClusterArn:
+    Type: String
+    Description: ARN of an existing Amazon MSK cluster whose `orders` topic this Lambda consumes.
+
+Globals:
+  Function:
+    Timeout: 5
+    MemorySize: 128
+    Architectures:
+      - arm64
+
+Resources:
+  ConsumerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      Events:
+        OrdersTopicEvent:
+          Type: MSK
+          Properties:
+            Stream: !Ref MskClusterArn
+            Topics:
+              - orders
+            StartingPosition: LATEST
+            # Required for AWS to READ the {partition, offset} batchItemFailures the binding returns.
+            # Without it, AWS ignores the response body and treats the whole invocation as all-or-
+            # nothing - so a single failed record would be silently committed past (matches the
+            # Kinesis example, and Benzene.Aws.Lambda.Kafka's documented KafkaBatchFailureMode).
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+    Metadata:
+      DockerTag: aws-kafka-helloworld
+      DockerContext: ../..
+      Dockerfile: examples/aws-kafka-helloworld/Dockerfile
+
+Outputs:
+  ConsumerFunctionName:
+    Description: The consumer Lambda triggered by records on the MSK cluster's `orders` topic
+    Value: !Ref ConsumerFunction

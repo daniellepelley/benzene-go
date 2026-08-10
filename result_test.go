@@ -78,7 +78,7 @@ func TestSuccessConstructors(t *testing.T) {
 		wantStatus Status
 	}{
 		{"Ok", Ok(greeting{}), StatusOk},
-		{"CreatedResult", CreatedResult(greeting{}), StatusCreated},
+		{"Created", Created(greeting{}), StatusCreated},
 		{"Accepted", Accepted(greeting{}), StatusAccepted},
 		{"Updated", Updated(greeting{}), StatusUpdated},
 		{"Deleted", Deleted(greeting{}), StatusDeleted},

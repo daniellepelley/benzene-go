@@ -26,6 +26,17 @@ This is a multi-module repo (see `go.work`):
 | `github.com/daniellepelley/benzene-go/awssqs` | `awssqs/` | Needs `aws-sdk-go-v2/service/sqs` - the *only* reason a package gets split out |
 | `github.com/daniellepelley/benzene-go/awssns` | `awssns/` | Needs `aws-sdk-go-v2/service/sns` - same reason, same isolation pattern |
 | `github.com/daniellepelley/benzene-go/awseventbridge` | `awseventbridge/` | Needs `aws-sdk-go-v2/service/eventbridge` - same isolation pattern |
+| `github.com/daniellepelley/benzene-go/awslambdaclient` | `awslambdaclient/` | Needs `aws-sdk-go-v2/service/lambda` - outbound Lambda-invoke client, same isolation pattern |
+| `github.com/daniellepelley/benzene-go/awsstepfunctions` | `awsstepfunctions/` | Needs `aws-sdk-go-v2/service/sfn` - outbound Step Functions client, same isolation pattern |
+| `github.com/daniellepelley/benzene-go/azureservicebus` | `azureservicebus/` | Needs `azure-sdk-for-go/.../azservicebus` - outbound client + self-hosted worker |
+| `github.com/daniellepelley/benzene-go/azureeventhub` | `azureeventhub/` | Needs `azure-sdk-for-go/.../azeventhubs/v2` - outbound producer + consumer (caller-owned checkpoint) |
+| `github.com/daniellepelley/benzene-go/azurecosmos` | `azurecosmos/` | Needs `azure-sdk-for-go/.../data/azcosmos` - self-hosted Cosmos DB Change Feed worker |
+| `github.com/daniellepelley/benzene-go/circuitbreaker` | `circuitbreaker/` | Needs `sony/gobreaker/v2` - circuit-breaker middleware (the library-backed slice of Benzene.Resilience.Polly) |
+| `github.com/daniellepelley/benzene-go/azureeventgrid` | `azureeventgrid/` | Needs `azure-sdk-for-go/.../eventgrid/azeventgrid` - outbound CloudEvents publisher |
+| `github.com/daniellepelley/benzene-go/azurequeuestorage` | `azurequeuestorage/` | Needs `azure-sdk-for-go/.../storage/azqueue` - outbound enqueue client |
+| `github.com/daniellepelley/benzene-go/gcpfunctions` | `gcpfunctions/` | Needs `functions-framework-go` + `cloudevents/sdk-go/v2` - Cloud Functions Gen2 HTTP + CloudEvent binding |
+| `github.com/daniellepelley/benzene-go/gcppubsubclient` | `gcppubsubclient/` | Needs `cloud.google.com/go/pubsub` (requires **go 1.25**) - outbound Pub/Sub publish client |
+| `github.com/daniellepelley/benzene-go/rabbitmq` | `rabbitmq/` | Needs `rabbitmq/amqp091-go` - self-hosted consumer worker + outbound publish client |
 | `github.com/daniellepelley/benzene-go/kafka` | `kafka/` | Needs `segmentio/kafka-go` (a broker wire protocol isn't hand-rollable) - same isolation pattern |
 | `github.com/daniellepelley/benzene-go/grpcbinding` | `grpcbinding/` | Needs `google.golang.org/grpc` (Go has no gRPC in the standard library) + `google.golang.org/protobuf` (proto3-JSON bridging) - same isolation pattern |
 | `github.com/daniellepelley/benzene-go/diagnostics` | `diagnostics/` | Needs `go.opentelemetry.io/otel` (the OTel API - the SDK stays the application's) - same isolation pattern |

@@ -72,7 +72,7 @@ func TestClient_Send_PreservesPreciseStatusViaTrailer(t *testing.T) {
 	// inferring Ok from a bare OK code.
 	registry := benzene.NewRegistry()
 	handler := func(_ context.Context, req greetRequest) benzene.Result[greetResponse] {
-		return benzene.CreatedResult(greetResponse{Greeting: "Hello, " + req.Name + "!"})
+		return benzene.Created(greetResponse{Greeting: "Hello, " + req.Name + "!"})
 	}
 	if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](handler)); err != nil {
 		t.Fatalf("Register() error = %v", err)

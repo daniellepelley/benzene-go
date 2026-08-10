@@ -13,7 +13,7 @@ import (
 // decorator writes on the way out - the one string that carries trace continuity across a hop.
 const headerTraceparent = "traceparent"
 
-// TraceContextDecorator wraps next so an outbound Send propagates the current invocation's mesh
+// WithTraceContext wraps next so an outbound Send propagates the current invocation's mesh
 // trace as a W3C `traceparent` header. It is the outbound half of trace-bindings.md §2's third
 // cross-cutting client behavior ("correlation ID injection, trace context, retry") - the direct
 // counterpart to this package's inbound TraceMiddleware, and it lives here rather than in `client`
@@ -24,7 +24,7 @@ const headerTraceparent = "traceparent"
 // present, sets `traceparent` to that span's value - this invocation as the downstream call's
 // parent - which is exactly what lets a collector derive who-calls-whom across services without
 // anyone declaring an edge (see Span.Traceparent). Compose it over any transport's outbound client
-// alongside client.CorrelationDecorator / client.RetryDecorator; httpclient.Client and every
+// alongside client.WithCorrelationID / client.WithRetry; httpclient.Client and every
 // binding's Client satisfy client.Sender.
 //
 // Degradation is the package rule: with no trace middleware installed (no span on the context) the
@@ -32,13 +32,13 @@ const headerTraceparent = "traceparent"
 // continuity, never the request.
 //
 // When a span IS present it always wins: any `traceparent` already in the outbound headers is
-// replaced (matched case-insensitively). This is deliberately UNLIKE CorrelationDecorator - a
+// replaced (matched case-insensitively). This is deliberately UNLIKE WithCorrelationID - a
 // correlation id propagates unchanged down a chain, but a traceparent must re-parent at every hop.
 // The case that makes this load-bearing: a handler that forwards its own inbound headers onto the
 // outbound call carries the *inbound* traceparent; leaving it would parent the downstream call to
 // this service's caller and hide this service from the derived who-calls-whom graph - the exact
 // thing the decorator exists to get right.
-func TraceContextDecorator(next client.Sender) client.Sender {
+func WithTraceContext(next client.Sender) client.Sender {
 	return client.SenderFunc(func(ctx context.Context, topic benzene.Topic, headers map[string]string, message []byte) benzene.Result[json.RawMessage] {
 		return next.Send(ctx, topic, withTraceparent(ctx, headers), message)
 	})

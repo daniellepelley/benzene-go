@@ -48,7 +48,193 @@ alongside the shared spec.
   `httpclient`, and `conformance`.
 - `httpbinding/` - the HTTP transport binding (native + envelope-over-HTTP entry points).
 - `httpclient/` - the HTTP outbound client.
-- `healthcheck/` - reserved-topic health-check interception middleware.
+- `healthcheck/` - reserved-topic health-check interception middleware, plus ready-made `Check`
+  implementations for probing a dependency's reachability: `TCPCheck` (opens a TCP connection -
+  `Benzene.HealthChecks.Tcp`) and `HTTPPingCheck` (GETs a URL, healthy only on 200, credentials
+  stripped from the reported URL - `Benzene.HealthChecks.Http`). Both zero-dep (net/net-http) and
+  report a coarse error *category*, never the raw message (which can leak infra detail to an
+  unauthenticated health caller). `DiskSpaceCheck` (`disk.go` - `Benzene.HealthChecks.Disk`) is the
+  host self-check on free space: `WithMinimumFreeBytes`/`WithWarningFreeBytes` gate health on it (else
+  it is pure telemetry), reporting freeBytes/totalBytes/usedPercent. Also zero-dep, but the one
+  platform call (`diskUsage`) sits behind build tags - `disk_unix.go` (`syscall.Statfs`),
+  `disk_windows.go` (`GetDiskFreeSpaceExW` via a lazy kernel32 binding, no `x/sys`), `disk_other.go`
+  (an `unsupported-platform` fallback so it still compiles on js/wasm/plan9). The unix path runs in
+  CI; the windows path is cross-compile-verified only (no live Windows), noted in its doc.
+- `validation/` - request-validation building block: `Validated(validator, handler)` wraps a
+  handler so an invalid request short-circuits to a `validation-error` result before the handler
+  runs. The Go-idiomatic form of `Benzene.DataAnnotations`/`Benzene.FluentValidation`'s
+  `ValidationMiddleware` - those are pipeline middleware because .NET's message-handler pipeline is
+  typed; this port's pipeline is type-erased until the router dispatches, so validation composes at
+  the **typed handler** as a plain wrapper at registration (no reflection, no struct-tag DSL, no
+  dependency - the service writes an ordinary `Validate` function).
+- `idempotency/` - de-duplicates redelivered messages on an at-least-once transport, matching
+  `Benzene.Idempotency`. A **pipeline middleware** (unlike `validation`: it keys on a header, which
+  is on the type-erased `InvocationContext`, so it needs no typed request): `Middleware(store, key)`
+  atomically claims the key in a pluggable `Store` and runs the handler only the first time - a
+  completed duplicate short-circuits to `ignored` (ack), an in-progress one to `conflict` (retry),
+  and the winning attempt records `Complete` on success / `Release` on failure so a failure is never
+  permanently suppressed. `InMemoryStore` (thread-safe, with **separate** short in-progress-lease and
+  long completed-dedup TTLs so a crashed worker's key frees quickly instead of stalling every
+  redelivery, + injectable clock) is the zero-dep default; a shared store (Redis) would be a separate
+  module and must mirror that two-window design. Settlement runs on a cancellation-detached context;
+  a store outage fails open.
+- `ratelimiting/` - best-effort per-instance rate limiting, matching `Benzene.RateLimiting`. A
+  pipeline `Middleware(limiter, cost)` that acquires each message's permit cost from a `Limiter`
+  without queuing and short-circuits a rejected message to `too-many-requests`; the lease is held
+  across the handler so a concurrency-style limiter releases correctly. The .NET package uses
+  `System.Threading.RateLimiting` (a dependency); this keeps the root module dependency-free with a
+  `Limiter` interface + a standard-library thread-safe `TokenBucket` default (an app plugs a
+  different algorithm - e.g. a `golang.org/x/time/rate` adapter - behind the interface). Per-instance
+  only: a fleet of N instances admits up to N× the rate - authoritative limiting belongs at the
+  gateway.
+- `resilience/` - retry + timeout + bulkhead + fallback middleware, matching most of
+  `Benzene.Resilience`(`.Polly`) (zero-dep; only the circuit breaker lives in its own
+  `circuitbreaker` module for its library, and hedging is still to do). `Middleware(opts...)`
+  re-invokes the downstream pipeline with exponential backoff. `Timeout(d)` bounds the downstream to
+  a deadline via a **cooperative** `context.WithTimeout` (a handler that ignores its context can't be
+  forcibly stopped in Go, so the wait is bounded only once such a handler returns; ctx-honoring
+  handlers are bounded as expected), presenting the timed-out outcome as a `StatusTimeout` result -
+  it calls `next` synchronously and never races on `ic.Result`, and a parent-ctx cancellation is not
+  relabeled as a timeout. Because the Go router funnels application failures onto `ic.Result` (not a Go error),
+  retry has two triggers mirroring .NET's `shouldRetry`/`shouldRetryContext`: `WithRetryOnError`
+  (default: any error except context cancellation) for a `next()` error, and `WithRetryOnResult`
+  (default: never - the lever services actually set: `RetryUnsuccessful` or
+  `RetryOnStatus(...)`) for an unsuccessful `ic.Result`. Backoff is `sleep = jitter(min(maxDelay,
+  initialDelay*factor^attempt))` with the cap/jitter on the sleep only (the growth curve stays
+  uncapped - AWS "full jitter", `FullJitter` helper provided), a context-cancellable sleep, and an
+  injectable `WithSleep` for tests. Re-invokes the whole downstream pipeline, so place it above
+  idempotent outbound/port calls, never on an inbound step that already wrote a response.
+  `Bulkhead(maxConcurrency, opts...)` caps concurrent invocations with a Polly-shaped two-permit
+  semaphore (an execution pool + an admission pool of `maxConcurrency+WithMaxQueue`): past the cap it
+  sheds load fast to a `too-many-requests` result (short-circuit-as-Result, like `ratelimiting`), and
+  `WithMaxQueue(n)` lets up to n callers wait for a slot, each still context-bounded (a cancelled
+  queued caller surfaces its cancellation and never takes a slot). `Fallback(fn, opts...)` substitutes
+  a degraded `ic.Result` when an attempt is deemed a failure - a `next()` error (default: any except
+  context cancellation) or an unsuccessful result (default `FallbackUnsuccessful`, narrow with
+  `FallbackOnStatus(...)`) - the `fn` receives the cause and sets the substitute; place it above retry
+  (fires after retries exhaust) or above a circuit breaker (degrades the open-state fail-fast to a
+  cached response). Bulkhead and fallback share retry's `*Unsuccessful`/`*OnStatus` trigger vocabulary
+  so the four compose predictably.
+- `circuitbreaker/` - circuit-breaker middleware, in its **own Go module** (needs
+  `github.com/sony/gobreaker/v2`), the library-backed slice of `Benzene.Resilience.Polly` that
+  complements the zero-dep `resilience` (retry + timeout). `Middleware[T](cb, opts...)` runs the
+  downstream inside `cb.Execute`: a genuine `next()` error counts as a breaker failure and propagates;
+  a successful `next()` whose `ic.Result` is unsuccessful (per `WithTripOnResult`, default
+  `TripUnsuccessful`; `TripOnStatus(...)` provided) counts as a breaker failure but returns nil with
+  the result left on `ic.Result`; when the breaker is open/half-open-rejecting it **short-circuits
+  without invoking the downstream** to a fail-fast status (`WithOpenStatus`, default
+  `service-unavailable`; `WithOpenMessages`). Open-state is detected via a `called` flag captured in
+  the `Execute` closure (robust against a downstream that itself returns gobreaker's sentinel errors),
+  and the fail-fast result is built once at wiring time (a success-class open status panics at
+  construction, never per-request). Its own module because gobreaker is third-party; the circuit
+  breaker is the piece that genuinely wants a library (retry + a plain deadline do not - those stay
+  zero-dep in `resilience`). Bulkhead/hedging/fallback remain deferred.
+- `auth/` - authentication/authorization building block, matching `Benzene.Auth.Core`+`.Basic`+
+  `.OAuth2` (zero-dep). Go has no `ClaimsPrincipal`, so a `Principal` (name/roles/claims) is a plain
+  value threaded on the context (`ContextWithPrincipal`/`PrincipalFromContext`). `BasicAuth(validate,
+  realm)` is the RFC 7617 authentication middleware (reads `Authorization: Basic`, validates via a
+  `BasicValidator` the app supplies - no default, no hardcoded-credential footgun - and either sets
+  the principal + calls next, or short-circuits `unauthorized` with a `WWW-Authenticate` challenge;
+  splits on the first `:` so a password may contain one). `BearerAuth(validator, opts...)` (`bearer.go`) is the OAuth2/JWT bearer-token
+  authentication middleware, the Go form of `Benzene.Auth.OAuth2`'s `OAuth2BearerMiddleware`: reads
+  `Authorization: Bearer <jwt>`, validates via a `Validator` (`jwt.go`) and either sets the principal
+  from the token's claims or short-circuits `unauthorized` with a **generic** message (never an
+  oracle - the real reason only reaches the `WithOnError` hook, matching the .NET package's
+  log-server-side-only stance). The security-critical JWT validation is pure standard library
+  (`crypto/hmac`/`rsa`/`ecdsa` + `encoding/base64`/`json`), so the package stays zero-dependency where
+  .NET leans on `Microsoft.IdentityModel`: `Validator` enforces an explicit **algorithm allowlist**
+  (RFC 8725 §3.1 - `none` and any off-list `alg` rejected before a key is even resolved), verifies the
+  signature for HS/RS/ES 256/384/512 with a strongly-typed `VerificationKey` per family (so an RS
+  token can't be verified against an HMAC secret - the classic confusion), and checks iss/aud/exp/nbf/
+  iat with clock skew. Keys come from `StaticKeys` (pinned HMAC/RSA/ECDSA keys, `jwtkeys.go`) or a
+  `JWKSResolver` (`jwks.go` - fetches + caches a JWKS over HTTPS, refetches on an unknown `kid` for
+  rotation, throttled; `NewJWKSFromAuthority` does OIDC `.well-known` discovery). `Authorize(predicate)`
+  / `RequireRole(role)` / `RequireScope(scope)` are the authorization middleware (`forbidden` when the
+  principal is present but not permitted, `unauthorized` when absent); `GrantedScopes` merges the
+  `scope`/`scp` claim conventions. Header-based, so authentication is for HTTP-fronted pipelines.
+- `cache/` - caching building block, matching the essence of `Benzene.Cache.Core` (zero-dep): a
+  pluggable `Store` (Get/Set/Delete with per-entry TTL) + a generic read-through helper
+  `GetOrLoad[T](ctx, store, key, ttl, load)` (the Go form of `CacheEntry.LazyLoad` - returns the
+  cached value or calls `load` once and caches it). `InMemoryStore` (thread-safe, TTL + injectable
+  clock) is the default; a shared store (Redis) implements the same interface in its own module.
+  Degrades safely: a store read error is a miss, a write error is ignored, a `load` error is
+  returned and not cached. Caching is a handler-level concern, so it's a helper, not a middleware.
+- `saga/` - in-code saga orchestrator, matching `Benzene.Saga` (zero-dep, in-process): `New(stages)`
+  runs `NewStage(steps)` in order; steps within a stage run concurrently; each `NewStep[T](forward,
+  compensate)` pairs a forward action producing a `T` result with an optional compensation. On the
+  first stage failure it compensates every completed effect in **reverse (LIFO) order** and returns a
+  `Result` (`OutcomeSucceeded`/`RolledBack`/`PartiallyRolledBack`, `CompensationFailures` for orphaned
+  effects). A `SagaContext` threads a stage's published results to later stages (`Set`/`Get[T]`, typed
+  or keyed). `Run(ctx)` is the zero-overhead default; `RunWith(ctx, RunOptions{...})` adds an
+  observability `StateStore` (`InMemoryStateStore`; records progress, does **not** resume a crashed
+  saga) and a `RetryPolicy` (re-runs only a **clean** rollback, never a partial one, with exponential
+  backoff). Go methods can't be generic, so the .NET fluent builder becomes free constructors and
+  `Set`/`Get[T]` free functions; type-keyed context uses `reflect.TypeFor` at set/get time (off the
+  message dispatch path, like `registry.go`). **In-process only, no durable crash-resume** - steps are
+  closures that can't be rehydrated; for that, use Step Functions/Durable Functions/Temporal.
+- `responseevents/` - the *response-as-event* pattern, matching `Benzene.ResponseEvents` (zero-dep):
+  a pipeline `Middleware(publisher, mappings, opts...)` that, after the handler runs, republishes the
+  handler's response payload as a follow-up event on a fire-and-forget transport (an SQS
+  `order:create` handler's payload published as `order:created`). Each `Mapping` resolves
+  `(sourceTopic, ic.Result) -> *Publication` and every matching mapping publishes (fan-out); `Map`
+  (source->event, default: successful + payload, with `When`/`Project` options) and `CrudConvention`
+  (`X:create`+`created` -> `X:created`) are the ready-made rules, plus custom `Mapping`
+  implementations. `Publisher` is the outbound port; `NewSenderPublisher(client.Sender)` is the
+  default (marshals + sends, an unsuccessful send is a publish failure). `PublishFailureMode`:
+  `FailMessage` (default) replaces the result with `unexpected-error` and stops (nack/redeliver -
+  handlers must be idempotent); `LogAndContinue` keeps the result and continues, with an optional
+  `OnPublishError` hook (no forced logger dependency). The .NET package's AsyncAPI/spec-catalog and
+  build-time unmapped-response diagnostic are **not** ported (Go has no spec generator here; mesh
+  descriptor derivation is the introspection path); `Mapping.Covers` is kept for a future diagnostic.
+  Reflect-free nil-payload check (dispatch path), so a *typed*-nil pointer payload publishes JSON
+  `null` - a documented divergence from .NET's reference-null semantics.
+- `clienthealthcheck/` - the consumer-side dependency health check, matching
+  `Benzene.Clients.HealthChecks` (zero-dep). A `ServiceCheck` (a `healthcheck.Check`) probes a
+  downstream Benzene provider through an outbound `client.Sender` and reports the **contract
+  relationship**, not the provider's transient health: unreachable / serves no descriptor ->
+  `failed`, reachable+matching contract hash -> `ok`, reachable+drifted hash -> `warning` (degraded,
+  does **not** flip the caller's health), reachable without drift-detection configured -> `ok`
+  (reachability only), reachable+hashless descriptor -> `ok` (drift unassessable, noted in `Data`).
+  Both reachability **and** the hash come from the provider's reserved `benzene:mesh` descriptor,
+  which `mesh.Middleware` serves with a success status *unconditionally* (health-independent) - so a
+  reachable-but-unhealthy provider still reads as reachable. Deliberately **not** the
+  `benzene:healthcheck` topic: that returns a failure status when the provider's own checks fail, and
+  the envelope transport drops a failure body (`httpclient.toResult`), so a healthcheck probe could
+  not tell "unhealthy" from "down" - and coupling this contract check to the provider's transient
+  health is exactly what it must not do. .NET bakes the hash into a generated client; Go has none, so
+  `WithExpectedContractHash` supplies the consumer's built-against hash (a documented divergence
+  driven by the transport + the fact that Go's *descriptor*, not its health response, carries the
+  hash). Register it on a **contracts** diagnostic surface, not a liveness/readiness probe (it calls
+  a downstream). Its own package (not in `healthcheck`) so `healthcheck` keeps its net/net-http-only
+  footprint - this check additionally needs `client` + `mesh`.
+- `cloudserviceprobe/` - the external, black-box conformance checker for the Cloud Service Profile
+  (`docs/specification/cloud-service-profile.md` §2, §5), matching `Benzene.CloudService.Probe`
+  (zero-dep: `net/http`+`encoding/json`+`crypto/rand`). `Run(ctx, client, baseURL, opts...)` hits a
+  running service over HTTP and returns a **tri-state** `Report` (`Satisfied`/`NotSatisfied`/
+  `Inconclusive`) for R1-R8 - never a bool, never a panic, never an error (unreachability and shape
+  mismatches are verdicts). R8 (trace propagation) and half of R6 (register/heartbeat) are
+  structurally unobservable from one service and stay `Inconclusive` by design; R7 goes
+  `Inconclusive` the moment non-default paths are used. Deliberately **independent** of
+  `httpbinding`/`healthcheck`/`mesh` - it keeps its own `/benzene/*` path constants and parses the
+  wire shapes itself, because the profile is language-neutral and this tool must audit ANY Benzene
+  Cloud Service over HTTP (a non-Go port included); do not couple it back to this port's models.
+- `cloudservice/` - the one-call Cloud Service Profile *builder* (zero-dep), the assembly counterpart
+  of `cloudserviceprobe` and the Go form of `Benzene.CloudService`. `New(name, registry, opts...)`
+  wires the **synchronous HTTP surface** of the profile from a registry: R1 (hosted pipeline), R2
+  (registry handlers via `RouterMiddleware`), R3 (`healthcheck.Middleware` + a `HealthPath` route),
+  R4 (`EnvelopeHandler` at `EnvelopePath`, `/benzene/invoke`), R5 (`mesh.SpecHandler` at `SpecPath`),
+  R7 (default `/benzene/*` paths), plus `mesh.Describe`+`mesh.Middleware` for the `benzene:mesh`
+  descriptor - all over one `ApplicationBuilder`. Pipeline order is descriptor/health interception
+  before `RouterMiddleware` so a reserved topic never falls through. Returns the `http.Handler`, the
+  `Descriptor`, the `Builder`, and a **wiring** `ProfileReport` - a full **R1-R8** checklist
+  (`Requirement{ID,Name,Satisfied,Detail}`, `Satisfied()`/`Unsatisfied()`). Crucially it is **honest**:
+  `New` deliberately does not wire R6's outbound feeds (register/heartbeat/traces need a collector +
+  push-exporter lifecycle the app owns) or R8 (trace propagation - `mesh.TraceMiddleware` inbound +
+  the client `TraceContextDecorator` outbound), so `Satisfied()` is **false** for a `New`-only build
+  and `Unsatisfied()` is the exact to-do list to reach full conformance (mirroring .NET's
+  `CloudServiceProfileReport` evaluating all of R1-R8, not just the HTTP surface). `WithoutDescriptor()`
+  additionally drops R5/R6 per §4 exposure control. It composes the existing pieces - a thin assembler;
+  don't reimplement descriptor/health/spec logic here, and don't let the report over-claim conformance.
 - `mesh/` - Phases 1-2 of `docs/design/mesh.md`: service `Descriptor` derived from the
   `Registry` (topics + JSON Schemas derived at startup from the `TReq`/`TRes` types the
   Registry captures at `Register` time, plus the contract `descriptorHash`),
@@ -61,7 +247,25 @@ alongside the shared spec.
   break the service. The `benzene:mesh:*` wire topics and shapes (wire.go) are shared with the
   collector and promoted to the main repo's spec (`docs/specification/mesh.md` there, now
   the normative text; `docs/design/mesh-spec-draft.md` is the historical draft), pinned by
-  the vendored `mesh-*.json` fixtures in `conformance/`.
+  the vendored `mesh-*.json` fixtures in `conformance/`. `SpecHandler(descriptor)` serves the same
+  registry-derived descriptor as the Cloud Service Profile's R5 derived-spec document over a plain
+  GET (mounted at `httpbinding.SpecPath`, `/benzene/spec`) - the profile permits Benzene's own
+  derived format, and R5/R6 are then two surfaces onto the one registry-derived truth (GET spec vs
+  the reserved `benzene:mesh` topic). Opt-in like the descriptor middleware - don't mount it and R5
+  is simply reduced, per the profile's §4 exposure-control rule.
+- `openapi/` - OpenAPI 3.0 document generation (zero-dep), the Go form of `Benzene.Schema.OpenApi`.
+  `Generate(desc, opts...)` turns a `mesh.Descriptor` into an OpenAPI 3.0 document: each registered
+  topic becomes a POST operation whose request body is the topic's request schema and whose
+  responses carry the response schema (200) plus the framework failure vocabulary grouped by the
+  HTTP codes `httpstatus.ToHTTP` maps them to. It **reuses mesh's derived schemas** (the one
+  sanctioned reflection path) rather than deriving its own - the only reshaping is JSON Schema's
+  nullable type-array (`["string","null"]`) into OpenAPI 3.0's `nullable: true`, handled for both
+  the `[]string` (straight from `mesh.Describe`) and `[]any` (JSON-round-tripped) forms. `Handler`
+  serves the doc over a plain GET, the OpenAPI sibling of `mesh.SpecHandler` (R5 is already satisfied
+  by the derived descriptor; this is the richer industry-standard alternative). A documentation view
+  of the message contracts, not a claim every topic is HTTP-routed. **AsyncAPI for event topics is a
+  deliberate follow-up** - the descriptor doesn't classify a topic as request/response vs
+  fire-and-forget, and this port does not fabricate that input.
 - `meshd/` - Phases 3-4 of `docs/design/mesh.md`: the collector - an ordinary Benzene
   service (register/heartbeat/traces/issues ingest + `benzene:mesh:query:*` read models over an
   in-memory store with a bounded trace ring; the `benzene:mesh:issues` feed of mesh.md §4.1
@@ -77,7 +281,17 @@ alongside the shared spec.
   the Functions host forwards invocations over - Azure has no native Go worker): `Handler` for
   HTTP-triggered functions, `QueueHandler` for queue-shaped triggers (Storage Queue, Service
   Bus - failure is a non-2xx outer status, handing the message to the platform's own
-  redelivery/poison-queue machinery), and `CosmosHandler` for the Cosmos DB Change Feed trigger.
+  redelivery/poison-queue machinery), `CosmosHandler` for the Cosmos DB Change Feed trigger,
+  `TimerHandler` for the Timer trigger (a scheduled tick carries no message, so it is fan-in like
+  `CosmosHandler` - the topic is the scheduled job's identity named in code, the body is the tick's
+  schedule info, and the outer 200/500 is for the host's monitoring since a timer has no redelivery),
+  and `EventGridHandler` for the Event Grid trigger (matching `Benzene.Azure.Function.EventGrid`):
+  one event per invocation (the host de-batches), the topic is the event **type** (Event Grid
+  schema `eventType` or CloudEvents 1.0 `type`, told apart by `specversion`), the body is the
+  event's `data`, and headers are the envelope's `id`/`subject`/`source`; a non-success dispatch is
+  outer 500 so Event Grid's own retry + dead-letter machinery takes over (same fire-and-forget
+  outer-200/500 as `QueueHandler`). Event Grid trigger only - the SDK-typed BlobStorage/EventHub
+  triggers are deferred (isolated-worker shapes, see `ROADMAP.md`).
   The change-feed binding is **fan-in, not topic-routed** (core-concepts §3, streaming-shaped):
   the whole delivered batch of changed documents is one pipeline invocation - not one per
   document - dispatched to the topic named in code, whose handler takes the batch as a slice
@@ -89,7 +303,103 @@ alongside the shared spec.
 - `awssqs/` - AWS SQS binding, in **its own Go module** (`awssqs/go.mod`) - one of the packages
   with a third-party dependency (`aws-sdk-go-v2/service/sqs`, needed for the outbound publish
   client; the inbound Lambda-trigger `Handler` is zero-dependency, like `awslambda`). See
-  `RELEASING.md` for the multi-module layout and why.
+  `RELEASING.md` for the multi-module layout and why. Also carries `Consumer` - the **self-hosted
+  SQS poller** (matching `Benzene.Aws.Sqs`'s `SqsConsumer`): a `Run(ctx)` loop that long-polls
+  `ReceiveMessage`, dispatches each message through the pipeline in its own scope, and
+  `DeleteMessageBatch`-deletes ONLY the ones whose dispatch succeeded - a failed message is left to
+  reappear after its visibility timeout and go to SQS's own redrive/DLQ, never deleted unhandled. It
+  is the standalone-compute alternative to the Lambda-trigger `Handler` (a container/EC2 worker that
+  owns its poll loop), depends on a narrow `ReceiveDeleteAPI` for fake-based tests, and backs off on
+  a transient AWS error rather than hot-looping.
+- `awslambdaclient/` - **outbound Lambda-invoke client**, in its **own Go module** (needs
+  `aws-sdk-go-v2/service/lambda`), the Go form of `Benzene.Clients.Aws.Lambda` and the invoking
+  counterpart of the inbound `awslambda` binding. `Client` satisfies `client.Sender`: `Send` invokes
+  a target function with a wire envelope payload. `RequestResponse` (default) parses the target's
+  envelope response back into a `Result` (same `toResult` rules as `httpclient`); `Event`
+  fire-and-forget returns `accepted` without a body; a set `FunctionError` (the target threw) becomes
+  `unexpected-error`, not a mis-parsed success; a transport failure becomes `service-unavailable`.
+  Narrow `InvokeAPI` for fake-based tests.
+- `awsstepfunctions/` - **outbound Step Functions client**, in its **own Go module** (needs
+  `aws-sdk-go-v2/service/sfn`), the Go form of `Benzene.Clients.Aws.StepFunctions`. `Client` satisfies
+  `client.Sender`: `Send` starts a state-machine execution with the wire envelope as the `Input`.
+  Starting is fire-and-forget, so a successful start is `accepted`; a transport failure is
+  `service-unavailable`. An optional `ExecutionName` func derives an idempotent execution name
+  (sanitized to Step Functions' rules, capped at 80 runes), and an `ExecutionAlreadyExists` error on
+  a same-name retry is treated as an idempotent `accepted` (matching .NET's catch), not a failure.
+- `azureservicebus/` - Azure Service Bus binding, in its **own Go module** (needs
+  `azure-sdk-for-go/.../azservicebus`), the Go form of `Benzene.Clients.Azure.ServiceBus` (outbound)
+  + `Benzene.Azure.ServiceBus` (the self-hosted worker). Outbound `Client` (satisfies `client.Sender`)
+  sends one message per publish, topic written as the reserved topic **application property** last so
+  it wins over a stray header, headers as the other string application properties, body verbatim; a
+  successful send is `accepted`, a transport failure `service-unavailable`. Self-hosted `Worker` owns
+  its own receive loop (`Run(ctx)` over a narrow `ReceiverAPI`) - the pull-loop counterpart of .NET's
+  push `ServiceBusProcessor` and the sibling of `awssqs.Consumer`: dispatches each message in its own
+  scope, `CompleteMessage`-completes only the ones whose dispatch succeeded, and settles a failed one
+  per `AckMode` (`AckModeAbandon` default → redeliver; `AckModeDeadLetter` → quarantine). Settlement
+  runs on a cancellation-detached context; `reservedNames` defaults to `builder.ReservedNames`.
+- `azureeventhub/` - Azure Event Hubs binding, in its **own Go module** (needs
+  `azure-sdk-for-go/.../azeventhubs/v2`), matching `Benzene.Azure.EventHub`. Outbound `Client`
+  (satisfies `client.Sender`) publishes one event as a batch-of-one (`NewEventDataBatch` →
+  `AddEventData` → `SendEventDataBatch`), topic + headers as the event's application properties. The
+  `Consumer` reads over a narrow `Receiver` interface and hands checkpointing back to a **caller-owned
+  `Checkpoint` hook** (Event Hubs checkpointing needs a blob-store checkpoint store the app owns - the
+  worker deliberately does not implement it, a documented divergence). Topic/header/body resolution
+  matches the Service Bus worker.
+- `azureeventgrid/` - Azure Event Grid binding, in its **own Go module** (needs
+  `azure-sdk-for-go/.../eventgrid/azeventgrid`), matching `Benzene.Clients.Azure.EventGrid`. Outbound
+  CloudEvents `Client` (satisfies `client.Sender`): topic → CloudEvent `Type`, body → `Data` carried
+  as `json.RawMessage` (so a JSON payload rides as JSON, never base64), headers → lowercased CloudEvent
+  extension attributes. A successful publish is `accepted`, a transport failure `service-unavailable`.
+- `azurequeuestorage/` - Azure Queue Storage binding, in its **own Go module** (needs
+  `azure-sdk-for-go/.../storage/azqueue`), matching `Benzene.Clients.Azure.QueueStorage`. Outbound
+  `Client` (satisfies `client.Sender`): `EnqueueMessage` with the **whole `wire.Request` envelope** as
+  the message text (verbatim, not base64) - the same envelope-as-message-body convention the queue
+  workers rehydrate. Successful enqueue → `accepted`, transport failure → `service-unavailable`.
+- `azurecosmos/` - **self-hosted** Azure Cosmos DB Change Feed worker, in its **own Go module** (needs
+  `azure-sdk-for-go/.../data/azcosmos`), matching `Benzene.Azure.CosmosDb` (the non-Functions flavor) -
+  the standalone-compute counterpart of the zero-dep `azurefunctions.CosmosHandler` (where the
+  Functions host owns the feed). A struct-fields + `Validate()` `Worker` (the unified self-hosted-worker
+  convention) reads the change feed over a narrow `ChangeFeedReader` interface (`ReadNext(ctx,
+  continuation, maxItems) (ChangeFeedPage, error)`; a fake tests it, no live Cosmos) and dispatches
+  each page as **fan-in**, exactly like `CosmosHandler`: the whole batch of changed documents is ONE
+  `envelope.DispatchTopicResult` invocation to the code-named `Topic` (body = JSON array, header
+  `cosmos-document-count`), not one per document. Stop-at-batch-failure: an unsuccessful dispatch or a
+  checkpoint error does NOT advance the continuation token, so the batch redelivers. Checkpointing is
+  **caller-owned** (Cosmos needs an app-owned lease container) via a `Checkpoint(ctx, continuation)`
+  hook run on a cancellation-detached context - the same divergence `azureeventhub.Consumer` documents.
+  A `PollInterval` (no Event Hub equivalent) paces empty polls, since a caught-up change-feed read
+  returns immediately rather than blocking. `NewChangeFeedReader` is the live-only SDK adapter
+  (`adapter.go`, uncovered by design).
+- `gcpfunctions/` - Google Cloud **Functions Gen2** inbound binding, in its **own Go module** (needs
+  `GoogleCloudPlatform/functions-framework-go` + `cloudevents/sdk-go/v2`), the Go form of
+  `GoogleCloud.Functions.Http` + `GoogleCloud.Functions.PubSub`. `RegisterHTTP(name, builder, routes)`
+  registers a Gen2 HTTP function serving `httpbinding.Handler` (thin pass-through). `RegisterCloudEvent(
+  name, builder, opts...)` registers a CloudEvent-triggered function (Pub/Sub/Eventarc): it maps the
+  framework's `cloudevents.Event` onto a `wire.Request` by **reusing the root `cloudevents.ToRequest`**
+  (type→topic, data→body, id/source/subject/extensions→`ce-`-prefixed headers) so the mapping is
+  identical to this port's other CloudEvents surface, dispatches, and returns nil on a successful
+  result / an error on an unsuccessful one - so a failure is retried by the platform, never silently
+  dropped (the same outer-retry posture as `azurefunctions.EventGridHandler`). `WithReservedNames`
+  (defaults to `builder.ReservedNames`; drives the no-`type` topic fallback to the reserved extension
+  attribute) and `WithOnFailure`. The core `dispatchCloudEvent` is testable against a hand-built
+  `event.Event`; the `functions.HTTP`/`functions.CloudEvent` registration is the thin live-only glue,
+  pinned by compile-time signature assertions.
+- `gcppubsubclient/` - Google Cloud Pub/Sub **outbound** client, in its **own Go module** (needs
+  `cloud.google.com/go/pubsub`, which requires **go 1.25** - the one module forcing the workspace's
+  go directive and CI `setup-go` to 1.25; the root and every other module still declare 1.24.7, so
+  external consumers of those are unaffected). The invoking counterpart of the inbound `gcppubsub`
+  push `http.Handler`. Interface-driven (`Publisher` narrow interface, `NewTopicPublisher` wraps a
+  concrete `*pubsub.Topic` in `adapter.go`): `Send` publishes with topic + headers as Pub/Sub message
+  **attributes** (empty headers dropped), body as `Data`; a successful publish is `accepted`, a
+  transport failure `service-unavailable`.
+- `rabbitmq/` - RabbitMQ binding, in its **own Go module** (needs `rabbitmq/amqp091-go` - an AMQP
+  broker wire protocol isn't hand-rollable, same reason as `kafka`). Outbound `Client` (satisfies
+  `client.Sender`) publishes with the topic as **both** the routing key and a `"topic"` header, the
+  body as the AMQP body, `Persistent` delivery mode. Self-hosted `Consumer` (over a narrow
+  `DeliverySource` interface) `Ack`s a successfully-dispatched delivery and `Nack`s a failed one,
+  requeuing it exactly once (`!NoRequeue && !delivery.Redelivered`, so a poison message is bounded to
+  one retry, then dropped/dead-lettered by the broker) - the AMQP sibling of `awssqs.Consumer` and the
+  `kafka` worker.
 - `cloudevents/` - CloudEvents 1.0 mapping, zero-dependency: wire envelope <-> CloudEvents
   (`type` <-> topic, `data` <-> body, other attributes <-> `ce-`-prefixed headers - the
   outbound direction only maps `ce-` headers back, documented lossiness), plus an inbound
@@ -110,6 +420,39 @@ alongside the shared spec.
   is **sequential and stops at the first failure**, reporting that record's `SequenceNumber` for
   Lambda to checkpoint and redeliver - deliberately not `awssqs`'s concurrent fan-out. Matches
   `Benzene.Aws.Lambda.DynamoDb`.
+- `awskinesis/` - Kinesis Data Streams inbound binding, zero-dependency in the root module and the
+  direct sibling of `awsdynamodb`: a Lambda `Handler` for a stream event source mapping. Topic is
+  the **stream name** parsed from the record's stream ARN (a Kinesis record has no per-record event
+  type, so the stream itself is the routing key - unlike DynamoDB's `{tableName}:{eventName}`); body
+  is the record's `data` base64-decoded into the raw bytes the producer wrote (typically JSON);
+  headers are `kinesis-`-prefixed metadata (partition key, sequence number, ...). No outbound half
+  (writing to the stream is the publish; the trigger is read-only), so no SDK and no separate module.
+  Same ordered stop-at-first-failure + `SequenceNumber` checkpointing as `awsdynamodb` (AWS reads
+  only the first reported failure for a Kinesis mapping). Matches `Benzene.Aws.Lambda.Kinesis`.
+- `awskafka/` - AWS Lambda MSK/self-managed-Kafka inbound binding, zero-dependency in the root
+  module and DISTINCT from the self-hosted `kafka` module (that one runs its own broker consumer
+  loop needing `segmentio/kafka-go`; this is the zero-dep adapter for AWS's *managed* event source
+  mapping, which delivers records as plain JSON). Topic is the **Kafka topic verbatim** (one Kafka
+  topic = one Benzene topic - like the `kafka` module, unlike Kinesis's stream-name routing); body
+  is the record's `value` base64-decoded into the producer's bytes; headers pass through verbatim
+  (their byte-array wire form UTF-8 decoded), matching the self-hosted binding. Records are grouped
+  by `{topic}-{partition}` and each partition is processed sequentially, **stopping at its first
+  failure** and reporting `{partition, offset}` for that partition's resume - an **object-shaped**
+  `batchItemFailures` identifier (unlike the string identifier of SQS/Kinesis/DynamoDB), so the
+  mapping needs `FunctionResponseTypes: [ReportBatchItemFailures]`. Partitions are independent. No
+  outbound half (producing to Kafka is the publish; the trigger is read-only), so no SDK and no
+  separate module. Matches `Benzene.Aws.Lambda.Kafka`.
+- `awss3/` - S3 event-notification inbound binding, zero-dependency in the root module: a Lambda
+  `Handler` invoked by S3 when an object is created/removed. Topic is `{bucketName}:{eventName}`
+  (bucket-qualified for consistency with `awsdynamodb`/`awskinesis`; the .NET binding routes on the
+  bare event name - the S3 topic is a local routing concern, not a wire contract, so this diverges
+  deliberately); body is the object **metadata** (bucket/key/size/etag - S3 doesn't deliver the
+  object's contents); headers are `s3-`-prefixed. **Failure model differs from the stream siblings**:
+  an S3-to-Lambda notification is an *async* invocation (no batch-item-failure mechanism), so a
+  failed record returns a **Go error** - triggering AWS's async-invoke retry, the same posture as
+  `awssns` - rather than a partial-batch report. This deliberately does NOT mirror the .NET binding's
+  fire-and-forget swallow (which drops a failed event), per this port's no-silent-drop rule; S3 is
+  at-least-once, so handlers must be idempotent. Matches `Benzene.Aws.Lambda.S3`.
 - `awssns/` - AWS SNS binding, in **its own Go module** (`awssns/go.mod`) - same shape and same
   reason as `awssqs` (`aws-sdk-go-v2/service/sns` for the outbound publish client; the inbound
   `Handler`, subscribed directly to an SNS topic, is zero-dependency). Unlike SQS, a direct
@@ -157,16 +500,18 @@ alongside the shared spec.
 - `examples/` - runnable example services: `helloworld` (plain HTTP),
   `mesh-helloworld` (collector + two meshed services, the Phases 1-4 demo), and one
   `<provider>-helloworld` per cloud deployment target (`aws-lambda-helloworld`,
-  `aws-dynamodb-helloworld`, `azure-functions-helloworld`, `gcp-cloudrun-helloworld`,
-  `aws-sqs-helloworld`, `aws-sns-helloworld`, `gcp-pubsub-helloworld`) - each with its own README
-  stating the concrete deploy steps and exactly what was/wasn't verified without live cloud
-  credentials. Plain Cloud Run needs no dedicated package (see `gcp-cloudrun-helloworld/
-  README.md`); `gcppubsub` exists because the Pub/Sub push envelope is a concrete shape
-  `httpbinding` alone can't cover - keep applying that bar to any new platform package.
-  `aws-dynamodb-helloworld` is a consumer-only example in the **root** module (like
-  `aws-lambda-helloworld`), since the `awsdynamodb` binding is itself zero-dependency;
-  `aws-sqs-helloworld` and `aws-sns-helloworld` are each their own module (depends on both the
-  root module and its respective binding - would be a cycle inside either).
+  `aws-dynamodb-helloworld`, `aws-kinesis-helloworld`, `aws-kafka-helloworld`, `aws-s3-helloworld`,
+  `azure-functions-helloworld`,
+  `gcp-cloudrun-helloworld`, `aws-sqs-helloworld`, `aws-sns-helloworld`, `gcp-pubsub-helloworld`) -
+  each with its own README stating the concrete deploy steps and exactly what was/wasn't verified
+  without live cloud credentials. Plain Cloud Run needs no dedicated package (see
+  `gcp-cloudrun-helloworld/README.md`); `gcppubsub` exists because the Pub/Sub push envelope is a
+  concrete shape `httpbinding` alone can't cover - keep applying that bar to any new platform
+  package. `aws-dynamodb-helloworld`, `aws-kinesis-helloworld`, `aws-kafka-helloworld`, and `aws-s3-helloworld` are consumer-only
+  examples in the **root** module (like `aws-lambda-helloworld`), since the `awsdynamodb`/`awskinesis`/`awskafka`/`awss3` bindings are
+  themselves zero-dependency (`aws-kafka-helloworld` targets AWS's *managed* MSK trigger, distinct from the self-hosted
+  `kafka` module); `aws-sqs-helloworld` and `aws-sns-helloworld` are each their own module
+  (depends on both the root module and its respective binding - would be a cycle inside either).
 - `go.work` - ties the root module, `awssqs/`, `awssns/`, `awseventbridge/`, `kafka/`,
   `diagnostics/`, `grpcbinding/`, `examples/aws-sqs-helloworld/`, and
   `examples/aws-sns-helloworld/` together for local development (see `RELEASING.md`). Its
@@ -186,8 +531,9 @@ alongside the shared spec.
   the spec already defines.
 - Read an existing package's pattern (doc comments, error handling, test style) before adding a
   new one - follow it rather than introducing a new convention.
-- Every package's tests are table-driven where the fixture shape allows it, using `t.Run` for
-  subtests. Match this style.
+- Tests are table-driven with `t.Run` subtests where cases share a shape, and named per-scenario
+  test functions where distinct failure paths have distinct setup (both are idiomatic; pick per
+  case). Read an existing package's tests and match its style rather than forcing one form.
 
 ## Conventions
 
@@ -242,10 +588,13 @@ alongside the shared spec.
 ## Workflow expectations
 
 - Run `gofmt -w .` before every commit; CI fails on unformatted files.
-- Run `go vet ./... ./awssqs/... ./awssns/... ./awseventbridge/... ./kafka/...
-  ./diagnostics/... ./grpcbinding/... ./examples/aws-sqs-helloworld/...
-  ./examples/aws-sns-helloworld/... && go build (same paths) && go test (same paths) -race
-  -cover` before considering a task
+- Run `go vet ./... ./awssqs/... ./awslambdaclient/... ./awsstepfunctions/... ./azureservicebus/...
+  ./azureeventhub/... ./azureeventgrid/... ./azurequeuestorage/... ./azurecosmos/... ./circuitbreaker/...
+  ./gcpfunctions/...
+  ./gcppubsubclient/... ./rabbitmq/... ./awssns/... ./awseventbridge/... ./kafka/... ./diagnostics/...
+  ./grpcbinding/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/... && go build
+  (same paths) &&
+  go test (same paths) -race -cover` before considering a task
   complete - `./...` from the root does not cross a nested
   module boundary even with `go.work` present, so the nested modules need their own explicit
   path. Every non-test-only package should sit at 100% coverage, or just under it with the gap

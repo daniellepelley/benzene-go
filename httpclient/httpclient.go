@@ -19,7 +19,7 @@ import (
 )
 
 // Client sends outbound Benzene messages over HTTP as wire-contracts.md envelopes. Client
-// satisfies client.Sender, so it can be wrapped in client.CorrelationDecorator/RetryDecorator
+// satisfies client.Sender, so it can be wrapped in client.WithCorrelationID/WithRetry
 // (or any other Sender decorator) without modification.
 type Client struct {
 	// Endpoint is the full URL of the target service's envelope endpoint (e.g.

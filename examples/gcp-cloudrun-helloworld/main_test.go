@@ -8,6 +8,12 @@ import (
 	"testing"
 )
 
+// These tests deliberately drive the deployed handler through raw net/http + httptest rather than
+// the benzenetest harness, because that IS the point of the Cloud Run example: a plain HTTP server
+// with no benzene-specific binding. examples/helloworld shows the same greet handler tested through
+// the benzenetest harness (SendHTTP), so the two examples together show both paths on purpose - the
+// harness for the transport-parallel story, raw net/http for "Cloud Run is just an http.Handler".
+
 func TestGreetEndpoint_ReturnsGreeting(t *testing.T) {
 	server := httptest.NewServer(newHandler(newApp()))
 	defer server.Close()

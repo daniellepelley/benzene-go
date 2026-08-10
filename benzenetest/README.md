@@ -32,6 +32,31 @@ are identical - that parallelism is the point.
 
 ### The parallel `Send*` set
 
+The `Send*` signatures are **not** all identical, and that is on purpose: each mirrors the real
+shape of its transport, so a test speaks the transport's native contract rather than a lowest-common
+denominator. They fall into four **shape families**, and within each family the signature *is*
+uniform:
+
+- **Queue-shaped** — `(topic, payload, headers)`, response is that transport's ack/nack.
+  `SendEnvelope`, `SendSQS`, `SendSNS`, `SendPubSub`. Routes by a topic attribute; carries Benzene
+  headers.
+- **HTTP-shaped** — `(method, path, payload, headers)`, response is `HTTPResponse`. `SendHTTP`,
+  `SendAPIGateway`, `SendAzureHTTP`. Routes by an HTTP route table (hence `WithRoutes`).
+- **Stream-shaped** — positional stream keys instead of headers (a CDC/stream record has no Benzene
+  header channel), response is a `[]string` (or object) of *failed record identifiers*, matching the
+  partial-batch-failure report the real trigger returns. `SendDynamoDBStream`, `SendKinesisStream`,
+  `SendKafkaEvent`, `SendS3Event`.
+- **Fan-in / host-triggered** — an Azure Functions host envelope `(dataName, path, topic, …)`,
+  response is `HTTPResponse` with the host's checkpoint/redeliver status. `SendAzureQueue`,
+  `SendCosmosChangeFeed`, `SendTimer`, `SendEventGrid`.
+
+So "why does `SendS3Event` take no payload and `SendDynamoDBStream` take no headers?" has a
+one-line answer: S3 delivers object *metadata* not contents, and a DynamoDB stream record carries no
+Benzene header channel. Bending these into one uniform signature would *falsify* the wire contract —
+the exact thing this harness exists to keep honest. The setup around the call
+(`NewHost`/`WithServices`/`WithRoutes`) stays identical across every family; only the `Send*` call
+names the transport.
+
 | Transport | Specialization + dispatch | Native response |
 |-----------|---------------------------|-----------------|
 | Native HTTP (`net/http`) | `benzenetest.SendHTTP(t, host, method, path, payload, headers)` | `HTTPResponse` |
@@ -40,10 +65,15 @@ are identical - that parallelism is the point.
 | AWS SQS | `awssqs.SendSQS(t, host, topic, payload, headers)` | `awssqs.SQSResponse` |
 | AWS SNS | `awssns.SendSNS(t, host, topic, payload, headers)` | `error` |
 | AWS DynamoDB Streams | `benzenetest.SendDynamoDBStream(t, host, eventName, tableName, sequenceNumber, newImage)` | `[]string` (failed sequence numbers) |
+| AWS Kinesis Data Streams | `benzenetest.SendKinesisStream(t, host, streamName, sequenceNumber, payload)` | `[]string` (failed sequence numbers) |
+| AWS Lambda MSK / Kafka | `benzenetest.SendKafkaEvent(t, host, topic, partition, offset, payload)` | `[]string` (failed records as `"{partition}@{offset}"`) |
+| AWS S3 event notification | `benzenetest.SendS3Event(t, host, bucket, eventName, key)` | `error` (nil ok; non-nil triggers async retry) |
 | GCP Pub/Sub | `benzenetest.SendPubSub(t, host, topic, payload, headers)` | `HTTPResponse` (204 ack / 500 nack) |
 | Azure Functions HTTP | `benzenetest.SendAzureHTTP(t, host, method, path, payload, headers)` | `HTTPResponse` |
 | Azure Functions queue | `benzenetest.SendAzureQueue(t, host, dataName, path, topic, payload, headers)` | `HTTPResponse` |
 | Azure Cosmos DB Change Feed | `benzenetest.SendCosmosChangeFeed(t, host, dataName, path, topic, documents)` | `HTTPResponse` (200 checkpoint / 500 redeliver) |
+| Azure Functions Timer | `benzenetest.SendTimer(t, host, dataName, path, topic, tick)` | `HTTPResponse` (200 ok / 500 failed) |
+| Azure Event Grid | `benzenetest.SendEventGrid(t, host, dataName, path, eventType, payload)` | `HTTPResponse` (200 ack / 500 retry) |
 
 `SendSQS`/`SendSNS` live in the `awssqs`/`awssns` modules (which carry the AWS SDK) rather than in
 `benzenetest`, so the neutral package stays free of cloud SDK dependencies; the naming, argument

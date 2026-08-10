@@ -173,6 +173,9 @@ const (
 	EnvelopePath = "/benzene/invoke"
 	// HealthPath is the standard mount for a Route serving the reserved healthcheck topic.
 	HealthPath = "/benzene/health"
+	// SpecPath is the standard mount for a mesh.SpecHandler serving the derived spec document
+	// (the Cloud Service Profile's R5).
+	SpecPath = "/benzene/spec"
 )
 
 // EnvelopeHandler builds an HTTP entry point that speaks the wire-contracts.md §1 envelope

@@ -10,9 +10,9 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 )
 
-// TraceContextDecorator wraps next so an outbound Send carries the current OpenTelemetry span
+// WithTraceContext wraps next so an outbound Send carries the current OpenTelemetry span
 // context as W3C `traceparent` (and `tracestate`) headers - the outbound counterpart to this
-// package's inbound Middleware, and the OTel-path sibling of mesh.TraceContextDecorator. It is
+// package's inbound Middleware, and the OTel-path sibling of mesh.WithTraceContext. It is
 // transport-bindings.md §2's "trace context" client behavior for services observed with OTel
 // rather than the zero-dependency mesh trace feed: the module's Middleware already joins an
 // inbound traceparent and puts the span on the context, and this closes the loop the Middleware
@@ -27,11 +27,11 @@ import (
 // When an active span context IS present it always wins: any W3C trace-context header
 // (traceparent/tracestate) already in the outbound headers is replaced (matched case-
 // insensitively), matching propagation.TraceContext.Inject's own overwrite semantics. This is
-// deliberately UNLIKE CorrelationDecorator - a traceparent must re-parent at every hop, so a
+// deliberately UNLIKE WithCorrelationID - a traceparent must re-parent at every hop, so a
 // handler that forwards its inbound headers (carrying the inbound traceparent) must not leave the
 // downstream call parented to this service's caller. Compose it over any transport's outbound
-// client alongside client.CorrelationDecorator / client.RetryDecorator.
-func TraceContextDecorator(next client.Sender) client.Sender {
+// client alongside client.WithCorrelationID / client.WithRetry.
+func WithTraceContext(next client.Sender) client.Sender {
 	propagator := propagation.TraceContext{}
 	return client.SenderFunc(func(ctx context.Context, topic benzene.Topic, headers map[string]string, message []byte) benzene.Result[json.RawMessage] {
 		return next.Send(ctx, topic, injectTraceContext(propagator, ctx, headers), message)

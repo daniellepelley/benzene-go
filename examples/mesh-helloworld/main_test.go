@@ -33,7 +33,7 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 	defer greeterServer.Close()
 
 	frontdoor := newService("frontdoor", meshdEndpoint, true, func(registry *benzene.Registry) {
-		greeterClient := mesh.TraceContextDecorator(httpclient.NewClient(greeterServer.URL + httpbinding.EnvelopePath))
+		greeterClient := mesh.WithTraceContext(httpclient.NewClient(greeterServer.URL + httpbinding.EnvelopePath))
 		if err := benzene.Register(registry, benzene.NewTopic("welcome"), welcomeHandler(greeterClient)); err != nil {
 			t.Fatalf("register welcome: %v", err)
 		}
@@ -43,7 +43,7 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 
 	// legacy-portal: trace feed only - no descriptor endpoint, no announce, no heartbeat.
 	legacy := newService("legacy-portal", meshdEndpoint, false, func(registry *benzene.Registry) {
-		greeterClient := mesh.TraceContextDecorator(httpclient.NewClient(greeterServer.URL + httpbinding.EnvelopePath))
+		greeterClient := mesh.WithTraceContext(httpclient.NewClient(greeterServer.URL + httpbinding.EnvelopePath))
 		if err := benzene.Register(registry, benzene.NewTopic("legacy:relay"), welcomeHandler(greeterClient)); err != nil {
 			t.Fatalf("register legacy:relay: %v", err)
 		}

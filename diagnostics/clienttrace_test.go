@@ -30,9 +30,9 @@ func ctxWithSpan(t *testing.T) (context.Context, string) {
 	return ctx, span.SpanContext().TraceID().String()
 }
 
-func TestTraceContextDecorator_InjectsTraceparentFromActiveSpan(t *testing.T) {
+func TestWithTraceContext_InjectsTraceparentFromActiveSpan(t *testing.T) {
 	inner := &capturingSender{}
-	sender := TraceContextDecorator(inner)
+	sender := WithTraceContext(inner)
 
 	ctx, traceID := ctxWithSpan(t)
 	result := sender.Send(ctx, benzene.NewTopic("order:create"), map[string]string{"x": "y"}, []byte(`{}`))
@@ -52,9 +52,9 @@ func TestTraceContextDecorator_InjectsTraceparentFromActiveSpan(t *testing.T) {
 	}
 }
 
-func TestTraceContextDecorator_NoSpanContextPassesThrough(t *testing.T) {
+func TestWithTraceContext_NoSpanContextPassesThrough(t *testing.T) {
 	inner := &capturingSender{}
-	sender := TraceContextDecorator(inner)
+	sender := WithTraceContext(inner)
 
 	// No span on the context (no Middleware ran / no SDK span): the propagator injects nothing and
 	// the call still goes through untouched.
@@ -68,13 +68,13 @@ func TestTraceContextDecorator_NoSpanContextPassesThrough(t *testing.T) {
 	}
 }
 
-func TestTraceContextDecorator_ReplacesForwardedTraceparent(t *testing.T) {
+func TestWithTraceContext_ReplacesForwardedTraceparent(t *testing.T) {
 	// A handler forwarding its inbound headers carries the inbound traceparent; the active span
 	// context must still win, so the downstream call is parented to this service, not its caller.
 	for _, key := range []string{"traceparent", "TraceParent"} {
 		t.Run(key, func(t *testing.T) {
 			inner := &capturingSender{}
-			sender := TraceContextDecorator(inner)
+			sender := WithTraceContext(inner)
 
 			ctx, traceID := ctxWithSpan(t)
 			forwarded := "00-abcdefabcdefabcdefabcdefabcdefab-abcdefabcdefabcd-01"
@@ -97,9 +97,9 @@ func TestTraceContextDecorator_ReplacesForwardedTraceparent(t *testing.T) {
 	}
 }
 
-func TestTraceContextDecorator_DoesNotMutateCallerHeaders(t *testing.T) {
+func TestWithTraceContext_DoesNotMutateCallerHeaders(t *testing.T) {
 	inner := &capturingSender{}
-	sender := TraceContextDecorator(inner)
+	sender := WithTraceContext(inner)
 
 	ctx, _ := ctxWithSpan(t)
 	original := map[string]string{"x": "y"}
@@ -111,6 +111,6 @@ func TestTraceContextDecorator_DoesNotMutateCallerHeaders(t *testing.T) {
 }
 
 // Compile-time proof the decorator returns a client.Sender that composes with the other decorators.
-var _ client.Sender = TraceContextDecorator(client.SenderFunc(func(context.Context, benzene.Topic, map[string]string, []byte) benzene.Result[json.RawMessage] {
+var _ client.Sender = WithTraceContext(client.SenderFunc(func(context.Context, benzene.Topic, map[string]string, []byte) benzene.Result[json.RawMessage] {
 	return benzene.Accepted[json.RawMessage](nil)
 }))
