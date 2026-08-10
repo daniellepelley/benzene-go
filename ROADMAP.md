@@ -28,9 +28,13 @@ delivery order - just the current honest picture, kept up to date as things land
   `Benzene.HealthChecks.Http`). Both zero-dependency (net / net/http), and both report a coarse
   error *category* ("timeout"/"connection-error") rather than the raw message, which can carry
   internal hostnames/paths a health-check caller should not see; `HTTPPingCheck` also strips any
-  userinfo from the reported URL so basic-auth credentials do not leak. `Benzene.HealthChecks.Disk`
-  (host free-space self-check) is deferred - Go has no portable free-space API, so it needs
-  platform-specific syscalls behind build tags (see below).
+  userinfo from the reported URL so basic-auth credentials do not leak. `DiskSpaceCheck`
+  (`Benzene.HealthChecks.Disk`) is the host free-space self-check: `WithMinimumFreeBytes` /
+  `WithWarningFreeBytes` gate health on free space (else it is pure telemetry), reporting
+  freeBytes/totalBytes/usedPercent. Also zero-dependency, with the one platform call behind build tags
+  (`syscall.Statfs` on unix; `GetDiskFreeSpaceExW` via a lazy kernel32 binding on windows, no `x/sys`;
+  an `unsupported-platform` fallback elsewhere) - the unix path runs in CI, the windows path is
+  cross-compile-verified only.
 - `clienthealthcheck` - the consumer-side dependency health check (zero dependencies), matching
   `Benzene.Clients.HealthChecks`: a `ServiceCheck` (a `healthcheck.Check`, in its own package so
   `healthcheck` keeps its net-only footprint) probes a downstream Benzene provider's reserved
@@ -378,12 +382,6 @@ unilateral add. (Several once-listed here have since been approved and shipped, 
 module - see `PARITY.md`: `gcppubsubclient` Pub/Sub outbound, `azurecosmos` self-hosted Cosmos
 change-feed worker, and `gcpfunctions` Cloud Functions Gen2.)
 
-- **Disk-space health check** (`Benzene.HealthChecks.Disk`). Not a dependency decision but a
-  portability one: .NET's `DriveInfo.AvailableFreeSpace` has no portable Go equivalent - free space
-  comes from `syscall.Statfs` on unix and `GetDiskFreeSpaceEx` on Windows, so a faithful port needs
-  a small build-tagged file per GOOS (or `golang.org/x/sys`, a dependency this port avoids). The TCP
-  and HTTP dependency probes (the common case) already ship in `healthcheck`; disk is a host
-  self-check that can land later behind build tags if wanted, without a new dependency.
 - **SDK-typed Azure Function triggers - Blob Storage and Event Hub** (`Benzene.Azure.Function.
   BlobStorage`/`.EventHub`). Unlike the HTTP/Queue/Cosmos/Timer/Event Grid triggers - whose
   custom-handler `Data`/`Metadata` JSON shape is a documented, verifiable contract this port already

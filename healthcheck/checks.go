@@ -14,9 +14,9 @@ import (
 // This file holds ready-made Check implementations for probing a downstream dependency's
 // reachability, the Go equivalents of Benzene.HealthChecks.Tcp / .Http. They are zero-dependency
 // (net / net/http) and each implements the package's Check interface, so they plug straight into
-// Middleware alongside any bespoke CheckFunc. (Benzene.HealthChecks.Disk - a host self-check on free
-// space - is deferred: Go has no portable free-space API, it needs platform-specific syscalls behind
-// build tags; see ROADMAP.md.)
+// Middleware alongside any bespoke CheckFunc. (The host self-check on free space,
+// Benzene.HealthChecks.Disk, lives in disk.go - also zero-dependency, with the one platform-specific
+// call behind build tags.)
 
 // TCPCheck verifies a dependency is reachable at the TCP (L4) level by opening a connection to
 // host:port - the lowest-common-denominator check for anything without a first-class client (a

@@ -53,8 +53,13 @@ alongside the shared spec.
   `Benzene.HealthChecks.Tcp`) and `HTTPPingCheck` (GETs a URL, healthy only on 200, credentials
   stripped from the reported URL - `Benzene.HealthChecks.Http`). Both zero-dep (net/net-http) and
   report a coarse error *category*, never the raw message (which can leak infra detail to an
-  unauthenticated health caller). `Benzene.HealthChecks.Disk` is deferred - Go has no portable
-  free-space API (needs platform-specific syscalls behind build tags; see `ROADMAP.md`).
+  unauthenticated health caller). `DiskSpaceCheck` (`disk.go` - `Benzene.HealthChecks.Disk`) is the
+  host self-check on free space: `WithMinimumFreeBytes`/`WithWarningFreeBytes` gate health on it (else
+  it is pure telemetry), reporting freeBytes/totalBytes/usedPercent. Also zero-dep, but the one
+  platform call (`diskUsage`) sits behind build tags - `disk_unix.go` (`syscall.Statfs`),
+  `disk_windows.go` (`GetDiskFreeSpaceExW` via a lazy kernel32 binding, no `x/sys`), `disk_other.go`
+  (an `unsupported-platform` fallback so it still compiles on js/wasm/plan9). The unix path runs in
+  CI; the windows path is cross-compile-verified only (no live Windows), noted in its doc.
 - `validation/` - request-validation building block: `Validated(validator, handler)` wraps a
   handler so an invalid request short-circuits to a `validation-error` result before the handler
   runs. The Go-idiomatic form of `Benzene.DataAnnotations`/`Benzene.FluentValidation`'s
