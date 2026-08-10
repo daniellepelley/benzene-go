@@ -205,6 +205,19 @@ alongside the shared spec.
   derived format, and R5/R6 are then two surfaces onto the one registry-derived truth (GET spec vs
   the reserved `benzene:mesh` topic). Opt-in like the descriptor middleware - don't mount it and R5
   is simply reduced, per the profile's §4 exposure-control rule.
+- `openapi/` - OpenAPI 3.0 document generation (zero-dep), the Go form of `Benzene.Schema.OpenApi`.
+  `Generate(desc, opts...)` turns a `mesh.Descriptor` into an OpenAPI 3.0 document: each registered
+  topic becomes a POST operation whose request body is the topic's request schema and whose
+  responses carry the response schema (200) plus the framework failure vocabulary grouped by the
+  HTTP codes `httpstatus.ToHTTP` maps them to. It **reuses mesh's derived schemas** (the one
+  sanctioned reflection path) rather than deriving its own - the only reshaping is JSON Schema's
+  nullable type-array (`["string","null"]`) into OpenAPI 3.0's `nullable: true`, handled for both
+  the `[]string` (straight from `mesh.Describe`) and `[]any` (JSON-round-tripped) forms. `Handler`
+  serves the doc over a plain GET, the OpenAPI sibling of `mesh.SpecHandler` (R5 is already satisfied
+  by the derived descriptor; this is the richer industry-standard alternative). A documentation view
+  of the message contracts, not a claim every topic is HTTP-routed. **AsyncAPI for event topics is a
+  deliberate follow-up** - the descriptor doesn't classify a topic as request/response vs
+  fire-and-forget, and this port does not fabricate that input.
 - `meshd/` - Phases 3-4 of `docs/design/mesh.md`: the collector - an ordinary Benzene
   service (register/heartbeat/traces/issues ingest + `benzene:mesh:query:*` read models over an
   in-memory store with a bounded trace ring; the `benzene:mesh:issues` feed of mesh.md §4.1

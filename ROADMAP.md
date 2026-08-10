@@ -149,6 +149,15 @@ delivery order - just the current honest picture, kept up to date as things land
   the report never reports the HTTP surface as if it were the whole profile. `WithoutDescriptor()`
   additionally drops R5/R6 per §4 exposure control. A thin assembler over existing pieces; nothing
   here spawns or owns a background goroutine.
+- `openapi` - OpenAPI 3.0 document generation (zero dependencies), the Go form of the OpenAPI half
+  of `Benzene.Schema.OpenApi`: `Generate(desc, opts...)` turns a `mesh.Descriptor` into an OpenAPI
+  document (each registered topic a POST operation - request body = the topic's request schema,
+  responses = the response schema at 200 plus the framework failure vocabulary grouped by the HTTP
+  codes `httpstatus.ToHTTP` maps them to), and `Handler` serves it over GET, the OpenAPI sibling of
+  `mesh.SpecHandler`. It reuses mesh's startup-derived schemas rather than deriving its own (no new
+  reflection), converting only JSON Schema's nullable type-array to OpenAPI 3.0's `nullable: true`.
+  A documentation view of the message contracts, not a claim every topic is HTTP-routed. The
+  AsyncAPI (event-topic) half is a deliberate follow-up - see Next.
 - `logging` - basic request logging/timing middleware using only `log/slog`: one structured
   line per invocation (topic/version, Benzene status, duration; Info/Warn/Error by outcome).
   The dependency-free visibility option alongside the `diagnostics` module's full OTel feed.
@@ -332,14 +341,16 @@ documented, genuinely-unreachable defensive branch - see each package's own comm
 An earlier wave (`client`, `cors`, `benzenetest`, `logging`) plus the large catch-up batch
 (`awskinesis`, `awss3`, `awskafka`, `azurefunctions.Timer`/`EventGrid`, `validation`,
 `idempotency`, `ratelimiting`, `auth`, `cache`, `resilience`, `saga`, `responseevents`,
-`healthcheck.TCP`/`HTTP`, `cloudserviceprobe`, the R5 `mesh.SpecHandler`, and the `cloudservice`
-one-call profile builder) have all landed - see Done above. These zero-dependency items remain
-queued and buildable without any dependency decision:
+`healthcheck.TCP`/`HTTP`, `cloudserviceprobe`, the R5 `mesh.SpecHandler`, the `cloudservice`
+one-call profile builder, and `openapi` OpenAPI generation) have all landed - see Done above. These
+zero-dependency items remain queued and buildable without any dependency decision:
 
-- **OpenAPI/AsyncAPI spec generation** (`Benzene.Schema.OpenApi`). R5 is satisfied today by
-  `mesh.SpecHandler` serving the derived descriptor (Benzene's own format, which the profile
-  permits). A richer, industry-standard document (OpenAPI for request/response topics, AsyncAPI for
-  event topics) derived from the same registry would be a larger, still-zero-dep feature.
+- **AsyncAPI spec generation** (the event-topic half of `Benzene.Schema.OpenApi`). The **OpenAPI**
+  half now ships zero-dependency (`openapi` - see Done: each registered topic a POST operation
+  derived from the same mesh descriptor). AsyncAPI (event topics as channels) is the remaining slice,
+  and it needs one more input the descriptor does not carry: which topics are request/response vs
+  fire-and-forget events. Rather than fabricate that classification, it waits until the registry (or
+  a service-supplied hint) distinguishes them - still zero-dependency once that input exists.
 
 ## Later - needs a dependency decision first
 
