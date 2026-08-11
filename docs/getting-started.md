@@ -285,6 +285,24 @@ point of Benzene's ports-and-adapters design: **the handler is the asset; the ho
 
 That detail is the only thing that changes when you deploy to a cloud provider.
 
+## Why not just net/http?
+
+Worth asking honestly: `http.HandleFunc("/greet", func(w http.ResponseWriter, r *http.Request) {
+...})` does the same job as this guide's seven steps in a handful of lines, no `httpbinding` import.
+For an HTTP-only service that never talks to anything else, that's a fair trade — the stdlib (or
+chi/gorilla if you want a router) already gives HTTP its own routing, and you don't need Benzene to
+get it.
+
+The payoff shows up the moment this same handler needs a **second** entry point — a queue another
+team publishes to, a Kafka topic, a batch job that used to call this endpoint but really just wants
+to drop a message. A bare `http.HandlerFunc` has no answer for that; you'd write a second, separate
+handler and keep both in sync by hand. With Benzene the handler above doesn't change at all: the
+self-hosted `awssqs.Consumer` or `kafka.Consumer` point a worker at the *same* `greetHandler`,
+because it was never written against `http.ResponseWriter` in the first place — see
+[Getting Started: Kubernetes](getting-started-kubernetes.md) for that running as three independent
+Kubernetes Deployments from one handler. If HTTP genuinely is and always will be the only way in,
+reach for `net/http` (or chi/gorilla) directly instead — you'll write less code, not more.
+
 ## Next: host it in the cloud
 
 The same `newApp()` composition root and the same handler run behind a different transport binding on

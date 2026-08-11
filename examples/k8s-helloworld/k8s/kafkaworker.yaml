@@ -1,0 +1,25 @@
+# The Kafka leg - a worker Deployment with no Service (nothing calls it; it calls out to Kafka). No
+# bundled broker here: point KAFKA_BROKERS at a real cluster. For a credential-free local run
+# against a throwaway broker instead, see ../compose/docker-compose.yml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: greet-kafkaworker
+  namespace: k8s-helloworld
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: greet-kafkaworker }
+  template:
+    metadata:
+      labels: { app: greet-kafkaworker }
+    spec:
+      containers:
+        - name: greet-kafkaworker
+          image: k8s-helloworld-kafkaworker:local
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KAFKA_BROKERS
+              value: "kafka-bootstrap.kafka.svc.cluster.local:9092"   # <- replace
+            - name: KAFKA_CONSUME_TOPIC
+              value: "greet"

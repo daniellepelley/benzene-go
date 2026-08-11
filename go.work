@@ -17,6 +17,7 @@ use (
 	./examples/aws-sns-helloworld
 	./examples/aws-sqs-helloworld
 	./examples/grpc-helloworld
+	./examples/k8s-helloworld
 	./examples/kafka-helloworld
 	./examples/opentelemetry-helloworld
 	./gcpfunctions

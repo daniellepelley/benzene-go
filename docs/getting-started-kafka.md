@@ -6,6 +6,15 @@ record through a Benzene pipeline (one invocation, one DI scope per record), and
 Kafka topic is one Benzene topic**, headers pass through verbatim both directions, and the message
 value is the body verbatim, with no envelope wrapping.
 
+**Worth using even if Kafka is the only transport this service ever has.** Unlike HTTP, where
+`net/http` already gives you routing for free (see
+[Why not just net/http?](getting-started.md#why-not-just-nethttp)), `segmentio/kafka-go`'s
+`Reader.FetchMessage` on its own hands you a raw record and stops — dispatching on whatever
+identifies its type, and every cross-cutting concern (validation, retries, structured logging) is
+code you'd otherwise write yourself in the consume loop. `Consumer` + the middleware pipeline is
+that missing layer, for Kafka specifically — the same reasoning applies to `awssqs.Consumer`,
+this port's self-hosted SQS poller.
+
 ## Prerequisites
 
 - Read [Getting started](getting-started.md) and skim the worked

@@ -14,6 +14,7 @@ idiomatically in Go and interoperates on the wire with the .NET, TypeScript, and
     - [Google Cloud](getting-started-google.md) — Cloud Run (HTTP) and Pub/Sub
     - [gRPC](getting-started-grpc.md) — the unary gRPC server and client binding
     - [Kafka](getting-started-kafka.md) — the consumer-group worker and producer client
+    - [Kubernetes](getting-started-kubernetes.md) — one handler hosted over HTTP, SQS, and Kafka as three independent Deployments
 
 - **Concepts**
   - [Message handlers](message-handlers.md) — handlers, topics, the registry, routing, and dependency injection
