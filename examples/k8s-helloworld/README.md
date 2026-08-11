@@ -1,44 +1,42 @@
-# One handler, three Kubernetes Deployments
+# One handler, one binary, three transports
 
 The runnable version of [Getting Started: Benzene on Kubernetes](../../docs/getting-started-kubernetes.md).
 
-The same `greeting.Handler` — the shared package every binary below imports — reached three
-independent ways, each its own pod:
+The same `greeting.Handler` reached three independent ways, from **one** running process:
 
 ```
-                              ┌──────────────────────────────────────┐
-        HTTP  ──────────────▶│  greet-api           (Deployment)     │──┐
-                              └──────────────────────────────────────┘  │
-                              ┌──────────────────────────────────────┐  │   all three dispatch
-        SQS queue  ─────────▶│  greet-sqsworker     (Deployment)     │──┼──▶ greeting.Handler
-                              └──────────────────────────────────────┘  │   (greeting/)
-                              ┌──────────────────────────────────────┐  │
-        Kafka topic  ───────▶│  greet-kafkaworker   (Deployment)     │──┘
-                              └──────────────────────────────────────┘
+        HTTP        ─────────┐
+        SQS queue   ─────────┼──▶  k8s-helloworld (Deployment)  ──▶  greeting.Handler
+        Kafka topic ─────────┘
 ```
 
-Nothing in the handler knows which pod called it. That's the point: the same business logic scales,
-deploys, and rolls back independently behind whichever transport actually reaches it — a bare
-`net/http` handler alone gives you the first Deployment; Benzene gives you all three from one
-function.
+Nothing in the handler knows which transport called it. That's the point: `main.go` runs a
+`net/http` server, an SQS poller, and a Kafka consumer as three goroutines in the same process, all
+dispatching into the exact same function — a bare `net/http` handler alone gives you the HTTP leg;
+Benzene gives you all three from one binary, one image, one Deployment.
 
-## Binaries
+## Files
 
-This is one Go module with three `main` packages, mirroring `examples/aws-sqs-helloworld`'s
-consumer/publisher split:
+This is one Go module with a single `main` package - `greeting/` (the shared handler) plus `main.go`
+(all three legs):
 
 | Path | What it is |
 |---|---|
-| `greeting/` | the shared handler - `Handler(ctx, GreetRequest) benzene.Result[GreetResponse]`, imported by all three binaries below |
-| `api/` | a plain `net/http` server (`httpbinding.Handler`) - `POST /greet` |
-| `sqsworker/` | `awssqs.Consumer` - the self-hosted SQS poller, not the Lambda-trigger `awssqs.Handler` |
-| `kafkaworker/` | `kafka.Consumer` - the self-hosted Kafka consumer |
-| `k8s/` | three Deployments (`api.yaml` also a Service), pointed at a real SQS queue and Kafka cluster via env vars - no bundled infra |
-| `compose/` | `docker-compose.yml` - LocalStack (SQS) + a throwaway Kafka broker + all three binaries, for a credential-free local run |
+| `greeting/` | the shared handler - `Handler(ctx, GreetRequest) benzene.Result[GreetResponse]` |
+| `main.go` | one binary: a `net/http` server (`httpbinding.Handler`), `awssqs.Consumer` (the self-hosted SQS poller, not the Lambda-trigger `awssqs.Handler`), and `kafka.Consumer` (the self-hosted Kafka consumer) - each its own goroutine against a shared, SIGINT/SIGTERM-cancelled `context.Context` |
+| `k8s/` | one Deployment + Service, pointed at a real SQS queue and Kafka cluster via env vars - no bundled infra |
+| `compose/` | `docker-compose.yml` - LocalStack (SQS) + a throwaway Kafka broker + the one binary's image, for a credential-free local run |
 
-Every binary registers the handler itself (`benzene.Register(registry, benzene.NewTopic("greet"),
-...)`) — this port has no reflection-based handler discovery, so "shared" means "the same function
-imported three times and wired explicitly," not "auto-discovered." See each `main.go`'s `newApp()`.
+`main.go` registers the handler three times (`benzene.Register(registry, benzene.NewTopic("greet"),
+...)`, once per leg's own `newApp()`) — this port has no reflection-based handler discovery, so
+"shared" means "the same function imported once, registered three times, wired explicitly," not
+"auto-discovered."
+
+Go has no equivalent of a "generic host" starting things sequentially the way .NET's does (see the
+[Kubernetes guide](../../docs/getting-started-kubernetes.md) for that port's story) — three
+goroutines, each running its own blocking `ListenAndServe`/`Consumer.Run` loop against a shared
+`context.Context`, just works: the runtime schedules them independently, so a slow or stuck SQS poll
+never delays the HTTP server (or vice versa). `main.go`'s comment block spells this out.
 
 ## Run it locally (no Kubernetes, no cloud account)
 
@@ -63,43 +61,54 @@ docker compose -f examples/k8s-helloworld/compose/docker-compose.yml run --rm --
     --message-attributes 'topic={StringValue=greet,DataType=String}'
 
 # 3. Kafka - produce straight to the topic, no HTTP involved (the Benzene topic IS the literal
-# Kafka topic name here, unlike SQS/HTTP's attribute/route - see kafkaworker/main.go's comment).
+# Kafka topic name here, unlike SQS/HTTP's attribute/route - see main.go's comment).
 docker exec -i $(docker compose -f examples/k8s-helloworld/compose/docker-compose.yml ps -q kafka) \
   kafka-console-producer --bootstrap-server localhost:29092 --topic greet <<< '{"name":"kafka"}'
 ```
 
-`docker compose logs -f greet-api greet-sqsworker greet-kafkaworker` to watch all three at once — a
-greeting placed through any of the three reaches the exact same handler.
+Three different entry points, one container's logs - `docker compose logs -f k8s-helloworld` - proving
+all three ran through the exact same handler function.
 
 ## Deploy to Kubernetes
 
-Build and load the three images (against a [kind](https://kind.sigs.k8s.io) cluster — swap for your
+Build and load the one image (against a [kind](https://kind.sigs.k8s.io) cluster — swap for your
 registry's push/pull on a real cluster):
 
 ```bash
-docker build -f examples/k8s-helloworld/Dockerfile.api         -t k8s-helloworld-api:local         .
-docker build -f examples/k8s-helloworld/Dockerfile.sqsworker   -t k8s-helloworld-sqsworker:local   .
-docker build -f examples/k8s-helloworld/Dockerfile.kafkaworker -t k8s-helloworld-kafkaworker:local .
-kind load docker-image k8s-helloworld-api:local k8s-helloworld-sqsworker:local k8s-helloworld-kafkaworker:local
+docker build -f examples/k8s-helloworld/Dockerfile -t k8s-helloworld:local .
+kind load docker-image k8s-helloworld:local
 ```
 
-Edit the placeholder env values in `k8s/sqsworker.yaml` and `k8s/kafkaworker.yaml` to point at a
-real queue and cluster (there is deliberately no bundled SQS/Kafka in these manifests — see each
-file's own comment for why, and for the IRSA note on the SQS side), then:
+Edit the placeholder `QUEUE_URL`/`KAFKA_BROKERS` values in `k8s/app.yaml` to point at a real queue and
+cluster (there is deliberately no bundled SQS/Kafka in this manifest — see the file's own comment for
+why, and for the IRSA note on the SQS side), then:
 
 ```bash
 kubectl apply -k examples/k8s-helloworld/k8s/
-kubectl -n k8s-helloworld get pods   # 4 pods: 2x greet-api, 1x greet-sqsworker, 1x greet-kafkaworker
-kubectl -n k8s-helloworld logs -f deploy/greet-sqsworker
+kubectl -n k8s-helloworld get pods   # 2 pods: 2x k8s-helloworld
+kubectl -n k8s-helloworld logs -f deploy/k8s-helloworld
 ```
 
-Scale the transports independently, because they're independent Deployments:
+There's only one Deployment to scale - scaling it scales all three transports' consuming capacity
+together:
 
 ```bash
-kubectl -n k8s-helloworld scale deploy/greet-kafkaworker --replicas=3
+kubectl -n k8s-helloworld scale deploy/k8s-helloworld --replicas=4
 ```
 
 ## Why this, and not just net/http
 
 See [Why not just net/http?](../../docs/getting-started.md#why-not-just-nethttp) for the reasoning
 this example exists to prove.
+
+## The alternative: one Deployment per transport
+
+Combining all three transports into one binary is not the only valid shape - splitting them into
+**separate** `main` packages/Deployments (one for HTTP, one for the SQS poller, one for the Kafka
+consumer, each its own image) is a legitimate pattern too, and sometimes the better one: each
+transport then scales, rolls back, and fails independently of the others. The tradeoff is real: more
+images to build, more Deployments to manage, and (per the goroutine-per-leg structure above) a little
+duplicated `newApp()`/wiring boilerplate per transport if they're split into separate binaries.
+Reach for that shape instead when the transports' traffic, failure modes, or scaling needs genuinely
+diverge - `greeting/greeting.go` doesn't change either way, only how many binaries and Dockerfiles
+wrap it.

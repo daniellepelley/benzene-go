@@ -3,6 +3,4 @@ kind: Kustomization
 namespace: k8s-helloworld
 resources:
   - namespace.yaml
-  - api.yaml
-  - sqsworker.yaml
-  - kafkaworker.yaml
+  - app.yaml
