@@ -48,6 +48,21 @@ alongside the shared spec.
   `httpclient`, and `conformance`.
 - `httpbinding/` - the HTTP transport binding (native + envelope-over-HTTP entry points).
 - `httpclient/` - the HTTP outbound client.
+- `client/` - the outbound-client seam: `Sender` (the single interface every outbound transport -
+  `httpclient`, `awssqs.Client`, the in-process sender, ... - satisfies) plus the `With*` decorators
+  (`WithRetry`, `WithCorrelationID`, `WithTraceContext`) and `RegisterSender`/`GetSender` for wiring one
+  onto a `Container`. An application constructs a `Sender` and uses it directly - there is no
+  container-wide outbound routing table (a deliberate port divergence; see `inprocess`).
+- `inprocess/` - an in-process `client.Sender` that dispatches an outbound send straight to a handler
+  pipeline built in the same runtime (the shared `[]byte`/`json.RawMessage` envelope, no wire - not even
+  loopback), for the modular-monolith case where a topic that used to leave the process no longer needs
+  to. `PipelineSet` holds named pipelines (each its own `ApplicationBuilder`, so two may register the
+  same topic with no collision); `NewSender`/`NewFanOutSender` target them by name. The divergence from
+  .NET/TS (no outbound routing table, per-instance `Registry`) is spelled out in the package doc.
+- `cors/` - a portable, stdlib-only CORS middleware for HTTP-fronted services (a Go port of
+  `Benzene.Http/Cors`). CORS is an HTTP-transport concern (Origin, preflight OPTIONS, `Access-Control-*`
+  headers), so unlike the pipeline middlewares this is an ordinary `net/http` middleware wrapping an
+  `http.Handler` in front of `httpbinding.Handler`.
 - `healthcheck/` - reserved-topic health-check interception middleware, plus ready-made `Check`
   implementations for probing a dependency's reachability: `TCPCheck` (opens a TCP connection -
   `Benzene.HealthChecks.Tcp`) and `HTTPPingCheck` (GETs a URL, healthy only on 200, credentials
@@ -263,9 +278,20 @@ alongside the shared spec.
   the `[]string` (straight from `mesh.Describe`) and `[]any` (JSON-round-tripped) forms. `Handler`
   serves the doc over a plain GET, the OpenAPI sibling of `mesh.SpecHandler` (R5 is already satisfied
   by the derived descriptor; this is the richer industry-standard alternative). A documentation view
-  of the message contracts, not a claim every topic is HTTP-routed. **AsyncAPI for event topics is a
-  deliberate follow-up** - the descriptor doesn't classify a topic as request/response vs
-  fire-and-forget, and this port does not fabricate that input.
+  of the message contracts, not a claim every topic is HTTP-routed.
+- `asyncapi/` - AsyncAPI 3.0 document generation (zero-dep), the event-driven sibling of `openapi` and
+  the other half of `Benzene.Schema.OpenApi`. `Generate(desc, opts...)` maps Benzene onto AsyncAPI
+  3.0's channels + `action: receive`/`send` operations exactly as the .NET builder does: every
+  **handled** topic is a `receive` operation on a channel carrying the request, with the native
+  `reply` object pointing at a `<topic>:<suffix>` reply channel (default `response`,
+  `WithResponseTopicSuffix`) - derived entirely from the descriptor. What a service **sends** (a
+  fire-and-forget published event) is **not** in the descriptor, so it is a caller-declared input via
+  `WithSentEvent(topic, payload)` (a `send` operation) - the same explicit input the .NET builder
+  takes from broadcast-event/message-sender definitions, and the reason `openapi` deferred AsyncAPI
+  rather than fabricating a sync-vs-event classification. Reuses mesh's derived schemas with **no**
+  reshaping (AsyncAPI 3.0 schemas are JSON Schema Draft 7, so mesh's nullable `["T","null"]` form is
+  already valid - unlike OpenAPI 3.0), deep-copied so `Generate` never mutates the descriptor.
+  `Handler` serves it over a plain GET, the AsyncAPI sibling of `openapi.Handler`/`mesh.SpecHandler`.
 - `meshd/` - Phases 3-4 of `docs/design/mesh.md`: the collector - an ordinary Benzene
   service (register/heartbeat/traces/issues ingest + `benzene:mesh:query:*` read models over an
   in-memory store with a bounded trace ring; the `benzene:mesh:issues` feed of mesh.md §4.1
@@ -459,6 +485,11 @@ alongside the shared spec.
   SNS-to-Lambda subscription has no batch/partial-failure concept, so `Handler` reports a failed
   notification by returning a Go error - triggering AWS's own async-invoke retry - rather than a
   `batchItemFailures` response body.
+- `logging/` - basic request logging/timing middleware using only `log/slog` (zero-dep): one
+  structured line per pipeline invocation (topic/version, Benzene status, duration; Info/Warn/Error by
+  outcome). The dependency-free visibility option - deliberately NOT the OTel-based `diagnostics` (no
+  tracing/metrics/export). Register it outermost so it sees every invocation, including intercepted
+  ones; it composes freely with `mesh.TraceMiddleware` and `diagnostics.Middleware`.
 - `diagnostics/` - OpenTelemetry diagnostics middleware, in **its own Go module**
   (`diagnostics/go.mod`, needs `go.opentelemetry.io/otel` - API only, never the SDK; the
   application owns exporter/sampler setup, and without an SDK the no-op defaults apply). One
@@ -495,6 +526,11 @@ alongside the shared spec.
   reflection anywhere on the dispatch path - `Route.NewResponse`/`ClientRoute.NewRequest` are
   explicit factories (Go has no runtime type parameter to construct an arbitrary registered
   message from, unlike .NET generics).
+- `benzenetest/` - an in-process test host for a **consuming** application's own tests: boot the app's
+  registered handlers + pipeline (middleware included) and drive a message through without a real
+  HTTP/Lambda/Azure-Functions host. The Go counterpart of `Benzene.Testing`/`BenzeneTestHost`; the
+  `go-test-champion` agent owns hardening it. (This repo's own tests build an `InvocationContext`
+  directly where that's clearer, rather than routing through the harness.)
 - `conformance/` - the fixture runner; `testdata/*.json` are vendored copies from the main
   repo's `docs/specification/conformance/` (see `conformance/README.md` for how to re-sync).
 - `examples/` - runnable example services: `helloworld` (plain HTTP),
