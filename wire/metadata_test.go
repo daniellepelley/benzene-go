@@ -28,6 +28,41 @@ func TestReservedNames_AccessorsDefaultWhenUnset(t *testing.T) {
 	if got := partial.Correlation(); got != DefaultCorrelationKey {
 		t.Errorf("partial.Correlation() = %q, want the default %q", got, DefaultCorrelationKey)
 	}
+
+	if got := zero.Version(); !reflect.DeepEqual(got, DefaultVersionKeys) {
+		t.Errorf("zero.Version() = %v, want the default %v", got, DefaultVersionKeys)
+	}
+	narrowed := ReservedNames{VersionKeys: []string{"benzene-version"}}
+	if got := narrowed.Version(); !reflect.DeepEqual(got, []string{"benzene-version"}) {
+		t.Errorf("narrowed.Version() = %v, want %v", got, []string{"benzene-version"})
+	}
+}
+
+func TestResolveVersion(t *testing.T) {
+	tests := []struct {
+		name    string
+		headers map[string]string
+		keys    []string
+		want    string
+	}{
+		{"absent is empty (no version signalled)", map[string]string{"other": "x"}, DefaultVersionKeys, ""},
+		{"nil headers is empty", nil, DefaultVersionKeys, ""},
+		{"benzene-version read", map[string]string{"benzene-version": "3"}, DefaultVersionKeys, "3"},
+		{"earlier key wins over later", map[string]string{"benzene-version": "3", "version": "9"}, DefaultVersionKeys, "3"},
+		{"fallback to version when benzene-version absent", map[string]string{"version": "9"}, DefaultVersionKeys, "9"},
+		{"fallback to x-version last", map[string]string{"x-version": "7"}, DefaultVersionKeys, "7"},
+		{"case-insensitive on read", map[string]string{"Benzene-Version": "3"}, DefaultVersionKeys, "3"},
+		{"present-but-empty is skipped", map[string]string{"benzene-version": "", "version": "9"}, DefaultVersionKeys, "9"},
+		{"narrowed list ignores an unlisted name", map[string]string{"version": "9"}, []string{"benzene-version"}, ""},
+		{"no keys is empty", map[string]string{"benzene-version": "3"}, nil, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ResolveVersion(tt.headers, tt.keys); got != tt.want {
+				t.Errorf("ResolveVersion() = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }
 
 func TestResolveMetadataTopic(t *testing.T) {

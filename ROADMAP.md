@@ -11,7 +11,9 @@ delivery order - just the current honest picture, kept up to date as things land
 - `wire` - the transport-neutral envelope, plus `ResolveMetadataTopic` (the shared native-metadata
   topic resolver every queue-shaped binding delegates to) and `ReservedNames` - the single
   injectable value for the configurable reserved names of `wire-contracts.md` §2 (the `topic`
-  metadata key and the `x-correlation-id` header). A service sets it once on the
+  metadata key, the `x-correlation-id` header, and the ordered `benzene-version`→`version`→
+  `x-version` payload-version fallback list `ResolveVersion` reads and `RouterMiddleware`/
+  `WithVersionKeys` route on). A service sets it once on the
   `ApplicationBuilder` (`UseReservedNames`) for its inbound bindings and on its outbound clients'
   `ReservedNames` field / `CorrelationDecoratorWithKey`, so a colliding key is renamed in one
   place for both directions; the defaults carry the interop baseline.
@@ -450,21 +452,22 @@ equivalent to port, not gaps in this port:
 Honest record of where this port stops short of the .NET reference on purpose, so the boundary
 is a decision rather than a surprise:
 
-- **Inbound message versioning is not wired to the transports (tier C).** The data model is
-  present - `Topic{ID, Version}`, versioned registration (`Register` keys on `(id, version)`),
-  and the mesh descriptor carries a per-topic `version` - but no inbound binding reads the
-  `benzene-version` header (or an HTTP `/v{version}` segment) off the wire, so a versioned
-  handler is reachable only by explicit programmatic dispatch, not from an inbound message.
-  This is deliberate: `benzene-version` is tier C in `wire-contracts.md` §2 (only meaningful
-  for a service that opted into payload versioning), and the transport-metadata conformance
-  fixture skips its version case for a non-versioning port accordingly. Before implementing the
-  read path, one spec question needs resolving upstream: `core-concepts.md` §2 specifies
-  handler selection as **exact version match only**, while `versioning.md` §3 and the .NET
-  `VersionSelector` specify **exact match else highest available** - the two disagree, and a Go
-  implementation should follow whichever the spec settles on rather than pick unilaterally. A
-  read-path implementation must also stay non-regressive: a stray `benzene-version` on a message
-  to a service that registered only unversioned handlers must still route to the unversioned
-  handler, not fall to not-found.
+- **Inbound handler-version selection is wired for the header, exact-match; the `/v{version}`
+  route segment and exact-else-highest remain deferred.** `RouterMiddleware` now reads the
+  `benzene-version` header off the wire (the ordered, configurable fallback list
+  `benzene-version` → `version` → `x-version` of `wire-contracts.md` §2 / `versioning.md` §2.1,
+  overridable via `benzene.WithVersionKeys` / `ReservedNames.VersionKeys`) and dispatches to the
+  exact `(id, version)` handler, so a versioned handler is now reachable from an inbound message
+  on every transport - the previously-skipped `version-travels-alongside-the-topic` conformance
+  case runs. Selection stays **exact-match** (`core-concepts.md` §2), with one non-regressive
+  fallback: a signalled version with no exact handler routes to the unversioned (default-version)
+  handler if one exists, so a stray version header on an unversioned-only service still routes.
+  Two pieces stay deferred on purpose: (1) the HTTP **`/v{version}` route segment** (versioning.md
+  §2.1's HTTP-primary carrier) - the header path already covers HTTP via request headers, and the
+  route-segment convention needs `httpbinding` route-parameter support; (2) **exact-else-highest-
+  supported** selection (`versioning.md` §3 / the .NET `VersionSelector`), which `core-concepts.md`
+  §2's "exact match only" contradicts - that upstream spec disagreement should settle before a Go
+  implementation picks the richer selector over the conservative exact-match this port ships.
 - **Transparent payload up/down-casting (`versioning.md` §4, "Mechanism B") is not
   implemented.** It is explicitly opt-in in the spec (a topic without it "behaves exactly as an
   unversioned topic"), a conforming service needs neither versioning axis, and the .NET
