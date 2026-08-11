@@ -17,6 +17,9 @@ func TestRouteTable_Match(t *testing.T) {
 		{Method: "GET", Path: "/users/{id}/orders/{OrderID}", Topic: benzene.NewTopic("order")},
 		{Method: "GET", Path: "/users/me", Topic: benzene.NewTopic("me")},
 		{Method: "GET", Path: "/files/{}", Topic: benzene.NewTopic("literal-braces")},
+		{Method: "GET", Path: "/v{version}/greet", Topic: benzene.NewTopic("greet")},
+		{Method: "GET", Path: "/broken/{x", Topic: benzene.NewTopic("unclosed-literal")},
+		{Method: "GET", Path: "/double/{a}{b}", Topic: benzene.NewTopic("double-literal")},
 	})
 
 	tests := []struct {
@@ -40,6 +43,13 @@ func TestRouteTable_Match(t *testing.T) {
 		{name: "empty braces are a literal", method: "GET", path: "/files/{}", wantTopic: "literal-braces", wantParams: nil, wantOK: true},
 		{name: "empty braces literal rejects other segments", method: "GET", path: "/files/anything", wantOK: false},
 		{name: "no route at all", method: "GET", path: "/nope", wantOK: false},
+		{
+			name: "a literal prefix around a placeholder captures the suffix", method: "GET", path: "/v2/greet",
+			wantTopic: "greet", wantParams: map[string]string{"version": "2"}, wantOK: true,
+		},
+		{name: "a mismatched literal prefix does not match", method: "GET", path: "/x2/greet", wantOK: false},
+		{name: "an unclosed placeholder is a literal segment", method: "GET", path: "/broken/{x", wantTopic: "unclosed-literal", wantParams: nil, wantOK: true},
+		{name: "two placeholders in one segment is a literal segment", method: "GET", path: "/double/{a}{b}", wantTopic: "double-literal", wantParams: nil, wantOK: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -12,7 +12,6 @@ import (
 	"github.com/daniellepelley/benzene-go/envelope"
 	"github.com/daniellepelley/benzene-go/httpbinding"
 	"github.com/daniellepelley/benzene-go/httpstatus"
-	"github.com/daniellepelley/benzene-go/wire"
 )
 
 // httpEvent mirrors the fields this adapter needs from the two HTTP event shapes a Lambda can
@@ -82,12 +81,13 @@ type httpV1Response struct {
 	IsBase64Encoded   bool                `json:"isBase64Encoded"`
 }
 
-// HTTPHandler adapts routes (matched exactly like httpbinding.Route) into a HandlerFunc for a
+// HTTPHandler adapts routes (matched exactly like httpbinding.Route, including its
+// "{version}" route-segment special case - versioning.md §2.1) into a HandlerFunc for a
 // Lambda fronted by any of AWS's HTTP front doors - a Function URL or API Gateway HTTP API
 // (v2.0 payload), an API Gateway REST API or HTTP API v1.0 payload, or an Application Load
 // Balancer target group. The event shape is detected per invocation (see httpEvent), the
 // response uses the matching shape, and either way the invocation carries real HTTP status
-// codes via httpstatus.ToHTTP, dispatched through envelope.Dispatch exactly like
+// codes via httpstatus.ToHTTP, dispatched through envelope.DispatchTopicResult exactly like
 // httpbinding.Handler.
 func HTTPHandler(builder *benzene.ApplicationBuilder, routes []httpbinding.Route) HandlerFunc {
 	table := httpbinding.NewRouteTable(routes)
@@ -126,12 +126,11 @@ func HTTPHandler(builder *benzene.ApplicationBuilder, routes []httpbinding.Route
 		for name, value := range params {
 			headers["route-"+name] = value
 		}
+		if version, ok := params["version"]; ok {
+			topic = topic.WithVersion(version)
+		}
 
-		resp := envelope.Dispatch(ctx, builder.Pipeline, builder.Container, wire.Request{
-			Topic:   topic.String(),
-			Headers: headers,
-			Body:    body,
-		})
+		resp, _ := envelope.DispatchTopicResult(ctx, builder.Pipeline, builder.Container, topic, headers, body)
 
 		return marshalResponse(&req, httpstatus.ToHTTP(benzene.Status(resp.StatusCode)), resp.Headers, resp.Body)
 	}

@@ -86,6 +86,70 @@ func TestHTTPHandler_FailureStatusMapsToNativeHTTPCode(t *testing.T) {
 	}
 }
 
+func TestHTTPHandler_VersionRouteSegmentSelectsExactHandler(t *testing.T) {
+	registry := benzene.NewRegistry()
+	mustRegister := func(topic benzene.Topic, prefix string) {
+		h := benzene.Handler[greetRequest, greetResponse](func(_ context.Context, req greetRequest) benzene.Result[greetResponse] {
+			return benzene.Ok(greetResponse{Greeting: prefix + req.Name})
+		})
+		if err := benzene.Register(registry, topic, h); err != nil {
+			t.Fatalf("Register(%v) error = %v", topic, err)
+		}
+	}
+	mustRegister(benzene.NewTopic("greet"), "v1:")
+	mustRegister(benzene.NewTopic("greet").WithVersion("2"), "v2:")
+	builder := &benzene.ApplicationBuilder{Registry: registry, Container: benzene.NewContainer(), Pipeline: benzene.NewPipeline(benzene.RouterMiddleware(registry))}
+	handler := HTTPHandler(builder, []httpbinding.Route{{Method: http.MethodPost, Path: "/v{version}/greet", Topic: benzene.NewTopic("greet")}})
+
+	event := `{"rawPath":"/v2/greet","headers":{},"requestContext":{"http":{"method":"POST","path":"/v2/greet"}},"body":"{\"name\":\"World\"}"}`
+	result, err := handler(context.Background(), json.RawMessage(event))
+	if err != nil {
+		t.Fatalf("handler() error = %v", err)
+	}
+
+	var resp httpV2Response
+	if err := json.Unmarshal(result, &resp); err != nil {
+		t.Fatalf("json.Unmarshal(result) error = %v; result = %s", err, result)
+	}
+	var greeting greetResponse
+	if err := json.Unmarshal([]byte(resp.Body), &greeting); err != nil {
+		t.Fatalf("json.Unmarshal(resp.Body) error = %v; body = %s", err, resp.Body)
+	}
+	if greeting.Greeting != "v2:World" {
+		t.Errorf("Greeting = %q, want %q (the {version} route segment should select the exact handler)", greeting.Greeting, "v2:World")
+	}
+}
+
+func TestHTTPHandler_RouteParamsPopulateHeadersWhenEventHasNone(t *testing.T) {
+	registry := benzene.NewRegistry()
+	var seenHeaders map[string]string
+	echo := benzene.Handler[greetRequest, greetResponse](func(ctx context.Context, _ greetRequest) benzene.Result[greetResponse] {
+		return benzene.Ok(greetResponse{Greeting: "ok"})
+	})
+	if err := benzene.Register(registry, benzene.NewTopic("user"), echo); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	pipeline := benzene.NewPipeline(
+		func(ctx context.Context, ic *benzene.InvocationContext, next func(context.Context) error) error {
+			seenHeaders = ic.Headers
+			return next(ctx)
+		},
+		benzene.RouterMiddleware(registry),
+	)
+	builder := &benzene.ApplicationBuilder{Registry: registry, Container: benzene.NewContainer(), Pipeline: pipeline}
+	handler := HTTPHandler(builder, []httpbinding.Route{{Method: http.MethodGet, Path: "/users/{id}", Topic: benzene.NewTopic("user")}})
+
+	// No "headers" key at all - req.Headers is nil, but the route still has a param to record.
+	event := `{"rawPath":"/users/42","requestContext":{"http":{"method":"GET","path":"/users/42"}},"body":"{}"}`
+	if _, err := handler(context.Background(), json.RawMessage(event)); err != nil {
+		t.Fatalf("handler() error = %v", err)
+	}
+
+	if got := seenHeaders["route-id"]; got != "42" {
+		t.Errorf(`Headers["route-id"] = %q, want "42"`, got)
+	}
+}
+
 func TestHTTPHandler_UnmatchedRouteIsNotFound(t *testing.T) {
 	handler := HTTPHandler(newTestBuilder(t), testRoutes())
 

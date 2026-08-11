@@ -33,6 +33,13 @@ import (
 //
 // The "route-" prefix is written after the inbound HTTP headers are flattened, so a client
 // sending a literal "route-id" header can never spoof a path parameter.
+//
+// A "{version}" segment is additionally special-cased as the HTTP-primary payload schema
+// version carrier (versioning.md §2.1, e.g. Path: "/v{version}/orders/{id}"): its captured
+// value sets the dispatched topic's version directly, taking priority over any
+// benzene-version/version/x-version header on the same request. A route with no "{version}"
+// segment falls back to that header list, matching the spec's "falls back... if the matched
+// route declares no version parameter."
 type Route struct {
 	Method string
 	Path   string
@@ -78,12 +85,11 @@ func Handler(builder *benzene.ApplicationBuilder, routes []Route) http.Handler {
 		for name, value := range params {
 			headers["route-"+name] = value
 		}
+		if version, ok := params["version"]; ok {
+			topic = topic.WithVersion(version)
+		}
 
-		resp := envelope.Dispatch(r.Context(), builder.Pipeline, builder.Container, wire.Request{
-			Topic:   topic.String(),
-			Headers: headers,
-			Body:    string(body),
-		})
+		resp, _ := envelope.DispatchTopicResult(r.Context(), builder.Pipeline, builder.Container, topic, headers, string(body))
 		writeNativeResponse(w, resp)
 	})
 }
@@ -131,9 +137,11 @@ func (t *RouteTable) Match(method, path string) (benzene.Topic, map[string]strin
 	return benzene.Topic{}, nil, false
 }
 
-// matchTemplate matches path against one templated route. A "{name}" segment captures its
-// (non-empty) path segment; a malformed or empty template segment ("{}", "{x") is treated as
-// a literal. Parameter names are lower-cased for the "route-<name>" header.
+// matchTemplate matches path against one templated route. A "{name}" placeholder captures its
+// (non-empty) path segment; a literal prefix and/or suffix may surround the one placeholder in
+// the same segment (e.g. "v{version}" - versioning.md §2.1's HTTP route-parameter convention),
+// each still required to match exactly. A malformed or empty placeholder ("{}", "{x") is treated
+// as a literal segment. Parameter names are lower-cased for the "route-<name>" header.
 func matchTemplate(route templateRoute, method, path string) (map[string]string, bool) {
 	if route.method != strings.ToUpper(method) {
 		return nil, false
@@ -144,21 +152,53 @@ func matchTemplate(route templateRoute, method, path string) (map[string]string,
 	}
 	var params map[string]string
 	for i, pattern := range route.segments {
-		if len(pattern) > 2 && strings.HasPrefix(pattern, "{") && strings.HasSuffix(pattern, "}") {
-			if segments[i] == "" {
+		name, prefix, suffix, isParam := parseSegmentPlaceholder(pattern)
+		if !isParam {
+			if pattern != segments[i] {
 				return nil, false
 			}
-			if params == nil {
-				params = map[string]string{}
-			}
-			params[strings.ToLower(pattern[1:len(pattern)-1])] = segments[i]
 			continue
 		}
-		if pattern != segments[i] {
+		value := segments[i]
+		if len(value) < len(prefix)+len(suffix) || !strings.HasPrefix(value, prefix) || !strings.HasSuffix(value, suffix) {
 			return nil, false
 		}
+		captured := value[len(prefix) : len(value)-len(suffix)]
+		if captured == "" {
+			return nil, false
+		}
+		if params == nil {
+			params = map[string]string{}
+		}
+		params[strings.ToLower(name)] = captured
 	}
 	return params, true
+}
+
+// parseSegmentPlaceholder reports whether pattern contains exactly one "{name}" placeholder and,
+// if so, splits it into the literal text before and after the placeholder and the parameter name
+// - e.g. "v{version}" -> prefix "v", name "version", suffix "". A bare "{name}" (the common case)
+// yields empty prefix and suffix. A pattern with no placeholder, an empty one ("{}"), an unclosed
+// one ("{x"), or more than one ("{a}{b}") is not a param at all - matchTemplate then matches the
+// whole pattern as a literal segment, preserving the pre-existing malformed-placeholder handling.
+func parseSegmentPlaceholder(pattern string) (name, prefix, suffix string, isParam bool) {
+	open := strings.IndexByte(pattern, '{')
+	if open < 0 {
+		return "", "", "", false
+	}
+	close := strings.IndexByte(pattern[open+1:], '}')
+	if close < 0 {
+		return "", "", "", false
+	}
+	close += open + 1
+	if close == open+1 { // "{}" - an empty placeholder name
+		return "", "", "", false
+	}
+	rest := pattern[close+1:]
+	if strings.ContainsAny(rest, "{}") { // a second placeholder - not the single-placeholder shape
+		return "", "", "", false
+	}
+	return pattern[open+1 : close], pattern[:open], rest, true
 }
 
 // Well-known paths from the default service standard (the main repo's

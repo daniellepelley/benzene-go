@@ -26,7 +26,6 @@ import (
 	"github.com/daniellepelley/benzene-go/envelope"
 	"github.com/daniellepelley/benzene-go/httpbinding"
 	"github.com/daniellepelley/benzene-go/httpstatus"
-	"github.com/daniellepelley/benzene-go/wire"
 )
 
 // invocationRequest is the JSON body the Functions host POSTs to the custom handler per
@@ -61,7 +60,9 @@ type httpOutputBinding struct {
 // Each Route's Path must match the *local* invocation path Azure uses for that function -
 // by default "/<FunctionName>", the name of that function's folder (see its function.json) -
 // which is independent of any public "route" property that function.json declares; Route.Path
-// here is about the internal host<->handler contract, not the public URL.
+// here is about the internal host<->handler contract, not the public URL. Route matching,
+// including its "{version}" route-segment special case (versioning.md §2.1), is identical to
+// httpbinding.Handler's.
 func Handler(builder *benzene.ApplicationBuilder, routes []httpbinding.Route) http.Handler {
 	table := httpbinding.NewRouteTable(routes)
 
@@ -99,12 +100,11 @@ func Handler(builder *benzene.ApplicationBuilder, routes []httpbinding.Route) ht
 		for name, value := range params {
 			headers["route-"+name] = value
 		}
+		if version, ok := params["version"]; ok {
+			topic = topic.WithVersion(version)
+		}
 
-		resp := envelope.Dispatch(r.Context(), builder.Pipeline, builder.Container, wire.Request{
-			Topic:   topic.String(),
-			Headers: headers,
-			Body:    trigger.Body,
-		})
+		resp, _ := envelope.DispatchTopicResult(r.Context(), builder.Pipeline, builder.Container, topic, headers, trigger.Body)
 
 		writeInvocationResponse(w, httpstatus.ToHTTP(benzene.Status(resp.StatusCode)), resp.Body, resp.Headers)
 	})
