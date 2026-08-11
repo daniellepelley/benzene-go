@@ -46,7 +46,14 @@ alongside the shared spec.
   like `httpstatus`; `grpcbinding` wraps the result as `codes.Code(...)`.
 - `envelope/` - dispatches a `wire.Request` through a `Pipeline`, shared by `httpbinding`,
   `httpclient`, and `conformance`.
-- `httpbinding/` - the HTTP transport binding (native + envelope-over-HTTP entry points).
+- `httpbinding/` - the HTTP transport binding (native + envelope-over-HTTP entry points). `Route`
+  matching supports a `"{name}"` placeholder per segment, optionally with a literal prefix/suffix
+  in the same segment (e.g. `"v{version}"`); a `"{version}"` placeholder is additionally
+  special-cased as versioning.md §2.1's HTTP-primary version carrier - it sets the dispatched
+  topic's version directly (winning over a `benzene-version` header on the same request), and a
+  route with no such segment falls back to the header. `awslambda.HTTPHandler` and
+  `azurefunctions.Handler` share this `Route`/`RouteTable` matching, so the same behavior applies
+  there too.
 - `httpclient/` - the HTTP outbound client.
 - `client/` - the outbound-client seam: `Sender` (the single interface every outbound transport -
   `httpclient`, `awssqs.Client`, the in-process sender, ... - satisfies) plus the `With*` decorators

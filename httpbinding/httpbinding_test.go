@@ -140,6 +140,113 @@ func TestHandler_HeadersAreFlattenedLowercase(t *testing.T) {
 	}
 }
 
+// registerVersioned registers a topic under both its unversioned form and version "2", each
+// answering with a distinguishable greeting so a test can tell which handler ran.
+func registerVersioned(t *testing.T, registry *benzene.Registry) {
+	t.Helper()
+	mustRegister := func(topic benzene.Topic, prefix string) {
+		h := benzene.Handler[greetRequest, greetResponse](func(_ context.Context, req greetRequest) benzene.Result[greetResponse] {
+			return benzene.Ok(greetResponse{Greeting: prefix + req.Name})
+		})
+		if err := benzene.Register(registry, topic, h); err != nil {
+			t.Fatalf("Register(%v) error = %v", topic, err)
+		}
+	}
+	mustRegister(benzene.NewTopic("greet"), "v1:")
+	mustRegister(benzene.NewTopic("greet").WithVersion("2"), "v2:")
+}
+
+func doGreet(t *testing.T, handler http.Handler, path string, headers map[string]string) greetResponse {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, strings.NewReader(`{"name":"World"}`))
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var payload greetResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v; body = %s", err, rec.Body.String())
+	}
+	return payload
+}
+
+func TestHandler_VersionRouteSegmentSelectsExactHandler(t *testing.T) {
+	registry := benzene.NewRegistry()
+	registerVersioned(t, registry)
+	builder := &benzene.ApplicationBuilder{Registry: registry, Container: benzene.NewContainer(), Pipeline: benzene.NewPipeline(benzene.RouterMiddleware(registry))}
+	handler := Handler(builder, []Route{{Method: "GET", Path: "/v{version}/greet", Topic: benzene.NewTopic("greet")}})
+
+	got := doGreet(t, handler, "/v2/greet", nil)
+	if got.Greeting != "v2:World" {
+		t.Errorf("Greeting = %q, want %q (the {version} route segment should select the exact handler)", got.Greeting, "v2:World")
+	}
+}
+
+func TestHandler_RouteWithNoVersionSegmentFallsBackToHeader(t *testing.T) {
+	registry := benzene.NewRegistry()
+	registerVersioned(t, registry)
+	builder := &benzene.ApplicationBuilder{Registry: registry, Container: benzene.NewContainer(), Pipeline: benzene.NewPipeline(benzene.RouterMiddleware(registry))}
+	handler := Handler(builder, []Route{{Method: "GET", Path: "/greet", Topic: benzene.NewTopic("greet")}})
+
+	// The matched route declares no "version" parameter, so versioning.md §2.1's fallback list
+	// applies: the router reads benzene-version off the request header instead.
+	got := doGreet(t, handler, "/greet", map[string]string{"benzene-version": "2"})
+	if got.Greeting != "v2:World" {
+		t.Errorf("Greeting = %q, want %q (no route version segment should fall back to the header)", got.Greeting, "v2:World")
+	}
+
+	got = doGreet(t, handler, "/greet", nil)
+	if got.Greeting != "v1:World" {
+		t.Errorf("Greeting = %q, want %q (no version signalled at all should use the default handler)", got.Greeting, "v1:World")
+	}
+}
+
+func TestHandler_VersionRouteSegmentWinsOverHeader(t *testing.T) {
+	registry := benzene.NewRegistry()
+	registerVersioned(t, registry)
+	builder := &benzene.ApplicationBuilder{Registry: registry, Container: benzene.NewContainer(), Pipeline: benzene.NewPipeline(benzene.RouterMiddleware(registry))}
+	handler := Handler(builder, []Route{{Method: "GET", Path: "/v{version}/greet", Topic: benzene.NewTopic("greet")}})
+
+	// A stray benzene-version header on a version-routed request is ignored: the route segment
+	// already resolved the version, and RouterMiddleware leaves an already-set version untouched.
+	got := doGreet(t, handler, "/v2/greet", map[string]string{"benzene-version": "1"})
+	if got.Greeting != "v2:World" {
+		t.Errorf("Greeting = %q, want %q (the route segment should win over a conflicting header)", got.Greeting, "v2:World")
+	}
+}
+
+func TestHandler_VersionRouteSegmentAlsoBecomesRouteHeader(t *testing.T) {
+	registry := benzene.NewRegistry()
+	var seenHeaders map[string]string
+	h := benzene.Handler[greetRequest, greetResponse](func(_ context.Context, req greetRequest) benzene.Result[greetResponse] {
+		return benzene.Ok(greetResponse{Greeting: "ok"})
+	})
+	if err := benzene.Register(registry, benzene.NewTopic("greet").WithVersion("2"), h); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	pipeline := benzene.NewPipeline(
+		func(ctx context.Context, ic *benzene.InvocationContext, next func(context.Context) error) error {
+			seenHeaders = ic.Headers
+			return next(ctx)
+		},
+		benzene.RouterMiddleware(registry),
+	)
+	builder := &benzene.ApplicationBuilder{Registry: registry, Container: benzene.NewContainer(), Pipeline: pipeline}
+	handler := Handler(builder, []Route{{Method: "GET", Path: "/v{version}/greet", Topic: benzene.NewTopic("greet")}})
+
+	doGreet(t, handler, "/v2/greet", nil)
+
+	// The "{version}" segment is still an ordinary route parameter too - it becomes "route-version"
+	// like any other captured segment, on top of setting the dispatched topic's version.
+	if got := seenHeaders["route-version"]; got != "2" {
+		t.Errorf(`Headers["route-version"] = %q, want "2"`, got)
+	}
+}
+
 func TestHeadersFrom_SkipsKeysWithNoValues(t *testing.T) {
 	// http.Header.Set/Add always append a non-empty value; a key with a zero-length value
 	// slice only arises from direct map manipulation (e.g. a proxy or middleware that deletes

@@ -452,21 +452,25 @@ equivalent to port, not gaps in this port:
 Honest record of where this port stops short of the .NET reference on purpose, so the boundary
 is a decision rather than a surprise:
 
-- **Inbound handler-version selection is wired for the header, exact-match; the `/v{version}`
-  route segment and exact-else-highest remain deferred.** `RouterMiddleware` now reads the
+- **Inbound handler-version selection is wired for both the header and the HTTP route segment,
+  exact-match only; exact-else-highest remains deferred.** `RouterMiddleware` reads the
   `benzene-version` header off the wire (the ordered, configurable fallback list
   `benzene-version` → `version` → `x-version` of `wire-contracts.md` §2 / `versioning.md` §2.1,
   overridable via `benzene.WithVersionKeys` / `ReservedNames.VersionKeys`) and dispatches to the
-  exact `(id, version)` handler, so a versioned handler is now reachable from an inbound message
-  on every transport - the previously-skipped `version-travels-alongside-the-topic` conformance
-  case runs. Selection stays **exact-match** (`core-concepts.md` §2), with one non-regressive
-  fallback: a signalled version with no exact handler routes to the unversioned (default-version)
-  handler if one exists, so a stray version header on an unversioned-only service still routes.
-  Two pieces stay deferred on purpose: (1) the HTTP **`/v{version}` route segment** (versioning.md
-  §2.1's HTTP-primary carrier) - the header path already covers HTTP via request headers, and the
-  route-segment convention needs `httpbinding` route-parameter support; (2) **exact-else-highest-
-  supported** selection (`versioning.md` §3 / the .NET `VersionSelector`), which `core-concepts.md`
-  §2's "exact match only" contradicts - that upstream spec disagreement should settle before a Go
+  exact `(id, version)` handler, so a versioned handler is reachable from an inbound message on
+  every transport - the previously-skipped `version-travels-alongside-the-topic` conformance case
+  runs. `httpbinding.Handler` (and `awslambda.HTTPHandler`/`azurefunctions.Handler`, which share
+  its `Route`/`RouteTable` matching) additionally honours versioning.md §2.1's HTTP-primary
+  carrier: a `"{version}"` route segment - e.g. `Path: "/v{version}/orders/{id}"`, the literal `v`
+  prefix supported alongside the placeholder like any other prefixed/suffixed route parameter -
+  sets the dispatched topic's version directly and wins over the header; a route with no such
+  segment falls back to the header, matching the spec's "falls back... if the matched route
+  declares no version parameter." Selection stays **exact-match** (`core-concepts.md` §2) on both
+  carriers, with one non-regressive fallback: a signalled version with no exact handler routes to
+  the unversioned (default-version) handler if one exists, so a stray version header/segment on an
+  unversioned-only service still routes. **Exact-else-highest-supported** selection
+  (`versioning.md` §3 / the .NET `VersionSelector`), which `core-concepts.md` §2's "exact match
+  only" contradicts, stays deferred - that upstream spec disagreement should settle before a Go
   implementation picks the richer selector over the conservative exact-match this port ships.
 - **Transparent payload up/down-casting (`versioning.md` §4, "Mechanism B") is not
   implemented.** It is explicitly opt-in in the spec (a topic without it "behaves exactly as an
