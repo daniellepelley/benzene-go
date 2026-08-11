@@ -6,7 +6,9 @@ package benzene
 //
 // A (ID, Version) pair maps to at most one handler. When a message arrives without
 // a version, the unversioned handler (Version == "") handles it; versioned handlers
-// are selected only by an exact match.
+// are selected only by an exact match. RouterMiddleware reads an inbound message's
+// version off the wire (wire-contracts.md §2 tier C) and, when a signalled version has
+// no exact handler, falls back to the unversioned one - see its doc.
 type Topic struct {
 	ID      string
 	Version string

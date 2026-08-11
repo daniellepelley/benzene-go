@@ -93,3 +93,39 @@ func ExampleGetService() {
 	fmt.Println(first == second, second.n)
 	// Output: true 1
 }
+
+// ExampleRouterMiddleware_versioned shows inbound handler-version dispatch. Two handlers register
+// for the same topic id under different versions; the router reads the message's benzene-version
+// header off the wire and dispatches to the exact match. A message with no version header routes
+// to the unversioned handler (the default version), and so does one whose version has no exact
+// handler - so turning versioning on for a topic never breaks a producer that doesn't send one.
+func ExampleRouterMiddleware_versioned() {
+	registry := benzene.NewRegistry()
+	mustRegister := func(topic benzene.Topic, greeting string) {
+		if err := benzene.Register(registry, topic,
+			benzene.Handler[greetReq, greetResp](func(_ context.Context, req greetReq) benzene.Result[greetResp] {
+				return benzene.Ok(greetResp{Greeting: greeting + req.Name})
+			})); err != nil {
+			panic(err)
+		}
+	}
+	mustRegister(benzene.NewTopic("greet"), "Hello ")               // the default (unversioned) handler
+	mustRegister(benzene.NewTopic("greet").WithVersion("2"), "Hi ") // the v2 handler
+
+	pipeline := benzene.NewPipeline(benzene.RouterMiddleware(registry))
+	greet := func(headers map[string]string) string {
+		ic := benzene.NewInvocationContext(benzene.NewTopic("greet"), headers, greetReq{Name: "World"}, nil)
+		if err := pipeline.Run(context.Background(), ic); err != nil {
+			panic(err)
+		}
+		return ic.Result.ResultPayload().(greetResp).Greeting
+	}
+
+	fmt.Println(greet(map[string]string{"benzene-version": "2"})) // exact match -> v2
+	fmt.Println(greet(nil))                                       // no version -> default
+	fmt.Println(greet(map[string]string{"benzene-version": "9"})) // unknown version -> default (non-regressive)
+	// Output:
+	// Hi World
+	// Hello World
+	// Hello World
+}

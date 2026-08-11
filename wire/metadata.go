@@ -20,6 +20,21 @@ const DefaultTopicKey = "topic"
 // configurable via ReservedNames.
 const DefaultCorrelationKey = "x-correlation-id"
 
+// DefaultVersionKeys is the default ordered fallback list of header names the inbound payload
+// schema version is read from (wire-contracts.md §2 tier C, versioning.md §2.1): the first of
+// these present in a message's headers wins, and version is always written back as the first
+// name, "benzene-version". "benzene-version" is the unambiguous, collision-free default;
+// "version"/"x-version" are recognised only because plenty of producers already emit one for
+// their own (unrelated) purposes, so the list lets a service opt into reading those without
+// forcing a producer to rename a header first.
+//
+// Because that is also how it can go wrong - a pre-existing "version" header meaning something
+// else read as the payload schema version - versioning.md §2.1 requires the list be
+// configurable: a service with its own conflicting use narrows it to just "benzene-version"
+// (or replaces it wholesale) via ReservedNames.VersionKeys. Treat this value as read-only; to
+// change the list, set ReservedNames.VersionKeys rather than mutating the slice.
+var DefaultVersionKeys = []string{"benzene-version", "version", "x-version"}
+
 // ReservedNames holds the configurable reserved metadata/header names of wire-contracts.md §2
 // ("Reserved names are defaults"). The spec requires an implementation to expose them "as a
 // single injectable value" a service sets once and applies to both its inbound bindings and its
@@ -37,6 +52,13 @@ type ReservedNames struct {
 	// CorrelationKey is the outbound correlation header (tier C). Empty means
 	// DefaultCorrelationKey.
 	CorrelationKey string
+	// VersionKeys is the ordered fallback list of header names the inbound payload schema
+	// version is read from (tier C), first-present-wins - versioning.md §2.1. Nil/empty means
+	// DefaultVersionKeys. Narrow it to just "benzene-version", reorder it, or replace it
+	// wholesale when a producer already emits a "version"/"x-version" header meaning something
+	// else. Like the topic key, this is an application-wide reserved-name override a service
+	// sets once and applies to both its inbound read path and its outbound writes.
+	VersionKeys []string
 }
 
 // Topic returns the configured topic metadata key, or DefaultTopicKey when unset.
@@ -53,6 +75,33 @@ func (n ReservedNames) Correlation() string {
 		return n.CorrelationKey
 	}
 	return DefaultCorrelationKey
+}
+
+// Version returns the configured ordered version-header fallback list, or DefaultVersionKeys
+// when unset. Pass the result to ResolveVersion (or benzene.WithVersionKeys) so an override
+// made once via UseReservedNames drives the inbound read path too.
+func (n ReservedNames) Version() []string {
+	if len(n.VersionKeys) > 0 {
+		return n.VersionKeys
+	}
+	return DefaultVersionKeys
+}
+
+// ResolveVersion returns the payload schema version read from headers using the ordered
+// fallback list keys (versioning.md §2.1): the first key present with a non-empty value wins,
+// matched case-insensitively (wire-contracts.md preamble). It returns "" when no listed key is
+// present with a value - "no version signalled", which versioning.md §2.2 treats as the topic's
+// default version, not an error. A present-but-empty header is treated as absent, so the
+// fallback continues to the next name. keys is typically ReservedNames.Version().
+func ResolveVersion(headers map[string]string, keys []string) string {
+	for _, key := range keys {
+		for name, value := range headers {
+			if value != "" && strings.EqualFold(name, key) {
+				return value
+			}
+		}
+	}
+	return ""
 }
 
 // ResolveMetadataTopic splits a transport's native string->string metadata dictionary into the

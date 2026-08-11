@@ -39,13 +39,14 @@ func DispatchResult(ctx context.Context, pipeline *benzene.Pipeline, container *
 }
 
 // DispatchTopicResult dispatches an explicit, already-resolved topic - including its version -
-// through the pipeline, and is the version-aware sibling of DispatchResult (which resolves an
-// id-only topic from a wire.Request, since a version travels as a header on the wire and no
-// inbound binding reads it yet - see the port's ROADMAP). It exists for fan-in / streaming-shaped
-// bindings (core-concepts.md §3, e.g. the Cosmos DB Change Feed trigger) that name their target
-// topic in application code rather than parsing it out of message metadata, so a developer can
-// fan a feed into a versioned handler by explicit programmatic dispatch. The wire.Response and
-// success flag are produced identically to DispatchResult.
+// through the pipeline. DispatchResult passes an id-only topic and lets RouterMiddleware read
+// the version off the message headers (wire-contracts.md §2 tier C); DispatchTopicResult instead
+// names the version in application code, which the router then leaves untouched (a version
+// already on the topic wins over the header). It exists for fan-in / streaming-shaped bindings
+// (core-concepts.md §3, e.g. the Cosmos DB Change Feed trigger) that name their target topic in
+// application code rather than parsing it out of message metadata, so a developer can fan a feed
+// into a versioned handler by explicit programmatic dispatch. The wire.Response and success flag
+// are produced identically to DispatchResult.
 func DispatchTopicResult(ctx context.Context, pipeline *benzene.Pipeline, container *benzene.Container, topic benzene.Topic, headers map[string]string, body string) (wire.Response, bool) {
 	scope := container.NewScope()
 	ic := benzene.NewInvocationContext(topic, headers, json.RawMessage(body), scope)
