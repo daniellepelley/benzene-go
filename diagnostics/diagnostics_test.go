@@ -176,8 +176,8 @@ func TestMiddleware_VersionedTopicCarriesVersionAttribute(t *testing.T) {
 	if len(spans) != 1 {
 		t.Fatalf("exported %d spans, want 1", len(spans))
 	}
-	if got, ok := attrValue(spans[0].Attributes, "benzene.topic.version"); !ok || got != "2" {
-		t.Errorf(`attribute "benzene.topic.version" = %q (present=%v), want "2"`, got, ok)
+	if got, ok := attrValue(spans[0].Attributes, "benzene.version"); !ok || got != "2" {
+		t.Errorf(`attribute "benzene.version" = %q (present=%v), want "2"`, got, ok)
 	}
 	// No downstream middleware produced a Result - the status attribute reports that
 	// verbatim as empty rather than papering over it, matching the mesh feed.
@@ -211,28 +211,34 @@ func TestMiddleware_RecordsMetrics(t *testing.T) {
 		byName[m.Name] = m
 	}
 
-	counter, ok := byName["benzene.invocations"].Data.(metricdata.Sum[int64])
+	counter, ok := byName["benzene.messages.processed"].Data.(metricdata.Sum[int64])
 	if !ok {
-		t.Fatalf(`"benzene.invocations" data = %T, want Sum[int64]`, byName["benzene.invocations"].Data)
+		t.Fatalf(`"benzene.messages.processed" data = %T, want Sum[int64]`, byName["benzene.messages.processed"].Data)
 	}
 	var total int64
-	statuses := map[string]bool{}
+	results := map[string]bool{}
 	for _, point := range counter.DataPoints {
 		total += point.Value
-		if status, found := point.Attributes.Value(attribute.Key("benzene.status")); found {
-			statuses[status.AsString()] = true
+		if topic, found := point.Attributes.Value(attribute.Key("topic")); !found || topic.AsString() != "greet" {
+			t.Errorf(`attribute "topic" = %q (present=%v), want "greet"`, topic.AsString(), found)
+		}
+		if transport, found := point.Attributes.Value(attribute.Key("transport")); !found || transport.AsString() != "<missing>" {
+			t.Errorf(`attribute "transport" = %q (present=%v), want "<missing>"`, transport.AsString(), found)
+		}
+		if result, found := point.Attributes.Value(attribute.Key("result")); found {
+			results[result.AsString()] = true
 		}
 	}
 	if total != 2 {
 		t.Errorf("invocation count = %d, want 2", total)
 	}
-	if !statuses[string(benzene.StatusOk)] || !statuses[string(benzene.StatusBadRequest)] {
-		t.Errorf("counter statuses = %v, want both Ok and BadRequest series", statuses)
+	if !results["success"] || !results[string(benzene.StatusBadRequest)] {
+		t.Errorf(`counter results = %v, want both "success" and %q series`, results, benzene.StatusBadRequest)
 	}
 
-	histogram, ok := byName["benzene.invocation.duration"].Data.(metricdata.Histogram[float64])
+	histogram, ok := byName["benzene.message.duration"].Data.(metricdata.Histogram[float64])
 	if !ok {
-		t.Fatalf(`"benzene.invocation.duration" data = %T, want Histogram[float64]`, byName["benzene.invocation.duration"].Data)
+		t.Fatalf(`"benzene.message.duration" data = %T, want Histogram[float64]`, byName["benzene.message.duration"].Data)
 	}
 	var samples uint64
 	for _, point := range histogram.DataPoints {
@@ -240,6 +246,116 @@ func TestMiddleware_RecordsMetrics(t *testing.T) {
 	}
 	if samples != 2 {
 		t.Errorf("duration samples = %d, want 2", samples)
+	}
+}
+
+func TestMiddleware_PipelineErrorSetsExceptionStatusAndResult(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+
+	boom := errors.New("middleware exploded")
+	failing := benzene.Middleware(func(ctx context.Context, ic *benzene.InvocationContext, next func(context.Context) error) error {
+		return boom
+	})
+	pipeline := benzene.NewPipeline(Middleware(WithTracerProvider(tp), WithMeterProvider(mp)), failing)
+
+	ic := benzene.NewInvocationContext(benzene.NewTopic("greet"), nil, nil, nil)
+	if err := pipeline.Run(context.Background(), ic); !errors.Is(err, boom) {
+		t.Fatalf("Run() error = %v, want the propagated middleware error", err)
+	}
+
+	spans := exporter.GetSpans()
+	if len(spans) != 1 {
+		t.Fatalf("exported %d spans, want 1", len(spans))
+	}
+	if got, ok := attrValue(spans[0].Attributes, "benzene.status"); !ok || got != "exception" {
+		t.Errorf(`attribute "benzene.status" = %q (present=%v), want "exception"`, got, ok)
+	}
+
+	var collected metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &collected); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	counter, ok := collected.ScopeMetrics[0].Metrics[0].Data.(metricdata.Sum[int64])
+	if !ok {
+		t.Fatalf("messages.processed data = %T, want Sum[int64]", collected.ScopeMetrics[0].Metrics[0].Data)
+	}
+	if len(counter.DataPoints) != 1 {
+		t.Fatalf("counter data points = %d, want 1", len(counter.DataPoints))
+	}
+	if result, found := counter.DataPoints[0].Attributes.Value(attribute.Key("result")); !found || result.AsString() != "exception" {
+		t.Errorf(`attribute "result" = %q (present=%v), want "exception"`, result.AsString(), found)
+	}
+}
+
+func TestMiddleware_UnsuccessfulEmptyStatusRecordsFailureResult(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+
+	// SetResult with an explicit successful=false and an empty status - unusual, but the
+	// exact edge case observability-conventions.md §3 calls "failure": an unsuccessful
+	// result whose status string is empty, distinct from "<missing>" (no result at all).
+	setsEmptyFailure := benzene.Middleware(func(ctx context.Context, ic *benzene.InvocationContext, next func(context.Context) error) error {
+		ic.Result = benzene.SetResult(benzene.Status(""), struct{}{}, false)
+		return next(ctx)
+	})
+	pipeline := benzene.NewPipeline(Middleware(WithMeterProvider(mp)), setsEmptyFailure)
+
+	ic := benzene.NewInvocationContext(benzene.NewTopic("greet"), nil, nil, nil)
+	if err := pipeline.Run(context.Background(), ic); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	var collected metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &collected); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	counter := collected.ScopeMetrics[0].Metrics[0].Data.(metricdata.Sum[int64])
+	if result, found := counter.DataPoints[0].Attributes.Value(attribute.Key("result")); !found || result.AsString() != "failure" {
+		t.Errorf(`attribute "result" = %q (present=%v), want "failure"`, result.AsString(), found)
+	}
+}
+
+func TestMiddleware_NoResultRecordsMissingResult(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+
+	// No router in the pipeline, so ic.Result is never populated - the "wiring gap" case,
+	// distinct from both a returned failure and a thrown error.
+	pipeline := benzene.NewPipeline(Middleware(WithMeterProvider(mp)))
+	ic := benzene.NewInvocationContext(benzene.NewTopic("greet"), nil, nil, nil)
+	if err := pipeline.Run(context.Background(), ic); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	var collected metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &collected); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	counter := collected.ScopeMetrics[0].Metrics[0].Data.(metricdata.Sum[int64])
+	if result, found := counter.DataPoints[0].Attributes.Value(attribute.Key("result")); !found || result.AsString() != "<missing>" {
+		t.Errorf(`attribute "result" = %q (present=%v), want "<missing>"`, result.AsString(), found)
+	}
+}
+
+// foreignResultInfo is a benzene.ResultInfo that does NOT implement the optional
+// ResultIsSuccessful interface, exercising resultSuccessful's status-class fallback (every
+// Result[T] implements it, so the fallback is otherwise unreachable through a real dispatch) -
+// the same pattern as envelope.foreignResultInfo.
+type foreignResultInfo struct{ status benzene.Status }
+
+func (f foreignResultInfo) ResultStatus() benzene.Status { return f.status }
+func (f foreignResultInfo) ResultErrors() []string       { return nil }
+func (f foreignResultInfo) ResultPayload() any           { return nil }
+
+func TestResultSuccessful_FallsBackToStatusForForeignResultInfo(t *testing.T) {
+	if resultSuccessful(foreignResultInfo{status: benzene.StatusServiceUnavailable}) {
+		t.Error("resultSuccessful(framework failure) = true, want false via the status fallback")
+	}
+	if !resultSuccessful(foreignResultInfo{status: benzene.StatusOk}) {
+		t.Error("resultSuccessful(ok) = false, want true via the status fallback")
 	}
 }
 

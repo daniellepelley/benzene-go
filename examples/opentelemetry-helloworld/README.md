@@ -22,8 +22,8 @@ curl -X POST localhost:8080/greet -d '{"name":"World"}'
 
 - **One span per invocation**: `diagnostics.Middleware`, registered outermost, starts a server span
   named by topic, joined to any inbound W3C `traceparent`, tagged `benzene.topic` / `benzene.status`
-  (the Benzene status verbatim, not an HTTP code), and emits the `benzene.invocations` /
-  `benzene.invocation.duration` metrics.
+  (the Benzene status verbatim, not an HTTP code), and emits the `benzene.messages.processed` /
+  `benzene.message.duration` metrics.
 - **Nested spans**: the `Greeter` adapter starts its own `Greeter.Greet` child span off the
   span-carrying context threaded through the handler, so the exported trace shows the handler's work
   nested under the server span - the shape a real service's spans take.

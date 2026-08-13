@@ -249,11 +249,14 @@ and then propagated untouched, since logging observes but never absorbs. Passing
 the OpenTelemetry API)
 
 Produces one OpenTelemetry span per invocation (named by topic, `SpanKind` server, joined to the
-caller's trace via the inbound W3C `traceparent` header), plus a `benzene.invocations` counter and a
-`benzene.invocation.duration` histogram — all attributed by topic and Benzene status. It depends on
-the OpenTelemetry *API* only, never the SDK: the application owns SDK setup, and with no SDK
-installed the API's no-op defaults make the middleware free and silent. Register it outermost so it
-observes every invocation.
+caller's trace via the inbound W3C `traceparent` header, tagged `benzene.topic`/`benzene.version`/
+`benzene.status`), plus a `benzene.messages.processed` counter and a `benzene.message.duration`
+histogram — both attributed by `topic`/`transport`/`result`, the cross-port
+[observability conventions](https://github.com/daniellepelley/Benzene/blob/main/docs/guides/observability-conventions.md)
+(`transport` is currently always `"<missing>"` — this port has no way yet to read a binding's
+identity back). It depends on the OpenTelemetry *API* only, never the SDK: the application owns SDK
+setup, and with no SDK installed the API's no-op defaults make the middleware free and silent.
+Register it outermost so it observes every invocation.
 
 ```go
 func Middleware(opts ...Option) benzene.Middleware

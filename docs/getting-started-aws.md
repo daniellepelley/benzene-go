@@ -436,8 +436,8 @@ The IAM requirements differ per source, and the example templates encode the min
 
 - **Tracing & metrics** — the [`diagnostics`](../diagnostics) module (its own module, depending on
   the OpenTelemetry API only) wraps each invocation in one server span named by topic, joined to the
-  caller's W3C `traceparent`, with `benzene.topic`/`benzene.status` attributes, plus
-  `benzene.invocations`/`benzene.invocation.duration` metrics. Add it as a middleware in your
+  caller's W3C `traceparent`, with `benzene.topic`/`benzene.version`/`benzene.status` attributes, plus
+  `benzene.messages.processed`/`benzene.message.duration` metrics. Add it as a middleware in your
   pipeline. Your app owns the OTel SDK/exporter; with no SDK installed the no-op defaults make it
   free. It also provides `TraceContextDecorator` for propagating trace context on outbound calls.
 - **Structured logging** — the zero-dependency [`logging`](../logging) package

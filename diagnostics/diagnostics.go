@@ -58,14 +58,29 @@ func WithMeterProvider(mp metric.MeterProvider) Option {
 
 // Middleware returns a benzene.Middleware producing one OpenTelemetry span per invocation -
 // named by the topic, SpanKind server, joined to the caller's trace via the inbound W3C
-// traceparent header - plus two metrics: the "benzene.invocations" counter and the
-// "benzene.invocation.duration" histogram (milliseconds, matching the mesh feed's
-// durationMs), both attributed by topic and Benzene status.
+// traceparent header - plus two metrics: the "benzene.messages.processed" counter and the
+// "benzene.message.duration" histogram (milliseconds), both attributed by topic, transport,
+// and result. Instrument names, span/metric attribute keys, and the result-collapse rule
+// (successes collapse to "success"; failures are itemized by their status; a pipeline error
+// is "exception") all follow the cross-port standard in the main repo's
+// docs/guides/observability-conventions.md - read that first before changing any of the
+// literal strings below, since they are read back by name by shipped mesh trace/usage
+// sources in other ports.
 //
 // The span carries the same semantic identity as a mesh.TraceEvent: benzene.topic,
-// benzene.topic.version (when versioned), and benzene.status - the Benzene status verbatim,
-// not an HTTP code. A non-success status (or a pipeline-level Go error, which
-// envelope.Dispatch would map to ServiceUnavailable) marks the span's status as Error.
+// benzene.version (when versioned), and benzene.status - the Benzene status verbatim, or
+// "exception" when a pipeline error escaped past this middleware's position, not an HTTP
+// code. (The mesh trace feed, mesh.TraceEvent, makes a different, deliberate choice for that
+// same case - mesh.md §3 reports it as an empty status, a wiring gap, with the escaped error
+// otherwise invisible to that feed. The two feeds serve different readers and are not
+// required to agree.) A non-success status (or a pipeline-level Go error, which
+// envelope.Dispatch would map to ServiceUnavailable) marks the span's OTel status as Error.
+//
+// The transport metric/span attribute is always "<missing>" today: no transport binding in
+// this port yet records its identity anywhere this middleware can read back (there is no
+// Go equivalent yet of .NET's ICurrentTransport). That is a known gap in the convention's
+// Go conformance, not a bug in this middleware; tracked in the main repo's
+// docs/guides/observability-conventions.md §5-§6.
 //
 // The span's context is passed to next, so downstream middleware and handlers see the
 // current span (trace.SpanFromContext) and outbound clients can propagate it.
@@ -88,14 +103,14 @@ func Middleware(opts ...Option) benzene.Middleware {
 	// A provider that cannot build an instrument (the API contract allows it) reduces the
 	// metric feed to off; it must never take the span feed - let alone the invocation - down
 	// with it.
-	invocations, err := meter.Int64Counter("benzene.invocations",
-		metric.WithDescription("Pipeline invocations, by topic and Benzene status."))
+	messagesProcessed, err := meter.Int64Counter("benzene.messages.processed",
+		metric.WithDescription("Messages processed, by topic, transport, and result."))
 	if err != nil {
-		invocations = nil
+		messagesProcessed = nil
 	}
-	duration, err := meter.Float64Histogram("benzene.invocation.duration",
+	duration, err := meter.Float64Histogram("benzene.message.duration",
 		metric.WithUnit("ms"),
-		metric.WithDescription("Pipeline invocation duration in milliseconds, by topic and Benzene status."))
+		metric.WithDescription("Message handling duration in milliseconds, by topic, transport, and result."))
 	if err != nil {
 		duration = nil
 	}
@@ -105,7 +120,7 @@ func Middleware(opts ...Option) benzene.Middleware {
 
 		attrs := []attribute.KeyValue{attribute.String("benzene.topic", ic.Topic.ID)}
 		if ic.Topic.Version != "" {
-			attrs = append(attrs, attribute.String("benzene.topic.version", ic.Topic.Version))
+			attrs = append(attrs, attribute.String("benzene.version", ic.Topic.Version))
 		}
 
 		spanCtx, span := tracer.Start(parent, ic.Topic.ID,
@@ -120,6 +135,12 @@ func Middleware(opts ...Option) benzene.Middleware {
 		if ic.Result != nil {
 			status = string(ic.Result.ResultStatus())
 		}
+		if err != nil {
+			// A pipeline error escaping past this middleware's position never produced (or
+			// overrides) a Result-derived status - its own category, matching .NET's
+			// ActivityMiddlewareDecorator and the observability-conventions.md standard.
+			status = "exception"
+		}
 		statusAttr := attribute.String("benzene.status", status)
 		span.SetAttributes(statusAttr)
 
@@ -132,9 +153,30 @@ func Middleware(opts ...Option) benzene.Middleware {
 		}
 		span.End()
 
-		metricAttrs := metric.WithAttributes(attribute.String("benzene.topic", ic.Topic.ID), statusAttr)
-		if invocations != nil {
-			invocations.Add(ctx, 1, metricAttrs)
+		// The metrics "result" attribute is deliberately not the raw status: successes
+		// collapse to "success" (cardinality budget - the total matters, not Ok vs Created)
+		// while failures are itemized by status, per observability-conventions.md §3.
+		result := "<missing>"
+		switch {
+		case err != nil:
+			result = "exception"
+		case ic.Result != nil:
+			switch {
+			case resultSuccessful(ic.Result):
+				result = "success"
+			case string(ic.Result.ResultStatus()) != "":
+				result = string(ic.Result.ResultStatus())
+			default:
+				result = "failure"
+			}
+		}
+		metricAttrs := metric.WithAttributes(
+			attribute.String("topic", ic.Topic.ID),
+			attribute.String("transport", "<missing>"),
+			attribute.String("result", result),
+		)
+		if messagesProcessed != nil {
+			messagesProcessed.Add(ctx, 1, metricAttrs)
 		}
 		if duration != nil {
 			duration.Record(ctx, elapsedMs, metricAttrs)
@@ -142,6 +184,18 @@ func Middleware(opts ...Option) benzene.Middleware {
 
 		return err
 	}
+}
+
+// resultSuccessful reads the result's success flag off the type-erased ResultInfo (via the
+// optional ResultIsSuccessful interface every Result[T] satisfies), falling back to the
+// status class if some other ResultInfo implementation does not expose it - the same idiom
+// as envelope.resultSuccessful (and mesh/idempotency/resilience/circuitbreaker's local
+// copies); each package keeps its own to avoid a shared-package dependency for one helper.
+func resultSuccessful(result benzene.ResultInfo) bool {
+	if s, ok := result.(interface{ ResultIsSuccessful() bool }); ok {
+		return s.ResultIsSuccessful()
+	}
+	return !result.ResultStatus().IsFailure()
 }
 
 // headerCarrier adapts the flat wire header map to OpenTelemetry's TextMapCarrier, so the
