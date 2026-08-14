@@ -562,9 +562,16 @@ alongside the shared spec.
 - `.github/workflows/ci.yml` - build+test on every push/PR (gofmt, vet, build, race+cover test,
   plus a cross-compile smoke check per cloud example's real target). `.github/workflows/
   deploy-<provider>-helloworld.yml` (one per cloud example) - each gated on that provider's
-  credential secret being set (`if: secrets.X != ''` at the job level) so it shows as skipped,
-  not failed, until the repo owner configures deployment credentials. When adding a new cloud
-  example, add its matching deploy workflow (with the same secret-gate pattern) in the same
+  credential secret being set, so it shows as skipped, not failed, until the repo owner
+  configures deployment credentials. **The gate is a small `gate` job, not `if: secrets.X != ''`
+  on the deploy job**: `secrets` is not one of the contexts GitHub exposes to a job-level `if:`
+  (only `github`, `needs`, `vars`, `inputs` are), so that form makes the whole workflow fail to
+  compile - it produced a *failed* run with zero jobs, which is the opposite of the intended
+  skip, and it was silently red on main across all ten deploy workflows. The `gate` job reads the
+  secret in a step `env:` (where `secrets` *is* available) and outputs a boolean the deploy job
+  gates on via `needs.gate.outputs.has_credentials`. Repository **variables** may still be tested
+  directly in the deploy job's `if` (`vars.MSK_CLUSTER_ARN != ''`), since `vars` is in that
+  context. When adding a new cloud example, copy an existing workflow's `gate` job in the same
   commit, and document the required secrets/variables in that example's own README.
 
 ## Before making changes

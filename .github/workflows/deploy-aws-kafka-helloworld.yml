@@ -22,8 +22,30 @@ on:
   workflow_dispatch:
 
 jobs:
+  # `secrets` is NOT one of the contexts available to a job-level `if:` (only github/needs/vars/
+  # inputs are), so gating the deploy job directly on `secrets.X != ''` made the whole workflow
+  # fail to compile - it produced a failed run with zero jobs, not the intended skip. This tiny
+  # gate job reads the secret in a step `env:`, where `secrets` IS available, and publishes a
+  # plain boolean the deploy job can legally gate on.
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      has_credentials: ${{ steps.check.outputs.has_credentials }}
+    steps:
+      - id: check
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        run: |
+          if [ -n "$AWS_ACCESS_KEY_ID" ]; then
+            echo "has_credentials=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_credentials=false" >> "$GITHUB_OUTPUT"
+            echo "Deployment credentials are not configured; skipping the deploy job." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   deploy:
-    if: ${{ secrets.AWS_ACCESS_KEY_ID != '' && vars.MSK_CLUSTER_ARN != '' }}
+    needs: gate
+    if: ${{ needs.gate.outputs.has_credentials == 'true' && vars.MSK_CLUSTER_ARN != '' }}
     runs-on: ubuntu-latest
     defaults:
       run:
