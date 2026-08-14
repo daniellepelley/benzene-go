@@ -21,6 +21,7 @@ idiomatically in Go and interoperates on the wire with the .NET, TypeScript, and
   - [Message results](message-result.md) — the `Result[T]` type and the status vocabulary, with the HTTP and gRPC mappings
   - [Middleware](middleware.md) — the pipeline, writing your own middleware, and the built-ins Benzene ships
   - [Testing](testing.md) — unit-test a handler and drive the whole pipeline in-memory with `benzenetest`
+  - [Generated clients](codegen-client.md) — turn a committed Contract Document into a typed, topic-scoped Go client with `benzene-codegen`
 
 - **About**
   - [How Benzene compares](comparison.md) — where the Go port sits relative to Dapr, the Go CDK, Watermill, and Encore

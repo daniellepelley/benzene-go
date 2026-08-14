@@ -436,9 +436,16 @@ equivalent to port, not gaps in this port:
 - **Vendor-specific observability** (`Benzene.Datadog`, `Benzene.Zipkin`) - if/when this port
   gets an OpenTelemetry-based diagnostics package, standard OTLP export covers these vendors
   without a vendor-specific package each.
-- **Code generation tooling** (`Benzene.CodeGen.*`) - .NET source generators and Go code
+- ~~**Code generation tooling** (`Benzene.CodeGen.*`) - .NET source generators and Go code
   generation work completely differently; if this port ever wants generated OpenAPI docs or a
-  typed client, that's a fresh design, not a port of the C# generator.
+  typed client, that's a fresh design, not a port of the C# generator.~~ - **superseded.** OpenAPI/
+  AsyncAPI doc generation shipped (`openapi`, `asyncapi`, Done above). Typed client generation from
+  a committed Contract Document also now ships, as this entry predicted: a fresh design (the
+  `codegen` module - `contractdoc` + `gengo` + `cmd/benzene-codegen`), not a port of C# source
+  generators, implementing the cross-language `contract-document.md` spec (topic scoping, the
+  schema-closure walk, the portable `contractHash` algorithm) that promoted out of the .NET-only
+  `Benzene.CodeGen.Client` specifically so every port - including this one - could converge on one
+  generation-semantics contract. See `docs/codegen-client.md`.
 - ~~**`Benzene.Mesh.*`** - doesn't need a per-language port~~ - **superseded.** This entry
   predates `docs/design/mesh.md`. The mesh as actually designed is not just an HTTP
   health-check aggregator: the service-side feeds (descriptor derivation from the live

@@ -42,6 +42,7 @@ This is a multi-module repo (see `go.work`):
 | `github.com/daniellepelley/benzene-go/diagnostics` | `diagnostics/` | Needs `go.opentelemetry.io/otel` (the OTel API - the SDK stays the application's) - same isolation pattern |
 | `github.com/daniellepelley/benzene-go/examples/aws-sqs-helloworld` | `examples/aws-sqs-helloworld/` | Depends on *both* the root and `awssqs`; would be a dependency cycle inside either one |
 | `github.com/daniellepelley/benzene-go/examples/aws-sns-helloworld` | `examples/aws-sns-helloworld/` | Depends on *both* the root and `awssns`; same reason |
+| `github.com/daniellepelley/benzene-go/codegen` | `codegen/` | Needs `github.com/gowebpki/jcs` (RFC 8785 canonicalization for `contractHash`) - the `benzene-codegen` client generator (see `docs/codegen-client.md`). Not listed in `go.work` below: nothing it generates imports it (generated code is emitted as text), so nothing needs it locally `replace`d - build/test it directly from `codegen/` |
 
 **Policy**: a package gets its own module only when it has a genuine third-party dependency the
 rest of the repo shouldn't carry (matching how OpenTelemetry-Go splits its exporters out from

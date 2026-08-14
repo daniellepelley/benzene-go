@@ -217,6 +217,7 @@ the "required dependency" contract, surfaced loudly at startup rather than as a 
 | `awskafka` | 100% | AWS Lambda MSK/self-managed-Kafka inbound binding (zero deps, root module), DISTINCT from the self-hosted `kafka` module (that runs its own broker consumer loop; this is the zero-dep adapter for AWS's *managed* event source mapping, which delivers records as plain JSON). Topic is the Kafka topic verbatim (one Kafka topic = one Benzene topic, like the `kafka` module - unlike Kinesis's stream routing), body is the record's `value` base64-decoded, headers pass through verbatim. Records grouped by `{topic}-{partition}`; each partition processed sequentially, stopping at its first failure and reporting an object-shaped `{partition, offset}` (unlike the string identifier of SQS/Kinesis/DynamoDB), so the mapping needs `FunctionResponseTypes: [ReportBatchItemFailures]`; partitions are independent. No outbound side (producing to Kafka is the publish) |
 | `awss3` | 100% | AWS S3 event-notification inbound binding (zero deps, root module): a Lambda `Handler` invoked by S3 on object create/remove. Topic is `{bucket}:{eventName}` (bucket-qualified, vs .NET's bare event name - a local routing concern), body is the object metadata (bucket/key/size/etag, not contents), headers are `s3-`-prefixed. An S3 notification is an async invocation, so a failed record returns a Go error (async-invoke retry, like `awssns`), never a silent drop; handlers must be idempotent |
 | `conformance` | n/a (test-only) | Runs this port against the fixtures vendored from the main repo's `docs/specification/conformance/` |
+| `codegen` ([own module](RELEASING.md), not tied into `go.work`) | 90%+ | `benzene-codegen` (`codegen/cmd/benzene-codegen`): generates a typed, topic-scoped Go client from a service's committed Contract Document (`{Service}.spec.json`) - the Go port of the .NET repo's `Benzene.CodeGen.Client`. `contractdoc` parses the document and implements its topic-scoping/schema-closure/`contractHash` rules (generic-JSON only, no schema library needed); `gengo` emits the Go source (structs + `json` tags, a client type/constructor, `RequiredTopics`), depending only on `client.Sender`/`httpclient.Unmarshal`/`benzene.Result[T]`. Its own module because `contractHash` needs an RFC 8785 canonicalizer (`github.com/gowebpki/jcs`) - a dependency that must never reach the dependency-free root/`client`/`httpclient`. See [docs/codegen-client.md](docs/codegen-client.md) |
 | `examples/helloworld` | - | A runnable example service - DI, health check, both HTTP entry points |
 | `examples/aws-lambda-helloworld` | - | The same service, deployable to AWS Lambda (Dockerfile + SAM template) |
 | `examples/azure-functions-helloworld` | - | The same service, deployable to Azure Functions (host.json/function.json) |
@@ -233,6 +234,7 @@ the "required dependency" contract, surfaced loudly at startup rather than as a 
 | `examples/grpc-helloworld` ([own module](RELEASING.md)) | - | The greet handler over a gRPC unary RPC via `grpcbinding` (protoc-free `structpb` stand-in messages) + an outbound `grpcbinding.Client` round trip |
 | `examples/kafka-helloworld` ([own module](RELEASING.md)) | - | A Kafka consumer group running the greet handler via the `kafka` module + an outbound `kafka.Client` publish path |
 | `examples/opentelemetry-helloworld` ([own module](RELEASING.md)) | - | The greet handler wrapped in `diagnostics` tracing middleware - one OTel span per invocation plus a nested adapter span, exported to stdout |
+| `examples/codegen-helloworld` | - | Dogfoods `benzene-codegen`: a committed Contract Document (`contracts/payments.spec.json`), a `//go:generate`-regenerated + committed topic-scoped client for `payments:capture` (`paymentscapture/`), and a test proving the generated method sends the right topic/payload against a fake `client.Sender` |
 
 Every non-test-only package sits at 100% coverage, or just under it where the gap is a
 defensively-unreachable branch (documented at the call site - e.g. a `json.Marshal` failure on
@@ -271,6 +273,11 @@ central package registry like NuGet). Short version: everything is one module ex
 `examples/opentelemetry-helloworld`, which have their own `go.mod` because they need real
 third-party dependencies the rest of the repo shouldn't carry. `go.work` ties them together for
 local development.
+
+`codegen` is also its own module (same reason - it needs `github.com/gowebpki/jcs`) but is
+deliberately **not** listed in `go.work`: nothing it generates imports it, so nothing in the
+workspace needs it resolvable as a local replace; run its build/tests from inside `codegen/`
+directly (`cd codegen && go build ./... && go test ./...`), same as any other standalone module.
 
 ## Scope
 
