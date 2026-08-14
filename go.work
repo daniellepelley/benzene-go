@@ -13,6 +13,7 @@ use (
 	./azurequeuestorage
 	./azureservicebus
 	./circuitbreaker
+	./codegen
 	./diagnostics
 	./examples/aws-sns-helloworld
 	./examples/aws-sqs-helloworld
