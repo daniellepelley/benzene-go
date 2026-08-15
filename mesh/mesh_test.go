@@ -47,7 +47,7 @@ func TestDescribe(t *testing.T) {
 			benzene.NewTopic("order:create"),
 		)
 
-		desc := Describe(registry, info)
+		desc := Describe(registry, NewOutboundRegistry(), info)
 
 		want := []TopicDescriptor{
 			{ID: "order:create"},
@@ -73,7 +73,7 @@ func TestDescribe(t *testing.T) {
 	t.Run("derives request and response schemas from the handler types", func(t *testing.T) {
 		registry := newTestRegistry(t, benzene.NewTopic("order:create"))
 
-		desc := Describe(registry, info)
+		desc := Describe(registry, nil, info)
 
 		schema := desc.Topics[0].RequestSchema
 		if schema["type"] != "object" {
@@ -90,7 +90,7 @@ func TestDescribe(t *testing.T) {
 	})
 
 	t.Run("copies identity and stamps the runtime", func(t *testing.T) {
-		desc := Describe(newTestRegistry(t), info)
+		desc := Describe(newTestRegistry(t), nil, info)
 
 		if desc.Service != "orders" || desc.ServiceVersion != "1.2.3" || desc.InstanceID != "orders-1" || desc.Binding != "http" {
 			t.Errorf("identity fields = %+v, want copied from %+v", desc, info)
@@ -101,7 +101,7 @@ func TestDescribe(t *testing.T) {
 	})
 
 	t.Run("explicit placement overrides detection", func(t *testing.T) {
-		desc := Describe(newTestRegistry(t), info)
+		desc := Describe(newTestRegistry(t), nil, info)
 
 		if desc.Placement != (Placement{Cloud: "aws", Region: "eu-west-1"}) {
 			t.Errorf("Placement = %+v, want the explicit override", desc.Placement)
@@ -113,7 +113,7 @@ func TestDescribe(t *testing.T) {
 			t.Setenv(v, "")
 		}
 
-		desc := Describe(newTestRegistry(t), ServiceInfo{Service: "orders"})
+		desc := Describe(newTestRegistry(t), nil, ServiceInfo{Service: "orders"})
 
 		if desc.Placement.Cloud != "self-hosted" {
 			t.Errorf("Placement.Cloud = %q, want %q", desc.Placement.Cloud, "self-hosted")
@@ -121,7 +121,7 @@ func TestDescribe(t *testing.T) {
 	})
 
 	t.Run("nil registry degrades the feed, not the descriptor", func(t *testing.T) {
-		desc := Describe(nil, info)
+		desc := Describe(nil, NewOutboundRegistry(), info)
 
 		if desc.Topics == nil || len(desc.Topics) != 0 {
 			t.Errorf("Topics = %v, want empty non-nil", desc.Topics)
@@ -133,10 +133,53 @@ func TestDescribe(t *testing.T) {
 			t.Errorf("identity should survive a missing registry feed, got %+v", desc)
 		}
 	})
+
+	t.Run("nil outbound registry degrades the consumes feed, not the descriptor", func(t *testing.T) {
+		desc := Describe(newTestRegistry(t), nil, info)
+
+		if desc.Consumes == nil || len(desc.Consumes) != 0 {
+			t.Errorf("Consumes = %v, want empty non-nil", desc.Consumes)
+		}
+		if len(desc.Degraded) != 1 || desc.Degraded[0] != FeedOutboundRegistry {
+			t.Errorf("Degraded = %v, want [%q]", desc.Degraded, FeedOutboundRegistry)
+		}
+	})
+
+	t.Run("derives the consumes list from the outbound registry, sorted, schema-derived", func(t *testing.T) {
+		outbound := NewOutboundRegistry()
+		if err := RegisterOutbound[echoRequest, echoResponse](outbound, benzene.NewTopic("payments:capture")); err != nil {
+			t.Fatalf("RegisterOutbound() error = %v", err)
+		}
+		if err := RegisterOutbound[echoRequest, any](outbound, benzene.NewTopic("audit:log")); err != nil {
+			t.Fatalf("RegisterOutbound() error = %v", err)
+		}
+
+		desc := Describe(newTestRegistry(t), outbound, info)
+
+		if len(desc.Degraded) != 0 {
+			t.Errorf("Degraded = %v, want empty (a real, even partial, outbound registry is not degraded)", desc.Degraded)
+		}
+		if len(desc.Consumes) != 2 {
+			t.Fatalf("Consumes = %v, want 2 entries", desc.Consumes)
+		}
+		// Sorted by id.
+		if desc.Consumes[0].ID != "audit:log" || desc.Consumes[1].ID != "payments:capture" {
+			t.Errorf("Consumes ids = [%q %q], want [audit:log payments:capture]", desc.Consumes[0].ID, desc.Consumes[1].ID)
+		}
+		// No declared response type (TRes = any) derives the unconstrained {} responseSchema
+		// mesh.md §2.3 specifies, present rather than omitted.
+		if got := desc.Consumes[0].ResponseSchema; got == nil || len(got) != 0 {
+			t.Errorf("audit:log ResponseSchema = %v, want a present, empty ({}) schema", got)
+		}
+		// A declared response type still derives its real schema.
+		if got := desc.Consumes[1].ResponseSchema["type"]; got != "object" {
+			t.Errorf("payments:capture ResponseSchema = %v, want a derived object schema", desc.Consumes[1].ResponseSchema)
+		}
+	})
 }
 
 func TestDescriptor_WireFieldNamesAreCamelCase(t *testing.T) {
-	desc := Describe(nil, ServiceInfo{
+	desc := Describe(nil, nil, ServiceInfo{
 		Service:        "orders",
 		ServiceVersion: "1.0.0",
 		InstanceID:     "orders-1",
@@ -153,7 +196,7 @@ func TestDescriptor_WireFieldNamesAreCamelCase(t *testing.T) {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
 
-	for _, key := range []string{"service", "serviceVersion", "instanceId", "runtime", "binding", "placement", "topics", "descriptorHash", "degraded"} {
+	for _, key := range []string{"service", "serviceVersion", "instanceId", "runtime", "binding", "placement", "topics", "consumes", "descriptorHash", "degraded"} {
 		if _, ok := raw[key]; !ok {
 			t.Errorf("marshaled descriptor is missing key %q: %s", key, data)
 		}
@@ -170,7 +213,7 @@ func TestDescriptor_WireFieldNamesAreCamelCase(t *testing.T) {
 }
 
 func TestMiddleware(t *testing.T) {
-	descriptor := Describe(newTestRegistry(t, benzene.NewTopic("order:create")), ServiceInfo{
+	descriptor := Describe(newTestRegistry(t, benzene.NewTopic("order:create")), nil, ServiceInfo{
 		Service:   "orders",
 		Placement: Placement{Cloud: "aws"},
 	})

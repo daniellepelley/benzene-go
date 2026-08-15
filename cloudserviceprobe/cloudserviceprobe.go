@@ -324,7 +324,7 @@ func evaluateR7(cfg config, health, invoke, spec, mesh probeOutcome) Requirement
 // optional labeled non-breakage bonus note when the traceparent probe was sent.
 func evaluateR8(cfg config, invoke, mesh probeOutcome) Requirement {
 	const desc = "Trace context join and propagation"
-	const base = "trace context propagation cannot be verified by a single-service black-box HTTP probe; proving it requires either a second service to observe forwarded traceparent headers, or a mesh collector deriving consumer edges from trace parentage (mesh.md §3-4)"
+	const base = "trace context propagation cannot be verified by a single-service black-box HTTP probe; proving it requires either a second service to observe forwarded traceparent headers, or a mesh collector's declared-vs-observed signal showing the edge as actually exercised (mesh.md §3-4.2 - the producer/consumer graph itself comes from the registered ServiceDescriptor, not from trace parentage)"
 	if !cfg.sendTraceParent {
 		return req("R8", desc, Inconclusive, base)
 	}

@@ -1,22 +1,26 @@
-// Package mesh implements Phases 1 and 2 of the Benzene Mesh design (docs/design/mesh.md
-// §8): a service's self-description (Descriptor) derived from its live Registry -
-// including per-topic request/response JSON Schemas derived at startup from the
-// registered handler types, and the contract hash that makes drift detectable
-// (schema.go) - a reserved-topic interception middleware that serves that descriptor,
-// and a trace middleware (trace.go) that turns every pipeline invocation into a semantic
-// TraceEvent handed to an Exporter - either the zero-setup LogExporter (exporter.go) or
-// the batching PushExporter (push.go) that feeds a collector over the mesh:* wire topics
-// (wire.go), with span propagation for cross-service trace joins (span.go). The meshd
-// package implements the collector side.
+// Package mesh implements the Benzene Mesh design (the main repo's
+// docs/specification/mesh.md, originally extracted from this package's earlier
+// docs/design/mesh.md): a service's self-description (Descriptor) derived from its live
+// Registry (what it provides, §2) and its live OutboundRegistry (what it consumes, §2.3) -
+// including per-topic request/response JSON Schemas derived at startup from the registered
+// types, and the contract hash that makes drift detectable (schema.go) - a reserved-topic
+// interception middleware that serves that descriptor, and a trace middleware (trace.go) that
+// turns every pipeline invocation into a semantic TraceEvent handed to an Exporter - either the
+// zero-setup LogExporter (exporter.go) or the batching PushExporter (push.go) that feeds a
+// collector over the mesh:* wire topics (wire.go), with span propagation for cross-service
+// trace joins (span.go). The meshd package implements the collector side, where the declared
+// Descriptor - not trace parentage - is the producer/consumer graph's sole source (mesh.md §4);
+// traces there are an observed, additive signal for liveness and drift (§4.2), never for graph
+// membership.
 //
 // Every feed this package provides is independent and optional, and unavailability
 // degrades the mesh rather than the service. A deployment that provisions only the trace
 // feed - for example, when the descriptor endpoint is withheld pending a security review -
 // still yields a reduced mesh (live stats and flows, no catalog entries), and a
-// descriptor-only deployment yields the reverse. Concretely: Describe with a nil Registry
-// returns a descriptor without topics and records the missing feed in Degraded;
-// TraceMiddleware with a nil Exporter is a pass-through; and a panicking or failing
-// exporter never affects the invocation it observed.
+// descriptor-only deployment yields the reverse. Concretely: Describe with a nil Registry or a
+// nil OutboundRegistry returns a descriptor without that half of the catalog and records the
+// missing feed in Degraded; TraceMiddleware with a nil Exporter is a pass-through; and a
+// panicking or failing exporter never affects the invocation it observed.
 package mesh
 
 import (
@@ -34,6 +38,10 @@ const TopicID = "benzene:mesh"
 // descriptor's topic list is derived from.
 const FeedRegistry = "registry"
 
+// FeedOutboundRegistry names the consumed-topic feed in Descriptor.Degraded: the
+// OutboundRegistry the descriptor's Consumes list is derived from (mesh.md §2.3).
+const FeedOutboundRegistry = "outbound-registry"
+
 // Placement locates a service instance (mesh.md §4.3). Cloud is one of "aws", "azure",
 // "gcp", or "self-hosted" when detected; an explicit ServiceInfo.Placement override may
 // carry any value.
@@ -46,16 +54,21 @@ type Placement struct {
 // describe the marshaled request/response forms, derived at startup from the TReq/TRes
 // types captured at the Register call site (see deriveSchema for the exact mapping); they
 // are what lets the mesh flag schema drift from live data instead of hand-written specs.
+// The schemas are never omitted from the wire even when unconstrained ({}): a consumed topic
+// with no declared response type (mesh.md §2.3) marshals responseSchema as the empty object,
+// not as an absent key - a reader must be able to tell "unconstrained" from "not derived".
 type TopicDescriptor struct {
 	ID             string         `json:"id"`
 	Version        string         `json:"version,omitempty"`
-	RequestSchema  map[string]any `json:"requestSchema,omitempty"`
-	ResponseSchema map[string]any `json:"responseSchema,omitempty"`
+	RequestSchema  map[string]any `json:"requestSchema"`
+	ResponseSchema map[string]any `json:"responseSchema"`
 }
 
-// Descriptor is the service self-description of mesh.md §5.1: identity, placement, and
-// the topic catalog derived from the Registry. It is what makes the mesh's catalog
-// "derived, not declared" - there is no hand-maintained counterpart to go stale.
+// Descriptor is the service self-description of mesh.md §2: identity, placement, the topic
+// catalog derived from the Registry (what this service provides), and the consumed-topic
+// catalog derived from the OutboundRegistry (what this service consumes, §2.3). It is what
+// makes the mesh's catalog "derived, not declared" - there is no hand-maintained counterpart to
+// go stale, on either side of the graph.
 type Descriptor struct {
 	Service        string            `json:"service"`
 	ServiceVersion string            `json:"serviceVersion,omitempty"`
@@ -64,14 +77,21 @@ type Descriptor struct {
 	Binding        string            `json:"binding,omitempty"`
 	Placement      Placement         `json:"placement"`
 	Topics         []TopicDescriptor `json:"topics"`
-	// DescriptorHash is the contract hash (mesh.md §5.1): stable across instances and
+	// Consumes is every registered outbound topic (mesh.md §2.3): what this service consumes.
+	// This is the field the collector's consumer-edge derivation reads (mesh.md §4) - a topic
+	// absent here is not consumed by this service, regardless of what traffic has or hasn't
+	// flowed. Populated the same way Topics is: always present, empty when the service consumes
+	// nothing (as opposed to a nil OutboundRegistry, which instead degrades the feed).
+	Consumes []TopicDescriptor `json:"consumes"`
+	// DescriptorHash is the contract hash (mesh.md §2.2): stable across instances and
 	// heartbeats of the same build, changed exactly when the contract changes - which is
 	// what lets a collector detect a redeploy (or a schema change without a version bump)
 	// from the hash alone. See descriptorHash for what it covers and excludes.
 	DescriptorHash string `json:"descriptorHash,omitempty"`
 	// Degraded lists the feeds that were unavailable when the descriptor was built (e.g.
-	// FeedRegistry when Describe was given a nil Registry), so a reduced mesh is visible
-	// as reduced rather than mistaken for a service with no topics.
+	// FeedRegistry when Describe was given a nil Registry, FeedOutboundRegistry when given a
+	// nil OutboundRegistry), so a reduced mesh is visible as reduced rather than mistaken for a
+	// service that provides or consumes nothing.
 	Degraded []string `json:"degraded,omitempty"`
 }
 
@@ -87,13 +107,14 @@ type ServiceInfo struct {
 	Placement      Placement
 }
 
-// Describe builds the service Descriptor from the live registry plus info. Call it after
-// all Register calls (registration is a startup activity, so the topic list is complete
-// and static from then on). A nil registry is not an error: the descriptor is built
-// without a topic list and the missing feed is recorded in Degraded, so a service whose
-// registry feed is deliberately not wired up still participates in the mesh reduced,
-// rather than not at all.
-func Describe(registry *benzene.Registry, info ServiceInfo) Descriptor {
+// Describe builds the service Descriptor from the live registry, the live outbound registry,
+// and info. Call it after all Register/RegisterOutbound calls (registration is a startup
+// activity, so both lists are complete and static from then on). A nil registry or a nil
+// outbound registry is not an error: the descriptor is built without that half of the catalog
+// and the missing feed is recorded in Degraded, so a service whose registry or outbound-registry
+// feed is deliberately not wired up still participates in the mesh reduced, rather than not at
+// all - the same degradation rule applied symmetrically to both halves of the contract.
+func Describe(registry *benzene.Registry, outbound *OutboundRegistry, info ServiceInfo) Descriptor {
 	desc := Descriptor{
 		Service:        info.Service,
 		ServiceVersion: info.ServiceVersion,
@@ -102,6 +123,7 @@ func Describe(registry *benzene.Registry, info ServiceInfo) Descriptor {
 		Binding:        info.Binding,
 		Placement:      info.Placement,
 		Topics:         []TopicDescriptor{},
+		Consumes:       []TopicDescriptor{},
 	}
 	if desc.Placement.Cloud == "" {
 		desc.Placement = DetectPlacement()
@@ -116,6 +138,20 @@ func Describe(registry *benzene.Registry, info ServiceInfo) Descriptor {
 			// schema-less rather than failing, per this package's degradation rule.
 			requestType, responseType, _ := registry.TopicTypes(topic)
 			desc.Topics = append(desc.Topics, TopicDescriptor{
+				ID:             topic.ID,
+				Version:        topic.Version,
+				RequestSchema:  deriveSchema(requestType),
+				ResponseSchema: deriveSchema(responseType),
+			})
+		}
+	}
+	if outbound == nil {
+		desc.Degraded = append(desc.Degraded, FeedOutboundRegistry)
+	} else {
+		for _, topic := range outbound.Topics() {
+			// Same blank-ok defensive rationale as the registry loop above.
+			requestType, responseType, _ := outbound.TopicTypes(topic)
+			desc.Consumes = append(desc.Consumes, TopicDescriptor{
 				ID:             topic.ID,
 				Version:        topic.Version,
 				RequestSchema:  deriveSchema(requestType),

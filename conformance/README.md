@@ -38,20 +38,31 @@ main repo's `conformance/README.md`:
 | `conformance:status` | Returns the given status verbatim, with `{"applied": "<status>"}` on success or the given errors on failure |
 | `conformance:panic` | (mesh trace cases only) Panics unconditionally - pins the panic→`service-unavailable` trace rule |
 
+`mesh-descriptor-cases.json` additionally registers one canonical **outbound** record (mesh.md
+§2.3, no handler): `conformance:log`, request `{"message": string}`, no declared response type.
+This is what populates `ServiceDescriptor.consumes` for that fixture; it is never sent, and no
+handler answers it anywhere else.
+
 ## Mesh fixtures
 
 `mesh-*.json` pin the mesh module (the main repo's `docs/specification/mesh.md` §7,
 implemented here by the `mesh` and `meshd` packages); `mesh_conformance_test.go` is their
 runner. Descriptor cases derive the service descriptor from the two canonical envelope
-handlers and assert the derived schemas plus the descriptorHash's format/invariance/
-sensitivity properties; trace cases assert the traceparent join/reject rules and the
-invocation→semantic-status mapping; collector cases run ordered envelope sequences against a
-fresh `meshd` collector per case. `mesh-issue-cases.json` pins the issue-feed collector
-(`mesh.md` §4.1: batch-service required, empty-batch liveness, delta-merge by fingerprint,
-invalid-entry skip, and the conditional `issues` missing-feed marker); it shares the collector
-cases' step/assertion model exactly and reuses the same runner. Mesh fixtures add one matching
-rule: arrays compare by exact length with per-element subset matching, and an expected `[]`
-matches an absent-or-empty actual array.
+handlers plus the one canonical outbound registration above, and assert the derived
+`topics`/`consumes` schemas plus the descriptorHash's format/invariance/sensitivity properties
+(now including sensitivity to the consumed-topic set); trace cases assert the traceparent
+join/reject rules and the invocation→semantic-status mapping; collector cases run ordered
+envelope sequences against a fresh `meshd` collector per case. Per the main repo's 2026-08
+revision (PR #66): the producer/consumer graph (`providers`/`consumers` on
+`benzene:mesh:query:topic`) is built from the latest registered ServiceDescriptor's
+`topics`/`consumes` alone - trace parentage feeds invocation stats and the declared-vs-observed
+liveness/drift signals of §4.2, never graph membership; `meshd`'s `store.go` is where this is
+implemented. `mesh-issue-cases.json` pins the issue-feed collector (`mesh.md` §4.1:
+batch-service required, empty-batch liveness, delta-merge by fingerprint, invalid-entry skip,
+and the conditional `issues` missing-feed marker); it shares the collector cases'
+step/assertion model exactly and reuses the same runner. Mesh fixtures add one matching rule:
+arrays compare by exact length with per-element subset matching, and an expected `[]` matches
+an absent-or-empty actual array.
 
 ## Transport metadata fixture
 

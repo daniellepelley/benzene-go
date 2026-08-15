@@ -181,13 +181,14 @@ func nullable(schema map[string]any) map[string]any {
 	return schema
 }
 
-// descriptorHash computes the contract hash of mesh.md §5.1: sha256 over the descriptor's
+// descriptorHash computes the contract hash of mesh.md §2.2: sha256 over the descriptor's
 // canonical JSON with the per-instance and transient fields blanked - InstanceID
 // identifies a copy of the service, not its contract, and Degraded reflects feed
 // availability at build time - so two instances of the same build hash identically, and
-// the hash changes exactly when the contract (identity, placement, topics, schemas)
-// changes. Canonical: struct fields marshal in declaration order and Go maps marshal with
-// sorted keys, so equal descriptors yield byte-equal JSON.
+// the hash changes exactly when the contract (identity, placement, topics, consumes, schemas)
+// changes: adding, removing, or re-typing a consumed topic is a contract change exactly as
+// doing so to a provided one is. Canonical: struct fields marshal in declaration order and Go
+// maps marshal with sorted keys, so equal descriptors yield byte-equal JSON.
 func descriptorHash(desc Descriptor) string {
 	desc.InstanceID = ""
 	desc.DescriptorHash = ""

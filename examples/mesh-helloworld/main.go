@@ -3,23 +3,30 @@
 // collector and three services demonstrating every mesh feature.
 //
 //   - greeter and frontdoor are fully meshed: descriptor endpoint (topics + derived
-//     schemas + contract hash), registration, heartbeats, and trace push. frontdoor calls
-//     greeter over the wire envelope, propagating its trace span, so the collector derives
-//     the frontdoor→greet consumer edge from parentage.
+//     schemas + contract hash), registration (including frontdoor's outbound registration
+//     of "greet" - what makes it a declared consumer, mesh.md §2.3), heartbeats, and trace
+//     push. frontdoor also propagates its trace span onto its call to greeter, so the
+//     collector can additionally show that declared edge as observed (mesh.md §4.2) - but
+//     the edge itself, on the topic catalog, comes from frontdoor's registered Consumes,
+//     never from the trace.
 //   - legacy-portal is deliberately reduced: it provisions ONLY the trace feed - no
 //     descriptor endpoint, no registration, no heartbeats (the "descriptor endpoint
 //     withheld" deployment). It still calls greeter and still appears on the view, as
 //     reduced feeds: descriptor, health - anonymous-but-live, exactly the degradation
-//     rule the design makes normative.
+//     rule the design makes normative. Because it never registers, it has no declared
+//     contract to diverge from: its calls to greeter add up in "greet"'s invocation stats,
+//     but they never appear as a consumer edge and are never flagged as drift (mesh.md
+//     §4.2) - a live demonstration of "declared, not traffic-derived."
 //
 // Run it and open http://localhost:8090/ - then generate flows:
 //
 //	curl -s -X POST localhost:8081/welcome -d '{"name":"Mesh"}'   # fully meshed path
 //	curl -s -X POST localhost:8082/relay   -d '{"name":"Mesh"}'   # reduced-service path
 //
-// Everything on the view is derived from the running services; nothing here declares any
-// catalog data. See the README for drilling into descriptors, topics, and traces with
-// curl.
+// The topic catalog (who provides/consumes what) is declared by each service's descriptor;
+// health, traffic stats, and the observed-activity/drift signals are derived from what the
+// running services actually do. See the README for drilling into descriptors, topics, and
+// traces with curl.
 package main
 
 import (
@@ -70,9 +77,11 @@ type welcomeResponse struct {
 
 // welcomeHandler is the cross-service hop: it calls greeter's "greet" topic over the wire
 // envelope. Trace propagation - forwarding this invocation's span as a traceparent header, which
-// joins the two services' trace events into one flow and derives the consumer edge on the
-// collector - is handled by wrapping greeter in mesh.WithTraceContext at construction (see
-// the call sites), so the handler itself writes no mesh-specific line at all.
+// joins the two services' trace events into one flow and lets the collector show the declared
+// edge as observed (mesh.md §4.2) - is handled by wrapping greeter in mesh.WithTraceContext at
+// construction (see the call sites), so the handler itself writes no mesh-specific line at all.
+// The edge on the topic catalog itself comes from the caller's outbound registration
+// (registerOutbound at the newService call site), not from this propagation.
 func welcomeHandler(greeter client.Sender) benzene.Handler[welcomeRequest, welcomeResponse] {
 	return func(ctx context.Context, req welcomeRequest) benzene.Result[welcomeResponse] {
 		body, err := json.Marshal(greetRequest{Name: req.Name})
@@ -100,19 +109,26 @@ type service struct {
 	meshd         *httpclient.Client
 }
 
-// newService assembles a meshed Benzene service: the caller's handlers, health-check
-// interception, trace push to the collector, native routes, and the envelope endpoint at
-// httpbinding.EnvelopePath (the default service standard's well-known mount, main repo's
-// docs/specification/design-principles.md §5). provisionDescriptor controls the reserved-mesh-topic endpoint - passing false
-// is the "spec endpoint withheld" deployment: the service still traces, it just serves no
-// descriptor (and on the view degrades to reduced, never breaks). The mesh wiring is the
-// mesh.* lines in the pipeline; everything else is the same as examples/helloworld.
-func newService(name, meshdEndpoint string, provisionDescriptor bool, registerHandlers func(*benzene.Registry), routes []httpbinding.Route) *service {
+// newService assembles a meshed Benzene service: the caller's handlers, its outbound
+// registration (what it consumes, mesh.md §2.3 - registerOutbound may be nil for a service that
+// consumes nothing), health-check interception, trace push to the collector, native routes, and
+// the envelope endpoint at httpbinding.EnvelopePath (the default service standard's well-known
+// mount, main repo's docs/specification/design-principles.md §5). provisionDescriptor controls
+// the reserved-mesh-topic endpoint - passing false is the "spec endpoint withheld" deployment:
+// the service still traces, it just serves no descriptor (and on the view degrades to reduced,
+// never breaks). The mesh wiring is the mesh.* lines in the pipeline; everything else is the
+// same as examples/helloworld.
+func newService(name, meshdEndpoint string, provisionDescriptor bool, registerHandlers func(*benzene.Registry), registerOutbound func(*mesh.OutboundRegistry), routes []httpbinding.Route) *service {
 	registry := benzene.NewRegistry()
 	registerHandlers(registry)
 
+	outbound := mesh.NewOutboundRegistry()
+	if registerOutbound != nil {
+		registerOutbound(outbound)
+	}
+
 	info := mesh.ServiceInfo{Service: name, ServiceVersion: "1.0.0", InstanceID: name + "-1", Binding: "http"}
-	descriptor := mesh.Describe(registry, info)
+	descriptor := mesh.Describe(registry, outbound, info)
 	exporter := mesh.NewPushExporter(httpclient.NewClient(meshdEndpoint), mesh.PushExporterOptions{FlushInterval: time.Second})
 	issueExporter := mesh.NewPushIssueExporter(httpclient.NewClient(meshdEndpoint), name, mesh.PushIssueExporterOptions{FlushInterval: time.Second})
 
@@ -204,7 +220,7 @@ func main() {
 		if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
 			log.Fatalf("register greet: %v", err)
 		}
-	}, []httpbinding.Route{
+	}, nil, []httpbinding.Route{
 		{Method: http.MethodPost, Path: "/greet", Topic: benzene.NewTopic("greet")},
 		{Method: http.MethodGet, Path: httpbinding.HealthPath, Topic: benzene.NewTopic(healthcheck.ReservedTopic)},
 	})
@@ -217,6 +233,13 @@ func main() {
 		if err := benzene.Register(registry, benzene.NewTopic("welcome"), welcomeHandler(greeterClient)); err != nil {
 			log.Fatalf("register welcome: %v", err)
 		}
+	}, func(outbound *mesh.OutboundRegistry) {
+		// frontdoor's declared contract: it calls greeter's "greet" (mesh.md §2.3). This -
+		// not the trace propagation above - is what makes "greet" show frontdoor as a
+		// consumer on the topic catalog (mesh.md §4).
+		if err := mesh.RegisterOutbound[greetRequest, greetResponse](outbound, benzene.NewTopic("greet")); err != nil {
+			log.Fatalf("register outbound greet: %v", err)
+		}
 	}, []httpbinding.Route{
 		{Method: http.MethodPost, Path: "/welcome", Topic: benzene.NewTopic("welcome")},
 		{Method: http.MethodGet, Path: httpbinding.HealthPath, Topic: benzene.NewTopic(healthcheck.ReservedTopic)},
@@ -226,15 +249,17 @@ func main() {
 	go func() { log.Fatal(http.ListenAndServe(":"+frontdoorPort, frontdoor.handler)) }()
 
 	// legacy-portal provisions ONLY the trace feed: no descriptor endpoint (false below),
-	// and it never announces or heartbeats. It shows up on the view as reduced -
-	// "missing feeds: descriptor, health" - and its calls to greeter still produce the
-	// legacy-portal→greet consumer edge. This is the degradation rule, live.
+	// and it never announces or heartbeats - so even though it calls greeter, it has no
+	// registered Consumes to show that edge with (mesh.md §4.2: an anonymous service has no
+	// contract to diverge from, declared or drifted). It shows up on the view as reduced -
+	// "missing feeds: descriptor, health" - and its calls to greeter still count in "greet"'s
+	// invocation stats. This is the degradation rule, live.
 	legacy := newService("legacy-portal", meshdEndpoint, false, func(registry *benzene.Registry) {
 		greeterClient := mesh.WithTraceContext(httpclient.NewClient("http://localhost:" + greeterPort + httpbinding.EnvelopePath))
 		if err := benzene.Register(registry, benzene.NewTopic("legacy:relay"), welcomeHandler(greeterClient)); err != nil {
 			log.Fatalf("register legacy:relay: %v", err)
 		}
-	}, []httpbinding.Route{
+	}, nil, []httpbinding.Route{
 		{Method: http.MethodPost, Path: "/relay", Topic: benzene.NewTopic("legacy:relay")},
 	})
 	defer legacy.exporter.Close()

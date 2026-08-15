@@ -82,13 +82,17 @@ endpoint:
   Profile) and a small native route per service for convenience (`POST /orders`,
   `POST /payments`, `POST /shipments`).
 - **Egress** — `orders`' `order:create` handler asks `payments` to `payment:take`, and
-  `payments`' `payment:take` handler asks `shipping` to `shipment:book`, each over
-  `httpclient.Client` wrapped in `mesh.WithTraceContext` (propagates the invocation's span as a
-  `traceparent` header, the same decorator `examples/mesh-helloworld`'s frontdoor → greeter hop
-  uses) — so the collector derives the consumer edge from trace parentage, no extra wiring in the
-  handler itself. The target is the neighbour's in-cluster DNS name, injected as
+  `payments`' `payment:take` handler asks `shipping` to `shipment:book`. Each caller declares
+  that outbound call via `mesh.RegisterOutbound` (`registerDomain` in `cmd/service/main.go`,
+  mesh.md §2.3) — that declared `consumes` entry is what makes the caller show up as the
+  downstream topic's consumer on the mesh's topic catalog (mesh.md §4), with no traffic required.
+  The `httpclient.Client` making the call is separately wrapped in `mesh.WithTraceContext`
+  (propagates the invocation's span as a `traceparent` header, the same decorator
+  `examples/mesh-helloworld`'s frontdoor → greeter hop uses) — that only lets the collector show
+  the already-declared edge as *observed* (mesh.md §4.2), on top of, never instead of, the
+  declared one. The target is the neighbour's in-cluster DNS name, injected as
   `DOWNSTREAM_MSG_URL` (e.g. `http://payments/benzene/invoke`); the terminal `shipping` service
-  has none.
+  has none, and registers no outbound record.
 
 Send an order into the front of the chain and watch it propagate (from a
 `kubectl -n benzene-mesh port-forward svc/orders 8081:80`, or directly against a service ELB on

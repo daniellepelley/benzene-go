@@ -13,10 +13,14 @@
 //
 // Egress (the chain): orders' order:create handler asks payments' payment:take, and payments'
 // payment:take handler asks shipping's shipment:book, each over DOWNSTREAM_MSG_URL — the
-// downstream service's in-cluster envelope endpoint — via httpclient.Client wrapped in
-// mesh.WithTraceContext so the collector can derive the consumer edge from trace parentage
-// (exactly like examples/mesh-helloworld's frontdoor -> greeter hop). shipping is terminal: no
-// DOWNSTREAM_MSG_URL, no outbound client.
+// downstream service's in-cluster envelope endpoint. Each caller also registers an outbound
+// record for its downstream topic (mesh.RegisterOutbound, mesh.md §2.3) — that declared
+// Consumes entry, not trace propagation, is what makes the caller show up as a consumer on the
+// mesh's topic catalog (mesh.md §4). The httpclient.Client is separately wrapped in
+// mesh.WithTraceContext so the collector can additionally show that declared edge as observed
+// (mesh.md §4.2, exactly like examples/mesh-helloworld's frontdoor -> greeter hop) — propagation
+// layers on top of the declared edge, it never substitutes for it. shipping is terminal: no
+// DOWNSTREAM_MSG_URL, no outbound client, nothing to register.
 //
 // Fleet reporting: when MESH_COLLECTOR_ENVELOPE_URL is set, this service announces its
 // descriptor, heartbeats every 10s, and pushes traces + issues to the mesh's meshd collector —
@@ -68,13 +72,14 @@ func newService(meshService, downstreamURL, collectorURL string) *service {
 	}
 
 	registry := benzene.NewRegistry()
+	outbound := mesh.NewOutboundRegistry()
 	routes := []httpbinding.Route{
 		{Method: http.MethodGet, Path: httpbinding.HealthPath, Topic: benzene.NewTopic(healthcheck.ReservedTopic)},
 	}
-	name, routes := registerDomain(registry, routes, meshService, downstream)
+	name, routes := registerDomain(registry, outbound, routes, meshService, downstream)
 
 	info := mesh.ServiceInfo{Service: name, ServiceVersion: "1.0.0", InstanceID: name, Binding: "http"}
-	descriptor := mesh.Describe(registry, info)
+	descriptor := mesh.Describe(registry, outbound, info)
 
 	checks := []healthcheck.Check{healthcheck.NamedCheck("self", func(context.Context) healthcheck.CheckResult {
 		return healthcheck.CheckResult{Status: healthcheck.StatusOk, Type: "self", Data: map[string]any{"service": name}}
@@ -117,28 +122,42 @@ func newService(meshService, downstreamURL, collectorURL string) *service {
 	}
 }
 
-// registerDomain wires the selected domain's handler + native route onto registry/routes, and
-// returns the resolved service name ("orders" is also the default for any unrecognised value,
-// matching benzene-dotnet's Domain.HandlersFor switch default).
-func registerDomain(registry *benzene.Registry, routes []httpbinding.Route, meshService string, downstream client.Sender) (string, []httpbinding.Route) {
+// registerDomain wires the selected domain's handler + native route onto registry/routes, and -
+// when downstream is non-nil - its outbound registration for the topic it chains to onto
+// outbound (mesh.md §2.3: the declared Consumes entry, the sole source of that consumer edge on
+// the mesh's topic catalog, mesh.md §4). Returns the resolved service name ("orders" is also the
+// default for any unrecognised value, matching benzene-dotnet's Domain.HandlersFor switch
+// default).
+func registerDomain(registry *benzene.Registry, outbound *mesh.OutboundRegistry, routes []httpbinding.Route, meshService string, downstream client.Sender) (string, []httpbinding.Route) {
 	switch meshService {
 	case "payments":
 		if err := benzene.Register(registry, benzene.NewTopic(domain.TopicPaymentTake), domain.TakePaymentHandler(downstream)); err != nil {
 			log.Fatalf("register payment:take: %v", err)
 		}
 		routes = append(routes, httpbinding.Route{Method: http.MethodPost, Path: "/payments", Topic: benzene.NewTopic(domain.TopicPaymentTake)})
+		if downstream != nil {
+			if err := mesh.RegisterOutbound[domain.BookShipmentRequest, domain.ShipmentBooked](outbound, benzene.NewTopic(domain.TopicShipmentBook)); err != nil {
+				log.Fatalf("register outbound shipment:book: %v", err)
+			}
+		}
 		return "payments", routes
 	case "shipping":
 		if err := benzene.Register(registry, benzene.NewTopic(domain.TopicShipmentBook), domain.BookShipmentHandler()); err != nil {
 			log.Fatalf("register shipment:book: %v", err)
 		}
 		routes = append(routes, httpbinding.Route{Method: http.MethodPost, Path: "/shipments", Topic: benzene.NewTopic(domain.TopicShipmentBook)})
+		// shipping is terminal: no downstream, nothing to register as consumed.
 		return "shipping", routes
 	default:
 		if err := benzene.Register(registry, benzene.NewTopic(domain.TopicOrderCreate), domain.CreateOrderHandler(downstream)); err != nil {
 			log.Fatalf("register order:create: %v", err)
 		}
 		routes = append(routes, httpbinding.Route{Method: http.MethodPost, Path: "/orders", Topic: benzene.NewTopic(domain.TopicOrderCreate)})
+		if downstream != nil {
+			if err := mesh.RegisterOutbound[domain.TakePaymentRequest, domain.PaymentTaken](outbound, benzene.NewTopic(domain.TopicPaymentTake)); err != nil {
+				log.Fatalf("register outbound payment:take: %v", err)
+			}
+		}
 		return "orders", routes
 	}
 }

@@ -123,8 +123,8 @@ func TestChain_OrdersToPaymentsToShipping(t *testing.T) {
 		t.Errorf("expected traced invocations on every hop, got %+v", services)
 	}
 
-	// Consumer edges were derived from trace parentage - orders' outbound call is what puts it
-	// on payment:take's consumers, not any declaration.
+	// Consumer edges are declared: orders' outbound registration (registerDomain in main.go)
+	// is what puts it on payment:take's consumers, not the traffic just asserted above.
 	topicResult := collectorClient.Send(ctx, benzene.NewTopic(mesh.TopicQueryTopic), nil, []byte(`{"topic":"payment:take"}`))
 	paymentTopic, err := httpclient.Unmarshal[meshd.TopicSummary](topicResult)
 	if err != nil || paymentTopic.Payload == nil {

@@ -12,14 +12,22 @@ import (
 )
 
 // Issue classification vocabulary (mesh.md §4.1) - a closed set assigned by the normative
-// precedence table in ClassifyIssue. contractDrift is never produced by an emitter (it is
-// reserved for collector/reader-derived issues), so it is not exported here.
+// precedence table in ClassifyIssue. The other five are never produced outside that table, so
+// they stay unexported; ClassificationContractDrift is exported because a collector assigns it
+// directly, outside the precedence table (see its own doc).
 const (
 	classificationValidation   = "validation"
 	classificationException    = "exception"
 	classificationConfigWiring = "config-wiring"
 	classificationDependency   = "dependency"
 	classificationUnclassified = "unclassified"
+
+	// ClassificationContractDrift is the issue classification reserved for collector/reader-
+	// derived issues (mesh.md §4.1): a descriptor-hash mismatch, schema divergence, or - the
+	// case mesh.md §4.2 defines - a trace naming a topic absent from the caller's declared
+	// Consumes or the handler's declared Topics. ClassifyIssue's precedence table never
+	// produces it; a collector (meshd) assigns it directly when it detects one of these cases.
+	ClassificationContractDrift = "contract-drift"
 )
 
 // ClassifyIssue assigns an issue classification from a failing invocation's Benzene status and

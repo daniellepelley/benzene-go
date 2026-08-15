@@ -239,15 +239,15 @@ func TestDescriptorHash(t *testing.T) {
 	registry := newTestRegistry(t, benzene.NewTopic("order:create"))
 
 	t.Run("has the sha256 wire format", func(t *testing.T) {
-		hash := Describe(registry, info).DescriptorHash
+		hash := Describe(registry, nil, info).DescriptorHash
 		if len(hash) != len("sha256:")+64 || hash[:7] != "sha256:" {
 			t.Errorf("DescriptorHash = %q, want sha256:<64 hex chars>", hash)
 		}
 	})
 
 	t.Run("is deterministic for the same contract", func(t *testing.T) {
-		a := Describe(registry, info).DescriptorHash
-		b := Describe(newTestRegistry(t, benzene.NewTopic("order:create")), info).DescriptorHash
+		a := Describe(registry, nil, info).DescriptorHash
+		b := Describe(newTestRegistry(t, benzene.NewTopic("order:create")), nil, info).DescriptorHash
 		if a != b {
 			t.Errorf("hashes differ for identical contracts: %q vs %q", a, b)
 		}
@@ -256,13 +256,13 @@ func TestDescriptorHash(t *testing.T) {
 	t.Run("ignores the instance id - two copies of one build hash identically", func(t *testing.T) {
 		other := info
 		other.InstanceID = "orders-2"
-		if a, b := Describe(registry, info).DescriptorHash, Describe(registry, other).DescriptorHash; a != b {
+		if a, b := Describe(registry, nil, info).DescriptorHash, Describe(registry, nil, other).DescriptorHash; a != b {
 			t.Errorf("hashes differ across instances of the same build: %q vs %q", a, b)
 		}
 	})
 
 	t.Run("ignores transient feed degradation", func(t *testing.T) {
-		desc := Describe(nil, info)
+		desc := Describe(nil, nil, info)
 		bare := desc
 		bare.Degraded = nil
 		if a, b := descriptorHash(desc), descriptorHash(bare); a != b {
@@ -272,7 +272,7 @@ func TestDescriptorHash(t *testing.T) {
 
 	t.Run("changes when the topic contract changes", func(t *testing.T) {
 		grown := newTestRegistry(t, benzene.NewTopic("order:create"), benzene.NewTopic("order:cancel"))
-		if a, b := Describe(registry, info).DescriptorHash, Describe(grown, info).DescriptorHash; a == b {
+		if a, b := Describe(registry, nil, info).DescriptorHash, Describe(grown, nil, info).DescriptorHash; a == b {
 			t.Errorf("hash did not change when a topic was added: %q", a)
 		}
 	})
@@ -280,7 +280,7 @@ func TestDescriptorHash(t *testing.T) {
 	t.Run("changes when the service version changes", func(t *testing.T) {
 		bumped := info
 		bumped.ServiceVersion = "1.0.1"
-		if a, b := Describe(registry, info).DescriptorHash, Describe(registry, bumped).DescriptorHash; a == b {
+		if a, b := Describe(registry, nil, info).DescriptorHash, Describe(registry, nil, bumped).DescriptorHash; a == b {
 			t.Errorf("hash did not change when serviceVersion changed: %q", a)
 		}
 	})
@@ -288,7 +288,7 @@ func TestDescriptorHash(t *testing.T) {
 
 func TestDescriptor_TopicSchemasHaveCamelCaseWireNames(t *testing.T) {
 	registry := newTestRegistry(t, benzene.NewTopic("order:create"))
-	desc := Describe(registry, ServiceInfo{Service: "orders", Placement: Placement{Cloud: "aws"}})
+	desc := Describe(registry, nil, ServiceInfo{Service: "orders", Placement: Placement{Cloud: "aws"}})
 
 	data, err := json.Marshal(desc)
 	if err != nil {

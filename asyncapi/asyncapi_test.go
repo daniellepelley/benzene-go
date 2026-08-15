@@ -33,7 +33,7 @@ func newDescriptor(t *testing.T, topics ...string) mesh.Descriptor {
 			t.Fatalf("Register(%s): %v", topic, err)
 		}
 	}
-	return mesh.Describe(registry, mesh.ServiceInfo{Service: "orders", ServiceVersion: "1.2.3"})
+	return mesh.Describe(registry, nil, mesh.ServiceInfo{Service: "orders", ServiceVersion: "1.2.3"})
 }
 
 func TestGenerate_TopLevelAndInfo(t *testing.T) {
@@ -205,7 +205,7 @@ func TestGenerate_DefaultsForEmptyServiceIdentity(t *testing.T) {
 		benzene.Handler[createOrderReq, createOrderResp](func(_ context.Context, _ createOrderReq) benzene.Result[createOrderResp] {
 			return benzene.Ok(createOrderResp{})
 		}))
-	desc := mesh.Describe(registry, mesh.ServiceInfo{}) // no service name/version
+	desc := mesh.Describe(registry, nil, mesh.ServiceInfo{}) // no service name/version
 
 	doc := asyncapi.Generate(desc)
 	if doc.Info.Title != "benzene-service" || doc.Info.Version != "0.0.0" {

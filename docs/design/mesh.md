@@ -15,6 +15,18 @@ cross-language fleets, in both directions.
 [`mesh-spec-draft.md`](./mesh-spec-draft.md) is kept as the historical draft the
 promotion was authored from.
 
+> **Superseded (2026-08).** This document is kept as a historical record of Phases 1-5 and is
+> **not updated to match every later spec revision** - `docs/specification/mesh.md` in the main
+> repo is the current normative text, and this port's `mesh`/`meshd` packages implement *that*,
+> not this narrative. In particular: everywhere below that says a consumer edge is "derived from
+> trace parentage" describes a rule the main repo's 2026-08 revision (PR #66) superseded - the
+> producer/consumer graph is now built **only** from the latest registered `ServiceDescriptor`
+> (`topics` for providers, the new `consumes` - populated via `mesh.OutboundRegistry`/
+> `RegisterOutbound`, mesh.md §2.3 - for consumers); trace parentage is an additive, observed-only
+> signal for liveness and drift (mesh.md §4.2: "Unobserved"/last-observed-at and undeclared-edge
+> `contract-drift` issues), never a way to admit or remove a graph edge. See the revision note at
+> the top of the main repo's mesh.md for the full rationale.
+
 A degradation rule became explicit during Phase 1 implementation and binds every later
 phase: **every mesh feed is independent and optional, and an unavailable feed reduces
 the mesh, never the service - and never the other feeds.** A deployment whose descriptor

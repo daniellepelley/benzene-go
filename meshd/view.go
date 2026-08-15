@@ -26,7 +26,7 @@ const (
 // polls the collector's own benzene:mesh:query:fleet topic through the wire-envelope endpoint
 // mounted at envelopePath (same-origin; "" means the standard EnvelopePath). The page is
 // a read-only rendering of FleetView: services with health and reduced-feed markers, the
-// topic catalog with observed consumers, and recent flows.
+// topic catalog with its declared providers/consumers (mesh.md §4), and recent flows.
 //
 // The view degrades like everything else in the mesh: if the envelope endpoint is
 // unreachable it shows a retrying banner over the last rendered state rather than

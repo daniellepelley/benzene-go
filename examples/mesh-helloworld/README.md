@@ -25,11 +25,14 @@ curl -s -X POST localhost:8082/relay   -d '{"name":"Mesh"}'     # the same flow 
 
 ## What each part demonstrates
 
-Everything the view shows is **derived** from the running services, nothing is declared:
+The topic catalog (who provides/consumes what) is **declared** by each service's own descriptor;
+health, traffic stats, and the observed-activity/drift signals layered on top are **derived**
+from what the running services actually do (spec §4, §4.2 - the main repo's 2026-08 revision):
 
 - **Descriptor + schemas + contract hash** (spec §2): each fully-meshed service's row comes
-  from its `benzene:mesh:register` descriptor - topics from the Registry, request/response JSON
-  Schemas derived at startup from the handler types, and the `descriptorHash`. Fetch one
+  from its `benzene:mesh:register` descriptor - `topics` from the Registry (what it provides),
+  `consumes` from the OutboundRegistry (what it consumes, spec §2.3), request/response JSON
+  Schemas derived at startup from the registered types, and the `descriptorHash`. Fetch one
   directly from the reserved `mesh` topic:
 
   ```
@@ -39,21 +42,31 @@ Everything the view shows is **derived** from the running services, nothing is d
 - **Health from heartbeats** (spec §5): greeter and frontdoor turn *healthy* on their
   heartbeats (which carry the descriptor hash, so a redeployed instance with a changed
   contract would show a hash mismatch in `benzene:mesh:query:service`).
-- **Consumer edges from trace parentage** (spec §3-4): the `greet` topic shows
-  *consumers: frontdoor, legacy-portal* because each caller's outbound client is wrapped in
-  `mesh.TraceContextDecorator`, which forwards the current invocation's span as a `traceparent`
-  header (the outbound counterpart to `mesh.TraceMiddleware`). Propagation is entirely in the
-  wiring - `welcomeHandler` itself writes no mesh-specific line.
+- **The consumer edge is declared, not trace-derived** (spec §2.3, §4): frontdoor's
+  `newService` call registers an outbound record for `greet` (`mesh.RegisterOutbound` in
+  `main.go`) - that, and only that, is why `greet`'s topic row shows *consumers: frontdoor*,
+  and it would show it even with zero traffic. frontdoor's outbound client is separately
+  wrapped in `mesh.TraceContextDecorator`, forwarding the current invocation's span as a
+  `traceparent` header - but that propagation only lets the collector show the *already-declared*
+  edge as observed (spec §4.2); it plays no part in putting the edge on the graph. legacy-portal
+  calls greeter exactly as much, but never registers, so it never appears as a consumer no
+  matter how much traffic it sends - a live demonstration that the graph is knowable before a
+  single message flows, and that traffic alone can't add to it.
 - **Issue feed** (spec §4.1): every service also runs `mesh.IssueMiddleware` with a
   `mesh.PushIssueExporter`, so a failing invocation - e.g. `curl -X POST localhost:8081/welcome
   -d '{"name":""}'`, where greeter answers `bad-request` - is classified and deduplicated by
   fingerprint at the source and pushed to the collector, which merges it (delta counts) and
   surfaces it on the fleet view. An empty batch flushes on the interval as the feed's liveness,
-  so a quiet wired service is distinguishable from an unwired one.
+  so a quiet wired service is distinguishable from an unwired one. The collector itself also
+  derives `contract-drift` issues (spec §4.1, §4.2) when a *registered* service's traces name a
+  topic it didn't declare - legacy-portal is exempt from this too, since an anonymous service has
+  no declared contract to diverge from.
 - **Degradation, live** (spec §6): legacy-portal provisions only the trace and issue feeds
   (`provisionDescriptor=false` in `main.go`, never announces or heartbeats). It serves
-  traffic like any other service, its calls still produce flows and consumer edges, and
-  its row reads *reduced feeds: descriptor, health* - anonymous-but-live, never an error.
+  traffic like any other service, its calls still produce flows and add to `greet`'s
+  invocation stats, and its row reads *reduced feeds: descriptor, health* - anonymous-but-live,
+  never an error, and never a consumer edge or a drift flag either (it has nothing registered
+  to derive either from).
 - **Drill-downs** - the same read models the view uses:
 
   ```
@@ -67,7 +80,8 @@ Everything the view shows is **derived** from the running services, nothing is d
 `go test ./...` runs the full story over real HTTP loopback servers: collector + all three
 services, a meshed and a reduced cross-service call, then asserts the derived fleet (health,
 missing-feed markers on legacy-portal), the descriptor served on the reserved topic
-(schemas + hash), both consumer edges, the joined flows, and the parent-child span
+(schemas + hash), the declared consumer edge (frontdoor only - legacy-portal's traffic counts
+in the stats but leaves no edge or drift flag), the joined flows, and the parent-child span
 relationship via the trace drill-down. A second test points a fully-meshed service at a dead
 collector port and proves announce/heartbeat log-and-continue while the service keeps
 serving - the degradation rule end to end. The mesh wire shapes themselves are additionally

@@ -48,6 +48,7 @@ type config struct {
 	routes                       []httpbinding.Route
 	descriptor                   bool
 	container                    *benzene.Container
+	outbound                     *mesh.OutboundRegistry
 }
 
 // WithServiceVersion sets the service version reported in the descriptor (it participates in the
@@ -84,6 +85,15 @@ func WithContainer(container *benzene.Container) Option {
 	return func(c *config) { c.container = container }
 }
 
+// WithConsumes supplies the OutboundRegistry the descriptor's consumes field is derived from
+// (mesh.md §2.3: what this service consumes - a hard-coded contract, not an inference, so
+// register every outbound call the same explicit way registry topics are registered). When
+// unset, consumes is degraded (mesh.FeedOutboundRegistry) rather than asserted empty - a service
+// that hasn't wired up outbound registration has no right to claim it consumes nothing.
+func WithConsumes(outbound *mesh.OutboundRegistry) Option {
+	return func(c *config) { c.outbound = outbound }
+}
+
 // WithoutDescriptor disables the descriptor surfaces - the reserved benzene:mesh topic (R6) and the
 // GET /benzene/spec document (R5) are not mounted. Use it for a deployment that must not expose its
 // contract (profile §4 exposure control); the Report then marks those surfaces unsatisfied by choice.
@@ -112,7 +122,7 @@ func New(serviceName string, registry *benzene.Registry, opts ...Option) *Servic
 		Binding:        cfg.binding,
 		Placement:      cfg.placement,
 	}
-	descriptor := mesh.Describe(registry, info)
+	descriptor := mesh.Describe(registry, cfg.outbound, info)
 
 	// Pipeline order: descriptor interception (if enabled) and health interception both short-circuit
 	// their reserved topics before the router, so a reserved topic never falls through to a missing
