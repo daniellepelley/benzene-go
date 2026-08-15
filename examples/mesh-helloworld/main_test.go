@@ -28,7 +28,7 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 		if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
 			t.Fatalf("register greet: %v", err)
 		}
-	}, []httpbinding.Route{{Method: http.MethodPost, Path: "/greet", Topic: benzene.NewTopic("greet")}})
+	}, nil, []httpbinding.Route{{Method: http.MethodPost, Path: "/greet", Topic: benzene.NewTopic("greet")}})
 	greeterServer := httptest.NewServer(greeter.handler)
 	defer greeterServer.Close()
 
@@ -36,6 +36,10 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 		greeterClient := mesh.WithTraceContext(httpclient.NewClient(greeterServer.URL + httpbinding.EnvelopePath))
 		if err := benzene.Register(registry, benzene.NewTopic("welcome"), welcomeHandler(greeterClient)); err != nil {
 			t.Fatalf("register welcome: %v", err)
+		}
+	}, func(outbound *mesh.OutboundRegistry) {
+		if err := mesh.RegisterOutbound[greetRequest, greetResponse](outbound, benzene.NewTopic("greet")); err != nil {
+			t.Fatalf("register outbound greet: %v", err)
 		}
 	}, []httpbinding.Route{{Method: http.MethodPost, Path: "/welcome", Topic: benzene.NewTopic("welcome")}})
 	frontdoorServer := httptest.NewServer(frontdoor.handler)
@@ -47,7 +51,7 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 		if err := benzene.Register(registry, benzene.NewTopic("legacy:relay"), welcomeHandler(greeterClient)); err != nil {
 			t.Fatalf("register legacy:relay: %v", err)
 		}
-	}, []httpbinding.Route{{Method: http.MethodPost, Path: "/relay", Topic: benzene.NewTopic("legacy:relay")}})
+	}, nil, []httpbinding.Route{{Method: http.MethodPost, Path: "/relay", Topic: benzene.NewTopic("legacy:relay")}})
 	legacyServer := httptest.NewServer(legacy.handler)
 	defer legacyServer.Close()
 
@@ -146,8 +150,9 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 		t.Errorf("legacy-portal invocations = 0, want its traced traffic counted despite the reduced feeds")
 	}
 
-	// Consumer edges were derived from trace parentage, not declared anywhere - including
-	// the reduced service's edge.
+	// Consumer edges are declared (frontdoor's outbound registration), not trace-derived:
+	// legacy-portal called greeter just as much, but it never registered a descriptor, so it
+	// has no declared Consumes to show an edge from (mesh.md §4, §4.2).
 	topicResult := meshdClient.Send(ctx, benzene.NewTopic(mesh.TopicQueryTopic), nil, []byte(`{"topic":"greet"}`))
 	greet, err := httpclient.Unmarshal[meshd.TopicSummary](topicResult)
 	if err != nil || greet.Payload == nil {
@@ -156,8 +161,20 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 	if len(greet.Payload.Providers) != 1 || greet.Payload.Providers[0] != "greeter" {
 		t.Errorf("greet providers = %v, want [greeter]", greet.Payload.Providers)
 	}
-	if len(greet.Payload.Consumers) != 2 || greet.Payload.Consumers[0] != "frontdoor" || greet.Payload.Consumers[1] != "legacy-portal" {
-		t.Errorf("greet consumers = %v, want [frontdoor legacy-portal] derived from propagated traceparents", greet.Payload.Consumers)
+	if len(greet.Payload.Consumers) != 1 || greet.Payload.Consumers[0] != "frontdoor" {
+		t.Errorf("greet consumers = %v, want [frontdoor] (declared via outbound registration; legacy-portal never registered)", greet.Payload.Consumers)
+	}
+	// legacy-portal's traffic is still real: it counts in the topic's invocation stats even
+	// though it left no declared edge.
+	if greet.Payload.Invocations < 2 {
+		t.Errorf("greet invocations = %d, want at least 2 (frontdoor's call plus legacy-portal's)", greet.Payload.Invocations)
+	}
+	// And it must never be flagged as contract-drift: an anonymous service has no contract to
+	// diverge from (mesh.md §4.2).
+	for _, issue := range fleet.Payload.Issues {
+		if issue.Service == "legacy-portal" && issue.Classification == mesh.ClassificationContractDrift {
+			t.Errorf("legacy-portal must never be flagged for drift (it never registered), got %+v", issue)
+		}
 	}
 
 	// Each cross-service call joined into one flow of two events. (The descriptor query
@@ -213,7 +230,7 @@ func TestReducedMeshStillServes(t *testing.T) {
 		if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
 			t.Fatalf("register greet: %v", err)
 		}
-	}, []httpbinding.Route{{Method: http.MethodPost, Path: "/greet", Topic: benzene.NewTopic("greet")}})
+	}, nil, []httpbinding.Route{{Method: http.MethodPost, Path: "/greet", Topic: benzene.NewTopic("greet")}})
 	server := httptest.NewServer(greeter.handler)
 	defer server.Close()
 	defer greeter.exporter.Close()

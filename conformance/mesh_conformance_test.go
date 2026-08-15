@@ -34,6 +34,23 @@ func canonicalRegistry(t *testing.T) *benzene.Registry {
 	return registry
 }
 
+// conformanceLogRequest is the request type of the canonical outbound registration
+// (conformance/README.md "Canonical outbound registration"): conformance:log, no declared
+// response type.
+type conformanceLogRequest struct {
+	Message string `json:"message"`
+}
+
+// canonicalOutboundRegistry registers the one canonical outbound record mesh-descriptor-cases.json
+// pins Consumes derivation against: conformance:log, request-only (mesh.md §2.3 - a sender with no
+// expected response type derives the unconstrained {} responseSchema).
+func canonicalOutboundRegistry(t *testing.T) *mesh.OutboundRegistry {
+	t.Helper()
+	outbound := mesh.NewOutboundRegistry()
+	must(t, mesh.RegisterOutbound[conformanceLogRequest, any](outbound, benzene.NewTopic("conformance:log")))
+	return outbound
+}
+
 // --- mesh-descriptor-cases.json ---
 
 type meshDescriptorFixture struct {
@@ -52,6 +69,7 @@ type meshDescriptorFixture struct {
 		InvariantToInstanceID     bool   `json:"invariantToInstanceId"`
 		SensitiveToServiceVersion bool   `json:"sensitiveToServiceVersion"`
 		SensitiveToTopics         bool   `json:"sensitiveToTopics"`
+		SensitiveToConsumes       bool   `json:"sensitiveToConsumes"`
 	} `json:"hash"`
 }
 
@@ -64,7 +82,7 @@ func TestConformance_MeshDescriptorCases(t *testing.T) {
 		ServiceVersion: fixture.ServiceInfo.ServiceVersion,
 		Placement:      mesh.Placement{Cloud: fixture.ServiceInfo.Placement.Cloud, Region: fixture.ServiceInfo.Placement.Region},
 	}
-	descriptor := mesh.Describe(canonicalRegistry(t), info)
+	descriptor := mesh.Describe(canonicalRegistry(t), canonicalOutboundRegistry(t), info)
 
 	t.Run("expected-descriptor", func(t *testing.T) {
 		data, err := json.Marshal(descriptor)
@@ -96,7 +114,7 @@ func TestConformance_MeshDescriptorCases(t *testing.T) {
 		}
 		other := info
 		other.InstanceID = "some-other-instance"
-		if got := mesh.Describe(canonicalRegistry(t), other).DescriptorHash; got != descriptor.DescriptorHash {
+		if got := mesh.Describe(canonicalRegistry(t), canonicalOutboundRegistry(t), other).DescriptorHash; got != descriptor.DescriptorHash {
 			t.Errorf("hash changed with instanceId: %q vs %q", got, descriptor.DescriptorHash)
 		}
 	})
@@ -107,7 +125,7 @@ func TestConformance_MeshDescriptorCases(t *testing.T) {
 		}
 		bumped := info
 		bumped.ServiceVersion = info.ServiceVersion + "-changed"
-		if got := mesh.Describe(canonicalRegistry(t), bumped).DescriptorHash; got == descriptor.DescriptorHash {
+		if got := mesh.Describe(canonicalRegistry(t), canonicalOutboundRegistry(t), bumped).DescriptorHash; got == descriptor.DescriptorHash {
 			t.Errorf("hash did not change with serviceVersion: %q", got)
 		}
 	})
@@ -118,8 +136,19 @@ func TestConformance_MeshDescriptorCases(t *testing.T) {
 		}
 		grown := canonicalRegistry(t)
 		must(t, benzene.Register(grown, benzene.NewTopic("conformance:extra"), benzene.Handler[conformanceGreetRequest, conformanceGreetResponse](conformanceGreetHandler)))
-		if got := mesh.Describe(grown, info).DescriptorHash; got == descriptor.DescriptorHash {
+		if got := mesh.Describe(grown, canonicalOutboundRegistry(t), info).DescriptorHash; got == descriptor.DescriptorHash {
 			t.Errorf("hash did not change with the topic set: %q", got)
+		}
+	})
+
+	t.Run("hash-sensitive-to-consumes", func(t *testing.T) {
+		if !fixture.Hash.SensitiveToConsumes {
+			t.Skip("not asserted by the fixture")
+		}
+		grown := canonicalOutboundRegistry(t)
+		must(t, mesh.RegisterOutbound[conformanceLogRequest, any](grown, benzene.NewTopic("conformance:extra-consumed")))
+		if got := mesh.Describe(canonicalRegistry(t), grown, info).DescriptorHash; got == descriptor.DescriptorHash {
+			t.Errorf("hash did not change with the consumed-topic set: %q", got)
 		}
 	})
 }

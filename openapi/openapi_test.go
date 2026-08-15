@@ -36,7 +36,7 @@ func newDescriptor(t *testing.T) mesh.Descriptor {
 		})); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	return mesh.Describe(registry, mesh.ServiceInfo{Service: "users", ServiceVersion: "1.2.3"})
+	return mesh.Describe(registry, nil, mesh.ServiceInfo{Service: "users", ServiceVersion: "1.2.3"})
 }
 
 func TestGenerate_InfoAndTopLevel(t *testing.T) {
@@ -226,7 +226,7 @@ func TestGenerate_TopicVersionInDescription(t *testing.T) {
 		})); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	desc := mesh.Describe(registry, mesh.ServiceInfo{Service: "orders"})
+	desc := mesh.Describe(registry, nil, mesh.ServiceInfo{Service: "orders"})
 	doc := openapi.Generate(desc)
 
 	var op *openapi.Operation

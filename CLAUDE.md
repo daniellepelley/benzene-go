@@ -257,16 +257,23 @@ alongside the shared spec.
   `CloudServiceProfileReport` evaluating all of R1-R8, not just the HTTP surface). `WithoutDescriptor()`
   additionally drops R5/R6 per §4 exposure control. It composes the existing pieces - a thin assembler;
   don't reimplement descriptor/health/spec logic here, and don't let the report over-claim conformance.
-- `mesh/` - Phases 1-2 of `docs/design/mesh.md`: service `Descriptor` derived from the
-  `Registry` (topics + JSON Schemas derived at startup from the `TReq`/`TRes` types the
-  Registry captures at `Register` time, plus the contract `descriptorHash`),
+- `mesh/` - originally Phases 1-2 of this repo's own `docs/design/mesh.md`, now the main
+  repo's `docs/specification/mesh.md` §§1-3: service `Descriptor` derived from the `Registry`
+  (`topics` - what the service provides - + JSON Schemas derived at startup from the
+  `TReq`/`TRes` types `Register` captures) AND from the `OutboundRegistry`
+  (`consumes` - what the service consumes, mesh.md §2.3, `RegisterOutbound[TReq,TRes]` -
+  mirrors `Registry`/`Register` exactly, minus the handler; a sender with no expected response
+  type registers `TRes` as `any`, which schema derivation already maps to the unconstrained
+  `{}` responseSchema), plus the contract `descriptorHash` (now sensitive to both lists),
   reserved-`benzene:mesh`-topic descriptor middleware, trace middleware + log exporter, and the
   issue feed's emitter half (`IssueMiddleware` + `PushIssueExporter`: source-side dedup by the
-  normative §4.1 classification + SHA-256 fingerprint, delta counts, liveness flush).
+  normative §4.1 classification + SHA-256 fingerprint, delta counts, liveness flush;
+  `ClassificationContractDrift` is exported for meshd's collector-derived §4.2 drift issues).
   Schema derivation is the one sanctioned use of `reflect` - startup-only, never on the
   dispatch path. Every feed is independent and optional - degradation (nil registry, nil
-  or failing exporter, unprovisioned descriptor endpoint) must reduce the mesh, never
-  break the service. The `benzene:mesh:*` wire topics and shapes (wire.go) are shared with the
+  outbound registry, nil or failing exporter, unprovisioned descriptor endpoint) must reduce
+  the mesh, never break the service. The `benzene:mesh:*` wire topics and shapes (wire.go) are
+  shared with the
   collector and promoted to the main repo's spec (`docs/specification/mesh.md` there, now
   the normative text; `docs/design/mesh-spec-draft.md` is the historical draft), pinned by
   the vendored `mesh-*.json` fixtures in `conformance/`. `SpecHandler(descriptor)` serves the same
@@ -299,15 +306,24 @@ alongside the shared spec.
   reshaping (AsyncAPI 3.0 schemas are JSON Schema Draft 7, so mesh's nullable `["T","null"]` form is
   already valid - unlike OpenAPI 3.0), deep-copied so `Generate` never mutates the descriptor.
   `Handler` serves it over a plain GET, the AsyncAPI sibling of `openapi.Handler`/`mesh.SpecHandler`.
-- `meshd/` - Phases 3-4 of `docs/design/mesh.md`: the collector - an ordinary Benzene
-  service (register/heartbeat/traces/issues ingest + `benzene:mesh:query:*` read models over an
+- `meshd/` - the collector (main repo's `docs/specification/mesh.md` §4-§6, originally
+  Phases 3-4 of this repo's own `docs/design/mesh.md`): an ordinary Benzene service
+  (register/heartbeat/traces/issues ingest + `benzene:mesh:query:*` read models over an
   in-memory store with a bounded trace ring; the `benzene:mesh:issues` feed of mesh.md §4.1
   merges failure signatures by fingerprint and surfaces them on the fleet view) and the Mesh
-  View (an embedded,
-  self-contained HTML page - no JS framework, per the zero-dependency stance). Consumer
-  edges are derived from trace parentage at query time; providers from descriptors;
-  nothing is declared. It must accept partial fleets: a missing feed renders a service
-  as reduced (`missingFeeds`), never fails ingestion or queries. There is deliberately **no**
+  View (an embedded, self-contained HTML page - no JS framework, per the zero-dependency
+  stance). Per the main repo's 2026-08 revision: the producer/consumer graph (providers AND
+  consumers) is built from the latest registered ServiceDescriptor's `topics`/`consumes`
+  alone (`store.register`) - it is fully declared, present for a service with zero traffic,
+  and a redeploy replaces both edge sets wholesale. Trace parentage (`store.addEvents`) never
+  touches that graph; it instead feeds invocation stats plus two additive, observed-only
+  signals (mesh.md §4.2): per-declared-edge last-observed-at (`ProviderActivity`/
+  `ConsumerActivity` on `TopicSummary` - "Unobserved", a decommission candidate, not a fact)
+  and `contract-drift` issues for a *registered* service's traffic on a topic it didn't
+  declare (`checkProviderDrift`/`checkConsumerDrift` - an anonymous/unregistered service is
+  never flagged, it has no contract to diverge from). It must accept partial fleets: a
+  missing feed renders a service as reduced (`missingFeeds`), never fails ingestion or
+  queries. There is deliberately **no**
   Kubernetes API service-discovery counterpart to .NET's `Benzene.Mesh.Discovery.Kubernetes`
   (no `KubernetesServiceDiscoveryProvider` equivalent, no RBAC-scoped `list`/`get` on Services) -
   a documented divergence, not a gap on the punch list: this push-based collector already gives a

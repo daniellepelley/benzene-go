@@ -86,7 +86,7 @@ func New(cfg Config) *App {
 	}
 
 	info := mesh.ServiceInfo{Service: cfg.ServiceName, ServiceVersion: "1.0.0", InstanceID: cfg.ServiceName, Binding: "aws-lambda"}
-	descriptor := mesh.Describe(registry, info)
+	descriptor := mesh.Describe(registry, nil, info)
 
 	checks := []healthcheck.Check{healthcheck.NamedCheck("self", func(context.Context) healthcheck.CheckResult {
 		return healthcheck.CheckResult{Status: healthcheck.StatusOk, Type: "self", Data: map[string]any{"service": cfg.ServiceName}}

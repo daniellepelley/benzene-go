@@ -27,7 +27,7 @@ func ExampleGenerate() {
 		benzene.Handler[placeOrder, orderPlaced](func(_ context.Context, _ placeOrder) benzene.Result[orderPlaced] {
 			return benzene.Ok(orderPlaced{})
 		}))
-	desc := mesh.Describe(registry, mesh.ServiceInfo{Service: "orders", ServiceVersion: "1.0.0"})
+	desc := mesh.Describe(registry, nil, mesh.ServiceInfo{Service: "orders", ServiceVersion: "1.0.0"})
 
 	doc := asyncapi.Generate(desc, asyncapi.WithSentEvent("order:placed", nil))
 

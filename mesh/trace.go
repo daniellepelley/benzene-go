@@ -82,8 +82,11 @@ func TraceMiddleware(info ServiceInfo, exporter Exporter) benzene.Middleware {
 		}
 
 		// The span rides on the context so a handler can propagate it onto outbound calls
-		// (SpanFromContext + Span.Traceparent) - the join that lets a collector derive
-		// consumer edges from parentage.
+		// (SpanFromContext + Span.Traceparent) - the join that lets a collector correlate an
+		// observed call with the declared edge it exercises (mesh.md §4.2: liveness and
+		// undeclared-edge drift, never the producer/consumer graph itself, which comes from
+		// the declared ServiceDescriptor regardless of whether any call has ever propagated a
+		// trace at all).
 		err := next(contextWithSpan(ctx, Span{TraceID: traceID, SpanID: event.SpanID}))
 
 		event.DurationMs = float64(time.Since(started)) / float64(time.Millisecond)

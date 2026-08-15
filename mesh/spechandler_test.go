@@ -10,7 +10,7 @@ import (
 )
 
 func TestSpecHandler_GetServesTheDerivedDescriptor(t *testing.T) {
-	descriptor := Describe(newTestRegistry(t, benzene.NewTopic("order:create")), ServiceInfo{Service: "orders"})
+	descriptor := Describe(newTestRegistry(t, benzene.NewTopic("order:create")), nil, ServiceInfo{Service: "orders"})
 	handler := SpecHandler(descriptor)
 
 	rec := httptest.NewRecorder()
@@ -38,7 +38,7 @@ func TestSpecHandler_GetServesTheDerivedDescriptor(t *testing.T) {
 }
 
 func TestSpecHandler_NonGetIsMethodNotAllowed(t *testing.T) {
-	handler := SpecHandler(Describe(nil, ServiceInfo{Service: "orders"}))
+	handler := SpecHandler(Describe(nil, nil, ServiceInfo{Service: "orders"}))
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, SpecPathForTest, nil))

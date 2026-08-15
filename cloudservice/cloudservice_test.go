@@ -163,6 +163,41 @@ func TestNew_PlacementInstanceAndContainer(t *testing.T) {
 	}
 }
 
+func TestNew_WithConsumesDerivesConsumesElseDegrades(t *testing.T) {
+	t.Run("unset degrades the outbound-registry feed", func(t *testing.T) {
+		svc := New("greeter", newRegistry(t))
+		if len(svc.Descriptor.Consumes) != 0 {
+			t.Errorf("Consumes = %v, want empty", svc.Descriptor.Consumes)
+		}
+		degraded := false
+		for _, feed := range svc.Descriptor.Degraded {
+			if feed == mesh.FeedOutboundRegistry {
+				degraded = true
+			}
+		}
+		if !degraded {
+			t.Errorf("Degraded = %v, want it to include %q", svc.Descriptor.Degraded, mesh.FeedOutboundRegistry)
+		}
+	})
+
+	t.Run("WithConsumes populates the consumed-topic catalog, not degraded", func(t *testing.T) {
+		outbound := mesh.NewOutboundRegistry()
+		if err := mesh.RegisterOutbound[greetReq, greetRes](outbound, benzene.NewTopic("payments:capture")); err != nil {
+			t.Fatalf("RegisterOutbound() error = %v", err)
+		}
+		svc := New("greeter", newRegistry(t), WithConsumes(outbound))
+
+		if len(svc.Descriptor.Consumes) != 1 || svc.Descriptor.Consumes[0].ID != "payments:capture" {
+			t.Errorf("Consumes = %+v, want one entry for payments:capture", svc.Descriptor.Consumes)
+		}
+		for _, feed := range svc.Descriptor.Degraded {
+			if feed == mesh.FeedOutboundRegistry {
+				t.Errorf("Degraded = %v, want no %q with a real OutboundRegistry supplied", svc.Descriptor.Degraded, mesh.FeedOutboundRegistry)
+			}
+		}
+	})
+}
+
 func TestProfileReport_StringForNewBuild(t *testing.T) {
 	svc := New("greeter", newRegistry(t))
 	s := svc.Report.String()

@@ -9,13 +9,23 @@ import (
 	"github.com/daniellepelley/benzene-go/mesh"
 )
 
-// store is the MVP in-memory state behind a Collector (mesh.md §4.2): cumulative per-
-// service and per-topic stats, the latest heartbeat per instance, registered descriptors,
-// and a bounded ring of recent trace events (the window consumer edges and the trace
-// query are derived from). Everything is derived on the collector side too - a service
-// that never registered still appears once its traces do (anonymous but live), and a
-// registered service with no traffic appears as a catalog entry with no stats, per the
-// design's degradation rule.
+// store is the MVP in-memory state behind a Collector (mesh.md §4): cumulative per-service and
+// per-topic stats, the latest heartbeat per instance, registered descriptors, and a bounded ring
+// of recent trace events (the trace query and the observed-activity/drift signals of §4.2 are
+// derived from it). Everything is derived on the collector side too - a service that never
+// registered still appears once its traces do (anonymous but live), and a registered service
+// with no traffic appears as a catalog entry with no stats, per the design's degradation rule.
+//
+// The producer/consumer graph itself is NOT derived from the ring: per the main repo's 2026-08
+// revision, register (below) is the graph's sole source - topicState.providers/consumers are
+// written straight from the latest registered ServiceDescriptor's Topics/Consumes, replaced
+// wholesale on every re-registration. The ring instead feeds two things that are deliberately
+// NOT graph membership (mesh.md §4.2): providerLastSeen/consumerLastSeen ("Unobserved" liveness
+// - a declared edge nobody has exercised is a decommission candidate, not a fact) and drift
+// detection (an *observed* edge no registered descriptor declared is filed as a contract-drift
+// issue). spanService is what makes the second one possible: a persistent record of which
+// service owns each span still in the ring, used only to resolve "who called this" - never to
+// admit or remove a graph edge.
 type store struct {
 	// mu is a plain mutex (not RWMutex): every operation is short, and queries are not
 	// hot-path - simplicity wins.
@@ -30,6 +40,11 @@ type store struct {
 	// oldest (next is the overwrite cursor).
 	ring []mesh.TraceEvent
 	next int
+	// spanService mirrors the ring 1:1 (spanId -> owning service), kept in sync as the ring
+	// evicts, so a later event's parentSpanId can resolve to its caller even across separate
+	// ingest batches. Observed-signal bookkeeping only (mesh.md §4.2) - never consulted for
+	// graph membership (mesh.md §4).
+	spanService map[string]string
 }
 
 type topicKey struct {
@@ -43,14 +58,16 @@ type serviceState struct {
 	lastSeen    time.Time
 	invocations int64
 	errors      int64
-	// issues holds this service's deduplicated failure signatures merged by fingerprint.
+	// issues holds this service's deduplicated failure signatures merged by fingerprint,
+	// including collector-derived contract-drift issues (mesh.md §4.2) alongside emitted ones.
 	issues map[string]*issueState
 	// issuesFeedSeen records whether any issue batch (even empty) has arrived - the feed's
 	// liveness. Once true, the "issues" missing-feed marker is cleared even with zero issues.
 	issuesFeedSeen bool
 }
 
-// issueState is one merged failure signature (mesh.md §4.1). count accumulates the wire deltas.
+// issueState is one merged failure signature (mesh.md §4.1). count accumulates the wire deltas
+// (or, for a collector-derived contract-drift issue, one per observed occurrence).
 type issueState struct {
 	classification   string
 	topic            string
@@ -71,21 +88,30 @@ type instanceState struct {
 	descriptorHash string
 }
 
+// topicState is one topic's catalog row. providers/consumers are the declared graph (mesh.md
+// §4): written only by register, from the latest ServiceDescriptor's Topics/Consumes.
+// providerLastSeen/consumerLastSeen are the observed-activity signal of §4.2, keyed by service
+// name regardless of declared-ness (topicSummary filters them down to the declared sets when
+// reporting "Unobserved"/last-observed-at per edge).
 type topicState struct {
-	providers       map[string]bool
-	statusCounts    map[string]int64
-	invocations     int64
-	errors          int64
-	totalDurationMs float64
-	lastSeen        time.Time
+	providers        map[string]bool
+	consumers        map[string]bool
+	providerLastSeen map[string]time.Time
+	consumerLastSeen map[string]time.Time
+	statusCounts     map[string]int64
+	invocations      int64
+	errors           int64
+	totalDurationMs  float64
+	lastSeen         time.Time
 }
 
 func newStore(capacity int, now func() time.Time) *store {
 	return &store{
-		now:      now,
-		capacity: capacity,
-		services: map[string]*serviceState{},
-		topics:   map[topicKey]*topicState{},
+		now:         now,
+		capacity:    capacity,
+		services:    map[string]*serviceState{},
+		topics:      map[topicKey]*topicState{},
+		spanService: map[string]string{},
 	}
 }
 
@@ -101,21 +127,30 @@ func (s *store) ensureService(name string) *serviceState {
 func (s *store) ensureTopic(key topicKey) *topicState {
 	state, ok := s.topics[key]
 	if !ok {
-		state = &topicState{providers: map[string]bool{}, statusCounts: map[string]int64{}}
+		state = &topicState{
+			providers:        map[string]bool{},
+			consumers:        map[string]bool{},
+			providerLastSeen: map[string]time.Time{},
+			consumerLastSeen: map[string]time.Time{},
+			statusCounts:     map[string]int64{},
+		}
 		s.topics[key] = state
 	}
 	return state
 }
 
-// register stores desc as the service's current contract, replacing any previous
-// registration wholesale (including its provider edges - a redeploy that drops a topic
-// must drop the provider claim with it).
+// register stores desc as the service's current contract, replacing any previous registration
+// wholesale - including both the claim to provide (Topics) and the claim to consume (Consumes)
+// each topic: a redeploy that drops a topic from either list drops that edge with it, the same
+// rule applied symmetrically to both declared lists (mesh.md §4). This is the producer/consumer
+// graph's sole write path - traces never call it.
 func (s *store) register(desc mesh.Descriptor) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	for _, topic := range s.topics {
 		delete(topic.providers, desc.Service)
+		delete(topic.consumers, desc.Service)
 	}
 
 	state := s.ensureService(desc.Service)
@@ -124,6 +159,9 @@ func (s *store) register(desc mesh.Descriptor) {
 
 	for _, topic := range desc.Topics {
 		s.ensureTopic(topicKey{id: topic.ID, version: topic.Version}).providers[desc.Service] = true
+	}
+	for _, topic := range desc.Consumes {
+		s.ensureTopic(topicKey{id: topic.ID, version: topic.Version}).consumers[desc.Service] = true
 	}
 }
 
@@ -141,24 +179,21 @@ func (s *store) heartbeat(hb mesh.Heartbeat) {
 	}
 }
 
-// addEvents ingests a trace batch: the ring window plus cumulative per-topic and
-// per-service stats (cumulative stats deliberately outlive the ring window). Returns how
+// addEvents ingests a trace batch: the ring window plus cumulative per-topic and per-service
+// stats, exactly as before - PLUS, additively (mesh.md §4.2), per-edge observed-activity
+// timestamps and undeclared-edge contract-drift detection. Neither addition ever touches
+// topicState.providers/consumers: the declared graph is register's alone to write. Returns how
 // many events were accepted.
 func (s *store) addEvents(events []mesh.TraceEvent) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	for _, event := range events {
-		if len(s.ring) < s.capacity {
-			s.ring = append(s.ring, event)
-		} else {
-			s.ring[s.next] = event
-			s.next = (s.next + 1) % s.capacity
-		}
+		s.recordSpan(event)
 
 		failed := benzene.Status(event.Status).IsFailure()
-
-		topic := s.ensureTopic(topicKey{id: event.Topic, version: event.TopicVersion})
+		key := topicKey{id: event.Topic, version: event.TopicVersion}
+		topic := s.ensureTopic(key)
 		topic.invocations++
 		topic.statusCounts[event.Status]++
 		topic.totalDurationMs += event.DurationMs
@@ -174,9 +209,113 @@ func (s *store) addEvents(events []mesh.TraceEvent) int {
 			if failed {
 				service.errors++
 			}
+
+			// Observed provider activity (§4.2 "Unobserved") + undeclared-provider drift: this
+			// service actually served the topic, regardless of whether it declared providing it.
+			topic.providerLastSeen[event.Service] = laterOf(topic.providerLastSeen[event.Service], event.StartedAt)
+			s.checkProviderDrift(event)
+		}
+
+		if event.ParentSpanID != "" {
+			if caller, ok := s.spanService[event.ParentSpanID]; ok && caller != "" && caller != event.Service {
+				// Observed consumer activity + undeclared-consumer drift: the parent span's
+				// owner called into this topic, regardless of whether it declared consuming it.
+				// Trace parentage informs these two observed-only signals and nothing else -
+				// it never admits or removes a graph edge (mesh.md §4).
+				topic.consumerLastSeen[caller] = laterOf(topic.consumerLastSeen[caller], event.StartedAt)
+				s.checkConsumerDrift(caller, event)
+			}
 		}
 	}
 	return len(events)
+}
+
+// recordSpan appends event to the ring (overwriting the oldest slot once full) and keeps
+// spanService in sync with what's actually still in the window. Caller holds s.mu.
+func (s *store) recordSpan(event mesh.TraceEvent) {
+	if len(s.ring) < s.capacity {
+		s.ring = append(s.ring, event)
+	} else {
+		if evicted := s.ring[s.next]; evicted.SpanID != "" {
+			delete(s.spanService, evicted.SpanID)
+		}
+		s.ring[s.next] = event
+		s.next = (s.next + 1) % s.capacity
+	}
+	if event.Service != "" && event.SpanID != "" {
+		s.spanService[event.SpanID] = event.Service
+	}
+}
+
+// laterOf returns whichever of current/candidate is later - current's zero value always loses,
+// so the first observation always sticks.
+func laterOf(current, candidate time.Time) time.Time {
+	if candidate.After(current) {
+		return candidate
+	}
+	return current
+}
+
+// checkProviderDrift flags event as contract-drift when event.Service has a registered
+// descriptor that does not declare event.Topic(+Version) among its Topics (mesh.md §4.2
+// "Undeclared"). A service that never registered has no contract to diverge from and is never
+// flagged. Caller holds s.mu.
+func (s *store) checkProviderDrift(event mesh.TraceEvent) {
+	service, ok := s.services[event.Service]
+	if !ok || service.descriptor == nil {
+		return
+	}
+	for _, topic := range service.descriptor.Topics {
+		if topic.ID == event.Topic && topic.Version == event.TopicVersion {
+			return
+		}
+	}
+	s.recordDriftIssue(event.Service, event)
+}
+
+// checkConsumerDrift flags event as contract-drift when caller has a registered descriptor that
+// does not declare event.Topic(+Version) among its Consumes (mesh.md §4.2 "Undeclared",
+// symmetric to checkProviderDrift). Caller holds s.mu.
+func (s *store) checkConsumerDrift(caller string, event mesh.TraceEvent) {
+	service, ok := s.services[caller]
+	if !ok || service.descriptor == nil {
+		return
+	}
+	for _, topic := range service.descriptor.Consumes {
+		if topic.ID == event.Topic && topic.Version == event.TopicVersion {
+			return
+		}
+	}
+	s.recordDriftIssue(caller, event)
+}
+
+// recordDriftIssue merges one observed contract-drift occurrence into service's issue set, by
+// the same fingerprint/merge scheme addIssues uses for emitted issues (mesh.md §4.1's derivation
+// applies unchanged to collector-derived issues). Caller holds s.mu.
+func (s *store) recordDriftIssue(service string, event mesh.TraceEvent) {
+	discriminator := event.Status // this port's TraceEvent carries no exceptionType (yet)
+	fingerprint := mesh.IssueFingerprint(service, event.Topic, event.TopicVersion, mesh.ClassificationContractDrift, discriminator)
+
+	state := s.ensureService(service)
+	merged := state.issues[fingerprint]
+	if merged == nil {
+		merged = &issueState{}
+		state.issues[fingerprint] = merged
+	}
+	merged.classification = mesh.ClassificationContractDrift
+	merged.topic = event.Topic
+	merged.version = event.TopicVersion
+	merged.status = event.Status
+	merged.count++
+	if merged.firstSeen.IsZero() || (!event.StartedAt.IsZero() && event.StartedAt.Before(merged.firstSeen)) {
+		merged.firstSeen = event.StartedAt
+	}
+	if event.StartedAt.After(merged.lastSeen) {
+		merged.lastSeen = event.StartedAt
+	}
+	if event.TraceID != "" {
+		merged.exemplarTraceIds = newestExemplars(merged.exemplarTraceIds, []string{event.TraceID})
+	}
 }
 
 // addIssues merges an issue batch into the store by fingerprint (mesh.md §4.1). Receiving any
@@ -236,36 +375,6 @@ func newestExemplars(existing, delta []string) []string {
 	return combined
 }
 
-// consumersByTopic derives who-calls-whom from the ring window: an event's parent span
-// belonging to another service makes that service a consumer of the event's topic. Caller
-// holds s.mu. Unmeshed callers have no parent span in the window and appear as no edge,
-// per the design ("anonymous edges" resolve to nothing rather than a guess).
-func (s *store) consumersByTopic() map[topicKey]map[string]bool {
-	spanService := make(map[string]string, len(s.ring))
-	for _, event := range s.ring {
-		if event.Service != "" {
-			spanService[event.SpanID] = event.Service
-		}
-	}
-
-	consumers := map[topicKey]map[string]bool{}
-	for _, event := range s.ring {
-		if event.ParentSpanID == "" {
-			continue
-		}
-		caller, ok := spanService[event.ParentSpanID]
-		if !ok || caller == event.Service {
-			continue
-		}
-		key := topicKey{id: event.Topic, version: event.TopicVersion}
-		if consumers[key] == nil {
-			consumers[key] = map[string]bool{}
-		}
-		consumers[key][caller] = true
-	}
-	return consumers
-}
-
 func (s *store) fleet() FleetView {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -284,9 +393,8 @@ func (s *store) fleet() FleetView {
 
 	view.Issues = s.fleetIssues()
 
-	consumers := s.consumersByTopic()
 	for key := range s.topics {
-		view.Topics = append(view.Topics, s.topicSummary(key, consumers[key]))
+		view.Topics = append(view.Topics, s.topicSummary(key))
 	}
 	sort.Slice(view.Topics, func(i, j int) bool {
 		if view.Topics[i].Topic != view.Topics[j].Topic {
@@ -351,6 +459,7 @@ func (s *store) serviceSummary(name string) ServiceSummary {
 		summary.Binding = state.descriptor.Binding
 		summary.Placement = state.descriptor.Placement
 		summary.Topics = len(state.descriptor.Topics)
+		summary.Consumes = len(state.descriptor.Consumes)
 	} else {
 		// Known only from traffic: anonymous but live, and visibly reduced.
 		summary.MissingFeeds = append(summary.MissingFeeds, "descriptor")
@@ -378,18 +487,24 @@ func (s *store) serviceSummary(name string) ServiceSummary {
 	return summary
 }
 
-// topicSummary builds one topic's row. Caller holds s.mu.
-func (s *store) topicSummary(key topicKey, consumers map[string]bool) TopicSummary {
+// topicSummary builds one topic's row: Providers/Consumers are the declared graph (mesh.md §4,
+// register's alone to write); ProviderActivity/ConsumerActivity report, per declared edge, the
+// last time a trace observed it being exercised (mesh.md §4.2 "Unobserved" - a zero
+// LastObservedAt is a decommission candidate, not a fact, since trace export is lossy by
+// design). Caller holds s.mu.
+func (s *store) topicSummary(key topicKey) TopicSummary {
 	state := s.topics[key]
 	summary := TopicSummary{
-		Topic:        key.id,
-		Version:      key.version,
-		Providers:    sortedKeys(state.providers),
-		Consumers:    sortedKeys(consumers),
-		Invocations:  state.invocations,
-		Errors:       state.errors,
-		StatusCounts: map[string]int64{},
-		LastSeen:     state.lastSeen,
+		Topic:            key.id,
+		Version:          key.version,
+		Providers:        sortedKeys(state.providers),
+		Consumers:        sortedKeys(state.consumers),
+		Invocations:      state.invocations,
+		Errors:           state.errors,
+		StatusCounts:     map[string]int64{},
+		LastSeen:         state.lastSeen,
+		ProviderActivity: activityFor(state.providers, state.providerLastSeen),
+		ConsumerActivity: activityFor(state.consumers, state.consumerLastSeen),
 	}
 	for status, count := range state.statusCounts {
 		summary.StatusCounts[status] = count
@@ -398,6 +513,21 @@ func (s *store) topicSummary(key topicKey, consumers map[string]bool) TopicSumma
 		summary.AvgDurationMs = state.totalDurationMs / float64(state.invocations)
 	}
 	return summary
+}
+
+// activityFor projects declared (the topic's providers or consumers set) against lastSeen (the
+// matching providerLastSeen/consumerLastSeen map) into the wire EdgeActivity shape: one entry
+// per declared service, present even at its zero value - a declared, never-observed edge is
+// still reported, with an absent LastObservedAt, rather than omitted (mesh.md §4.2).
+func activityFor(declared map[string]bool, lastSeen map[string]time.Time) map[string]EdgeActivity {
+	if len(declared) == 0 {
+		return nil
+	}
+	activity := make(map[string]EdgeActivity, len(declared))
+	for service := range declared {
+		activity[service] = EdgeActivity{LastObservedAt: lastSeen[service]}
+	}
+	return activity
 }
 
 // traceSummaries groups the ring window by trace id, newest first. Caller holds s.mu.
@@ -473,7 +603,7 @@ func (s *store) topic(id, version string) (TopicSummary, bool) {
 	if _, ok := s.topics[key]; !ok {
 		return TopicSummary{}, false
 	}
-	return s.topicSummary(key, s.consumersByTopic()[key]), true
+	return s.topicSummary(key), true
 }
 
 func (s *store) trace(traceID string) (TraceView, bool) {

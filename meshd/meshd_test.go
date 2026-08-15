@@ -45,14 +45,18 @@ func invoke[T any](t *testing.T, c *Collector, topic string, body any) (benzene.
 	return benzene.Status(resp.StatusCode), typed
 }
 
-// testDescriptor builds a real derived descriptor; topics use "id" or "id@version".
+// testDescriptor builds a real derived descriptor providing topics ("id" or "id@version") and
+// consuming none.
 func testDescriptor(service string, topics ...string) mesh.Descriptor {
+	return testDescriptorConsuming(service, topics, nil)
+}
+
+// testDescriptorConsuming builds a real derived descriptor providing topics and, via a real
+// OutboundRegistry, consuming consumes - both "id" or "id@version".
+func testDescriptorConsuming(service string, topics, consumes []string) mesh.Descriptor {
 	registry := benzene.NewRegistry()
 	for _, spec := range topics {
-		topic := benzene.NewTopic(spec)
-		if id, version, versioned := strings.Cut(spec, "@"); versioned {
-			topic = benzene.NewTopic(id).WithVersion(version)
-		}
+		topic := parseTestTopic(spec)
 		if err := benzene.Register(registry, topic,
 			benzene.Handler[struct{}, struct{}](func(context.Context, struct{}) benzene.Result[struct{}] {
 				return benzene.Ok(struct{}{})
@@ -60,11 +64,25 @@ func testDescriptor(service string, topics ...string) mesh.Descriptor {
 			panic(err)
 		}
 	}
-	return mesh.Describe(registry, mesh.ServiceInfo{
+	outbound := mesh.NewOutboundRegistry()
+	for _, spec := range consumes {
+		if err := mesh.RegisterOutbound[struct{}, struct{}](outbound, parseTestTopic(spec)); err != nil {
+			panic(err)
+		}
+	}
+	return mesh.Describe(registry, outbound, mesh.ServiceInfo{
 		Service:   service,
 		Binding:   "http",
 		Placement: mesh.Placement{Cloud: "aws", Region: "eu-west-1"},
 	})
+}
+
+// parseTestTopic turns "id" or "id@version" into a benzene.Topic.
+func parseTestTopic(spec string) benzene.Topic {
+	if id, version, versioned := strings.Cut(spec, "@"); versioned {
+		return benzene.NewTopic(id).WithVersion(version)
+	}
+	return benzene.NewTopic(spec)
 }
 
 func testHeartbeat(service, instance string, healthy bool, hash string) mesh.Heartbeat {
@@ -232,7 +250,11 @@ func TestCollector_HashMatchNilWhenEitherSideLacksAHash(t *testing.T) {
 	}
 }
 
-func TestCollector_TracesDriveStatsAndConsumers(t *testing.T) {
+func TestCollector_TracesDriveStatsButNotConsumers(t *testing.T) {
+	// Per the main repo's 2026-08 revision (mesh.md §4): trace parentage feeds invocation
+	// stats and the §4.2 observed-activity/drift signals, but it MUST NOT create a consumer
+	// edge - the declared graph comes from ServiceDescriptor.Consumes alone. frontdoor here
+	// never registers anything, so "greet"'s Consumers stays empty despite the parentage.
 	c := newTestCollector(t)
 	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("greeter", "greet"))
 
@@ -259,8 +281,11 @@ func TestCollector_TracesDriveStatsAndConsumers(t *testing.T) {
 	if greet.AvgDurationMs != 15 {
 		t.Errorf("AvgDurationMs = %v, want 15", greet.AvgDurationMs)
 	}
-	if len(greet.Consumers) != 1 || greet.Consumers[0] != "frontdoor" {
-		t.Errorf("Consumers = %v, want [frontdoor] derived from parentage, same-service edges excluded", greet.Consumers)
+	if len(greet.Consumers) != 0 {
+		t.Errorf("Consumers = %v, want none - frontdoor never declared consuming greet", greet.Consumers)
+	}
+	if len(greet.Providers) != 1 || greet.Providers[0] != "greeter" {
+		t.Errorf("Providers = %v, want [greeter] (declared)", greet.Providers)
 	}
 
 	// frontdoor never registered: anonymous but live, visibly reduced.
@@ -292,6 +317,189 @@ func TestCollector_TracesDriveStatsAndConsumers(t *testing.T) {
 			}
 		default:
 			t.Errorf("unexpected flow %+v", flow)
+		}
+	}
+}
+
+// TestCollector_DeclaredGraphExistsWithZeroTraffic pins mesh.md §4's central rule: the
+// producer/consumer graph is built from the latest registered ServiceDescriptor alone and MUST
+// be reported in full for a service that has never sent or received a single message.
+func TestCollector_DeclaredGraphExistsWithZeroTraffic(t *testing.T) {
+	c := newTestCollector(t)
+	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("payments", "payments:capture"))
+	invoke[Ack](t, c, mesh.TopicRegister, testDescriptorConsuming("orders", []string{"order:create"}, []string{"payments:capture"}))
+
+	status, topic := invoke[TopicSummary](t, c, mesh.TopicQueryTopic, TopicQuery{Topic: "payments:capture"})
+	if status != benzene.StatusOk {
+		t.Fatalf("topic query = %v, want Ok", status)
+	}
+	if len(topic.Providers) != 1 || topic.Providers[0] != "payments" {
+		t.Errorf("Providers = %v, want [payments]", topic.Providers)
+	}
+	if len(topic.Consumers) != 1 || topic.Consumers[0] != "orders" {
+		t.Errorf("Consumers = %v, want [orders] - declared, with zero traffic", topic.Consumers)
+	}
+	if topic.Invocations != 0 {
+		t.Errorf("Invocations = %d, want 0 - the graph is the declared contract, not a traffic summary", topic.Invocations)
+	}
+}
+
+// TestCollector_ReregistrationReplacesConsumerEdgesToo extends
+// TestCollector_ReregistrationReplacesProviderEdges to the consumer side: a redeploy that drops
+// a topic from Consumes MUST drop that consumer edge with it, symmetrically to Topics/providers
+// (mesh.md §4).
+func TestCollector_ReregistrationReplacesConsumerEdgesToo(t *testing.T) {
+	c := newTestCollector(t)
+	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("payments", "payments:capture"))
+	invoke[Ack](t, c, mesh.TopicRegister, testDescriptorConsuming("orders", []string{"order:create"}, []string{"payments:capture"}))
+	// Redeploy: orders no longer declares consuming payments:capture.
+	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("orders", "order:cancel"))
+
+	status, topic := invoke[TopicSummary](t, c, mesh.TopicQueryTopic, TopicQuery{Topic: "payments:capture"})
+	if status != benzene.StatusOk {
+		t.Fatalf("topic query = %v, want Ok (the topic row survives with its provider)", status)
+	}
+	if len(topic.Providers) != 1 || topic.Providers[0] != "payments" {
+		t.Errorf("Providers = %v, want [payments] (unaffected)", topic.Providers)
+	}
+	if len(topic.Consumers) != 0 {
+		t.Errorf("Consumers = %v, want none after the redeploy dropped payments:capture from Consumes", topic.Consumers)
+	}
+}
+
+// TestCollector_TraceParentageNeverAdmitsOrRemovesAGraphEdge is the direct §4 negative case:
+// heavy, repeated observed traffic between two services on an undeclared topic must never
+// create a consumer edge, and traffic on a topic a registered provider dropped must never
+// resurrect its provider edge.
+func TestCollector_TraceParentageNeverAdmitsOrRemovesAGraphEdge(t *testing.T) {
+	c := newTestCollector(t)
+	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("greeter", "greet"))
+	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("frontdoor")) // registered, declares nothing
+
+	for i := 0; i < 5; i++ {
+		invoke[Ack](t, c, mesh.TopicTraces, mesh.TraceBatch{Events: []mesh.TraceEvent{
+			event("trace-a", "span-front", "", "frontdoor", "welcome", "ok", 1),
+			event("trace-a", "span-greet", "span-front", "greeter", "greet", "ok", 1),
+		}})
+	}
+
+	_, topic := invoke[TopicSummary](t, c, mesh.TopicQueryTopic, TopicQuery{Topic: "greet"})
+	if len(topic.Consumers) != 0 {
+		t.Errorf("Consumers = %v, want none no matter how much undeclared traffic is observed", topic.Consumers)
+	}
+}
+
+// TestCollector_UnobservedDeclaredEdgeReportsNoLastObservedAt and
+// TestCollector_ObservedDeclaredEdgeReportsLastObservedAt pin mesh.md §4.2 "Unobserved": a
+// declared edge's activity is reported per-edge (last observed at, or its absence) rather than
+// collapsed into a boolean.
+func TestCollector_UnobservedDeclaredEdgeReportsNoLastObservedAt(t *testing.T) {
+	c := newTestCollector(t)
+	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("payments", "payments:capture"))
+	invoke[Ack](t, c, mesh.TopicRegister, testDescriptorConsuming("orders", []string{"order:create"}, []string{"payments:capture"}))
+
+	_, topic := invoke[TopicSummary](t, c, mesh.TopicQueryTopic, TopicQuery{Topic: "payments:capture"})
+
+	provider, ok := topic.ProviderActivity["payments"]
+	if !ok {
+		t.Fatalf("ProviderActivity = %v, want an entry for the declared provider payments", topic.ProviderActivity)
+	}
+	if !provider.LastObservedAt.IsZero() {
+		t.Errorf("payments LastObservedAt = %v, want zero (never observed) - a decommission candidate, not a fact", provider.LastObservedAt)
+	}
+	consumer, ok := topic.ConsumerActivity["orders"]
+	if !ok {
+		t.Fatalf("ConsumerActivity = %v, want an entry for the declared consumer orders", topic.ConsumerActivity)
+	}
+	if !consumer.LastObservedAt.IsZero() {
+		t.Errorf("orders LastObservedAt = %v, want zero (never observed)", consumer.LastObservedAt)
+	}
+}
+
+func TestCollector_ObservedDeclaredEdgeReportsLastObservedAt(t *testing.T) {
+	c := newTestCollector(t)
+	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("payments", "payments:capture"))
+	invoke[Ack](t, c, mesh.TopicRegister, testDescriptorConsuming("orders", nil, []string{"payments:capture"}))
+
+	invoke[Ack](t, c, mesh.TopicTraces, mesh.TraceBatch{Events: []mesh.TraceEvent{
+		event("trace-1", "span-orders", "", "orders", "order:create", "ok", 1),
+		event("trace-1", "span-payments", "span-orders", "payments", "payments:capture", "ok", 1),
+	}})
+
+	_, topic := invoke[TopicSummary](t, c, mesh.TopicQueryTopic, TopicQuery{Topic: "payments:capture"})
+
+	if got := topic.ProviderActivity["payments"].LastObservedAt; !got.Equal(testClock) {
+		t.Errorf("payments LastObservedAt = %v, want the observation clock %v", got, testClock)
+	}
+	if got := topic.ConsumerActivity["orders"].LastObservedAt; !got.Equal(testClock) {
+		t.Errorf("orders LastObservedAt = %v, want the observation clock %v", got, testClock)
+	}
+}
+
+// TestCollector_UndeclaredProviderEdgeIsContractDrift and
+// TestCollector_UndeclaredConsumerEdgeIsContractDrift pin mesh.md §4.2 "Undeclared": a trace
+// naming a topic a *registered* service didn't declare (as provider or consumer) is filed as a
+// contract-drift issue.
+func TestCollector_UndeclaredProviderEdgeIsContractDrift(t *testing.T) {
+	c := newTestCollector(t)
+	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("greeter", "greet")) // does not declare "farewell"
+
+	invoke[Ack](t, c, mesh.TopicTraces, mesh.TraceBatch{Events: []mesh.TraceEvent{
+		event("trace-1", "span-1", "", "greeter", "farewell", "ok", 1),
+	}})
+
+	fingerprint := mesh.IssueFingerprint("greeter", "farewell", "", mesh.ClassificationContractDrift, "ok")
+	issue, ok := fleetIssue(t, c, fingerprint)
+	if !ok {
+		t.Fatal("expected a contract-drift issue for greeter serving the undeclared topic farewell")
+	}
+	if issue.Classification != mesh.ClassificationContractDrift || issue.Service != "greeter" || issue.Topic != "farewell" || issue.Count != 1 {
+		t.Errorf("issue = %+v, want a contract-drift issue for greeter/farewell, count 1", issue)
+	}
+}
+
+func TestCollector_UndeclaredConsumerEdgeIsContractDrift(t *testing.T) {
+	c := newTestCollector(t)
+	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("payments", "payments:capture"))
+	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("orders", "order:create")) // does not declare consuming payments:capture
+
+	invoke[Ack](t, c, mesh.TopicTraces, mesh.TraceBatch{Events: []mesh.TraceEvent{
+		event("trace-1", "span-orders", "", "orders", "order:create", "ok", 1),
+		event("trace-1", "span-payments", "span-orders", "payments", "payments:capture", "ok", 1),
+	}})
+
+	fingerprint := mesh.IssueFingerprint("orders", "payments:capture", "", mesh.ClassificationContractDrift, "ok")
+	issue, ok := fleetIssue(t, c, fingerprint)
+	if !ok {
+		t.Fatal("expected a contract-drift issue for orders calling the undeclared consume payments:capture")
+	}
+	if issue.Classification != mesh.ClassificationContractDrift || issue.Service != "orders" || issue.Topic != "payments:capture" {
+		t.Errorf("issue = %+v, want a contract-drift issue for orders/payments:capture", issue)
+	}
+	// The provider side (payments) legitimately serves payments:capture - no drift for it.
+	providerFingerprint := mesh.IssueFingerprint("payments", "payments:capture", "", mesh.ClassificationContractDrift, "ok")
+	if _, ok := fleetIssue(t, c, providerFingerprint); ok {
+		t.Error("payments should not be flagged - it declared providing payments:capture")
+	}
+}
+
+// TestCollector_AnonymousServiceNeverFlaggedForDrift pins the other half of mesh.md §4.2
+// "Undeclared": an anonymous/never-registered service has no contract to diverge from, so it is
+// never flagged, no matter what topics it appears to serve or call in trace traffic.
+func TestCollector_AnonymousServiceNeverFlaggedForDrift(t *testing.T) {
+	c := newTestCollector(t)
+	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("greeter", "greet"))
+
+	invoke[Ack](t, c, mesh.TopicTraces, mesh.TraceBatch{Events: []mesh.TraceEvent{
+		// frontdoor never registered a descriptor at all.
+		event("trace-1", "span-front", "", "frontdoor", "welcome", "ok", 1),
+		event("trace-1", "span-greet", "span-front", "greeter", "greet", "ok", 1),
+	}})
+
+	_, fleet := invoke[FleetView](t, c, mesh.TopicQueryFleet, struct{}{})
+	for _, issue := range fleet.Issues {
+		if issue.Service == "frontdoor" {
+			t.Errorf("frontdoor is unregistered and must never be flagged for drift, got %+v", issue)
 		}
 	}
 }

@@ -1,12 +1,21 @@
-// Package meshd implements Phases 3-4 of the Benzene Mesh design (docs/design/mesh.md):
-// the collector. It is itself an ordinary Benzene service - its benzene:mesh:* topics live in a
-// Registry, are served through a Pipeline, and it serves its own descriptor on the
-// reserved mesh topic - so deploying it anywhere this module's bindings reach (Lambda,
-// Functions, Cloud Run, plain HTTP) is the same exercise as deploying any other service.
+// Package meshd implements the Benzene Mesh collector (originally Phases 3-4 of this repo's own
+// docs/design/mesh.md, now the main repo's docs/specification/mesh.md §§4-6). It is itself an
+// ordinary Benzene service - its benzene:mesh:* topics live in a Registry, are served through a
+// Pipeline, and it serves its own descriptor on the reserved mesh topic - so deploying it
+// anywhere this module's bindings reach (Lambda, Functions, Cloud Run, plain HTTP) is the same
+// exercise as deploying any other service.
+//
+// The producer/consumer graph (store.go's register) is built solely from the latest registered
+// ServiceDescriptor's Topics/Consumes - present in full for a service with zero traffic, and
+// replaced wholesale on re-registration. Trace parentage (store.go's addEvents) never touches
+// that graph; it feeds invocation stats plus two additive, observed-only signals (mesh.md §4.2):
+// per-declared-edge last-observed-at, and contract-drift issues when a *registered* service's
+// traffic names a topic it didn't declare.
 //
 // The collector accepts partial fleets, mirroring the mesh package's degradation rule:
 // traces from a service that never registered render it anonymous-but-live (its row shows
-// the missing descriptor feed); a registered service with no traffic is a catalog entry
+// the missing descriptor feed, and it is never eligible for a drift issue - it has no
+// declared contract to diverge from); a registered service with no traffic is a catalog entry
 // with no stats; a service without heartbeats has unknown health. Reduced feeds reduce
 // the view - they never make ingestion or queries fail.
 //
@@ -84,6 +93,7 @@ type ServiceSummary struct {
 	Binding      string         `json:"binding,omitempty"`
 	Placement    mesh.Placement `json:"placement"`
 	Topics       int            `json:"topics"`
+	Consumes     int            `json:"consumes"`
 	Instances    int            `json:"instances"`
 	Health       string         `json:"health"`
 	LastSeen     time.Time      `json:"lastSeen"`
@@ -92,18 +102,32 @@ type ServiceSummary struct {
 	MissingFeeds []string       `json:"missingFeeds,omitempty"`
 }
 
-// TopicSummary is one topic's catalog row: providers come from descriptors, consumers
-// from observed trace parentage, stats from the trace feed - nothing is declared.
+// TopicSummary is one topic's catalog row. Providers/Consumers are the declared
+// producer/consumer graph (mesh.md §4): built from the latest registered ServiceDescriptor's
+// Topics/Consumes alone, present even for a topic with zero traffic - never derived from trace
+// parentage. ProviderActivity/ConsumerActivity are the additive, observed-only signal of mesh.md
+// §4.2 layered on top: per declared edge, the last time a trace actually observed it (absent
+// means never observed in the retention window - a decommission candidate, not a fact).
 type TopicSummary struct {
-	Topic         string           `json:"topic"`
-	Version       string           `json:"version,omitempty"`
-	Providers     []string         `json:"providers,omitempty"`
-	Consumers     []string         `json:"consumers,omitempty"`
-	Invocations   int64            `json:"invocations"`
-	Errors        int64            `json:"errors"`
-	AvgDurationMs float64          `json:"avgDurationMs"`
-	StatusCounts  map[string]int64 `json:"statusCounts,omitempty"`
-	LastSeen      time.Time        `json:"lastSeen"`
+	Topic            string                  `json:"topic"`
+	Version          string                  `json:"version,omitempty"`
+	Providers        []string                `json:"providers,omitempty"`
+	Consumers        []string                `json:"consumers,omitempty"`
+	ProviderActivity map[string]EdgeActivity `json:"providerActivity,omitempty"`
+	ConsumerActivity map[string]EdgeActivity `json:"consumerActivity,omitempty"`
+	Invocations      int64                   `json:"invocations"`
+	Errors           int64                   `json:"errors"`
+	AvgDurationMs    float64                 `json:"avgDurationMs"`
+	StatusCounts     map[string]int64        `json:"statusCounts,omitempty"`
+	LastSeen         time.Time               `json:"lastSeen"`
+}
+
+// EdgeActivity is one declared edge's observed-activity record (mesh.md §4.2 "Unobserved"): the
+// last time a trace showed it being exercised, or the zero value when it never has been within
+// the collector's retention window - reported explicitly per edge rather than collapsed to a
+// boolean, so a reader can judge staleness for itself.
+type EdgeActivity struct {
+	LastObservedAt time.Time `json:"lastObservedAt,omitempty"`
 }
 
 // TraceSummary is one recent flow on the fleet view.
@@ -253,7 +277,10 @@ func New(options Options) *Collector {
 			return benzene.Ok(view)
 		})))
 
-	descriptor := mesh.Describe(registry, mesh.ServiceInfo{Service: "meshd"})
+	// The collector makes no outbound calls of its own - a real (empty) OutboundRegistry
+	// asserts "consumes nothing" rather than degrading the feed, which would misleadingly
+	// suggest outbound registration is simply unwired here.
+	descriptor := mesh.Describe(registry, mesh.NewOutboundRegistry(), mesh.ServiceInfo{Service: "meshd"})
 	builder := &benzene.ApplicationBuilder{
 		Registry:  registry,
 		Container: benzene.NewContainer(),
