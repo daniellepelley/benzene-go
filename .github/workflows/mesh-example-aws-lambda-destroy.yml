@@ -1,0 +1,80 @@
+# Manual-only: tears down examples/aws-lambda-mesh's Terraform stack (deploy/) - the counterpart
+# to mesh-example-aws-lambda-deploy.yml. Split into its own workflow file to match this repo's
+# deploy/destroy convention (and benzene-typescript's examples/aws-lambda-mesh workflow naming:
+# mesh-example-aws-lambda-deploy.yml / mesh-example-aws-lambda-destroy.yml).
+
+name: Mesh Example AWS Lambda Destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "AWS region (must match the region the stack was deployed into)"
+        required: true
+        default: "eu-west-1"
+
+permissions:
+  contents: read
+
+env:
+  PROJECT: benzene-go-lambda-mesh
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      has_credentials: ${{ steps.check.outputs.has_credentials }}
+    steps:
+      - id: check
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        run: |
+          if [ -n "$AWS_ACCESS_KEY_ID" ]; then
+            echo "has_credentials=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_credentials=false" >> "$GITHUB_OUTPUT"
+            echo "AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY repo secrets are not configured; skipping the destroy job." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  destroy:
+    needs: gate
+    if: ${{ needs.gate.outputs.has_credentials == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.region }}
+
+      # `terraform destroy` still evaluates every resource argument (including
+      # filebase64sha256(each.value.zip)) to build its plan, so the seven zips need to exist on
+      # disk even though nothing will actually be uploaded - rebuilding them is cheap (a local go
+      # build, no AWS calls) and avoids depending on any prior job's build cache.
+      - name: Build the seven Lambda zips
+        run: examples/aws-lambda-mesh/deploy/build.sh arm64
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform init (remote S3 state)
+        working-directory: examples/aws-lambda-mesh/deploy
+        env:
+          REGION: ${{ inputs.region }}
+        run: |
+          ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+          STATE_BUCKET="${PROJECT}-tfstate-${ACCOUNT}"
+          terraform init -input=false \
+            -backend-config="bucket=$STATE_BUCKET" \
+            -backend-config="key=aws-lambda-mesh/terraform.tfstate" \
+            -backend-config="region=$REGION"
+
+      - name: Terraform destroy
+        working-directory: examples/aws-lambda-mesh/deploy
+        run: terraform destroy -input=false -auto-approve -var "region=${{ inputs.region }}" -var "project=${{ env.PROJECT }}"

@@ -1,0 +1,137 @@
+# Manual-only: builds the seven Lambda binaries of examples/aws-lambda-mesh, applies its
+# Terraform stack (deploy/), kicks the estate off with one POST /orders, and polls the mesh
+# Lambda's GET /mesh/discovered until all six service Lambdas have announced themselves - a real
+# end-to-end proof of the push-based fleet story (see examples/aws-lambda-mesh/README.md's
+# "Divergence from .NET" section for why it's push, not pull).
+#
+# Named to match benzene-typescript's examples/aws-lambda-mesh workflow
+# (mesh-example-aws-lambda-deploy.yml / mesh-example-aws-lambda-destroy.yml - a split deploy/
+# destroy pair, this repo's convention for other deploy workflows), and follows
+# deploy-k8s-mesh-helloworld.yml/deploy-eks-mesh-helloworld.yml's gate-job/secrets-reading
+# pattern for reading AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY from repo secrets.
+
+name: Mesh Example AWS Lambda Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "AWS region"
+        required: true
+        default: "eu-west-1"
+
+permissions:
+  contents: read
+
+env:
+  PROJECT: benzene-go-lambda-mesh
+
+jobs:
+  # `secrets` is NOT one of the contexts available to a job-level `if:` (only github/needs/vars/
+  # inputs are) - this repo's other deploy workflows hit that compile-time restriction and fixed
+  # it with this tiny gate job (see e.g. deploy-aws-lambda-helloworld.yml); the deploy job below
+  # follows the same pattern.
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      has_credentials: ${{ steps.check.outputs.has_credentials }}
+    steps:
+      - id: check
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        run: |
+          if [ -n "$AWS_ACCESS_KEY_ID" ]; then
+            echo "has_credentials=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_credentials=false" >> "$GITHUB_OUTPUT"
+            echo "AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY repo secrets are not configured; skipping the deploy job." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  deploy:
+    needs: gate
+    if: ${{ needs.gate.outputs.has_credentials == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.region }}
+
+      - name: Build the seven Lambda zips
+        run: examples/aws-lambda-mesh/deploy/build.sh arm64
+
+      - uses: hashicorp/setup-terraform@v3
+
+      # Remote state lives in a per-account S3 bucket under this example's own key, so the state
+      # survives between (ephemeral) CI runs. Create the bucket on first use - the same pattern
+      # deploy-eks-mesh-helloworld.yml uses.
+      - name: Terraform init (remote S3 state)
+        working-directory: examples/aws-lambda-mesh/deploy
+        env:
+          REGION: ${{ inputs.region }}
+        run: |
+          ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+          STATE_BUCKET="${PROJECT}-tfstate-${ACCOUNT}"
+          if ! aws s3api head-bucket --bucket "$STATE_BUCKET" 2>/dev/null; then
+            echo "Creating state bucket $STATE_BUCKET"
+            if [ "$REGION" = "us-east-1" ]; then
+              aws s3api create-bucket --bucket "$STATE_BUCKET" --region "$REGION"
+            else
+              aws s3api create-bucket --bucket "$STATE_BUCKET" --region "$REGION" \
+                --create-bucket-configuration LocationConstraint="$REGION"
+            fi
+            aws s3api put-bucket-versioning --bucket "$STATE_BUCKET" \
+              --versioning-configuration Status=Enabled
+          fi
+          terraform init -input=false \
+            -backend-config="bucket=$STATE_BUCKET" \
+            -backend-config="key=aws-lambda-mesh/terraform.tfstate" \
+            -backend-config="region=$REGION"
+
+      - name: Terraform apply
+        working-directory: examples/aws-lambda-mesh/deploy
+        run: terraform apply -input=false -auto-approve -var "region=${{ inputs.region }}" -var "project=${{ env.PROJECT }}"
+
+      - name: Kick off the cascade and assert all 6 services are discovered
+        working-directory: examples/aws-lambda-mesh/deploy
+        run: |
+          ORDERS_URL="$(terraform output -raw orders_url)"
+          DISCOVERED_URL="$(terraform output -raw discovered_url)"
+          MESH_UI_URL="$(terraform output -raw mesh_ui_url)"
+
+          echo "POST $ORDERS_URL"
+          curl -fsS -X POST "$ORDERS_URL" -H 'content-type: application/json' \
+               -d '{"customerId":"cust-1","sku":"espresso","quantity":2}'
+          echo
+
+          echo "Waiting for all 6 services to announce themselves to the mesh..."
+          RESP=""
+          for i in $(seq 1 30); do
+            RESP="$(curl -fsS -m 10 "$DISCOVERED_URL" 2>/dev/null || true)"
+            echo "mesh/discovered -> $RESP"
+            echo "$RESP" | grep -q '"discovered":6' && break
+            sleep 5
+          done
+          echo "$RESP" | grep -q '"discovered":6' \
+            || { echo "::error::expected 6 discovered, got: $RESP"; exit 1; }
+
+          curl -fsS -m 10 -o /dev/null "$MESH_UI_URL/benzene/fleet-ui" \
+            || { echo "::error::Mesh View did not answer at $MESH_UI_URL/benzene/fleet-ui"; exit 1; }
+
+      - name: Print the URLs
+        working-directory: examples/aws-lambda-mesh/deploy
+        run: |
+          {
+            echo "### AWS Lambda mesh URLs"
+            echo "- Mesh View: $(terraform output -raw mesh_ui_url)/benzene/fleet-ui"
+            echo "- Kick off the cascade: POST $(terraform output -raw orders_url)"
+            echo "- Discovered count: $(terraform output -raw discovered_url)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"

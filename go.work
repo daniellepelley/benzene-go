@@ -15,6 +15,7 @@ use (
 	./circuitbreaker
 	./codegen
 	./diagnostics
+	./examples/aws-lambda-mesh
 	./examples/aws-sns-helloworld
 	./examples/aws-sqs-helloworld
 	./examples/grpc-helloworld

@@ -1,0 +1,33 @@
+module github.com/daniellepelley/benzene-go/examples/aws-lambda-mesh
+
+go 1.24.7
+
+require (
+	github.com/aws/aws-sdk-go-v2/config v1.32.30
+	github.com/aws/aws-sdk-go-v2/service/eventbridge v1.47.1
+	github.com/aws/aws-sdk-go-v2/service/lambda v1.101.2
+	github.com/aws/aws-sdk-go-v2/service/sns v1.41.1
+	github.com/aws/aws-sdk-go-v2/service/sqs v1.45.1
+	github.com/daniellepelley/benzene-go v0.1.0
+	github.com/daniellepelley/benzene-go/awseventbridge v0.1.0
+	github.com/daniellepelley/benzene-go/awslambdaclient v0.1.0
+	github.com/daniellepelley/benzene-go/awssns v0.1.0
+	github.com/daniellepelley/benzene-go/awssqs v0.1.0
+)
+
+require (
+	github.com/aws/aws-sdk-go-v2 v1.43.4 // indirect
+	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.16 // indirect
+	github.com/aws/aws-sdk-go-v2/credentials v1.19.29 // indirect
+	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.30 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.35 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.35 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.31 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.13 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.30 // indirect
+	github.com/aws/aws-sdk-go-v2/service/signin v1.4.1 // indirect
+	github.com/aws/aws-sdk-go-v2/service/sso v1.32.1 // indirect
+	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.37.1 // indirect
+	github.com/aws/aws-sdk-go-v2/service/sts v1.44.1 // indirect
+	github.com/aws/smithy-go v1.27.6 // indirect
+)

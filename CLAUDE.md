@@ -314,7 +314,15 @@ alongside the shared spec.
   fully live, real fleet (registered services + health + traces) with no pull side needed, and
   `examples/k8s-mesh-helloworld/` is the Kubernetes mesh estate built entirely on it (three
   domain services chaining over HTTP, reporting to `meshd`, no discovery RBAC at all) - see that
-  example's README for the full story.
+  example's README for the full story. The same divergence repeats, with the same reasoning, for
+  AWS Lambda: there is no `AwsLambdaDiscoveryProvider`/`ListFunctions`+`ListTags` counterpart and
+  no S3-backed mesh artifact/catalog store in this port, so `examples/aws-lambda-mesh/` (six
+  chained Cloud Service Lambdas over SQS/SNS/EventBridge, a seventh mesh Lambda wrapping this same
+  `meshd.Collector`) is push-based too - each service Lambda invokes the mesh Lambda directly via
+  `awslambdaclient.Client` instead of the mesh discovering and interrogating them. Lambda adds one
+  more wrinkle a long-lived K8s pod doesn't have: the collector's in-memory state is per execution
+  environment, so the mesh Lambda pins `reserved_concurrent_executions = 1` in Terraform to keep
+  that state a single consistent instance - see that example's README for the full story.
 - `awslambda/` - AWS Lambda binding: a hand-rolled Lambda Runtime API bootstrap loop, plus
   HTTP (API Gateway v2 / Function URL) and envelope adapters.
 - `azurefunctions/` - Azure Functions custom-handler binding (the Data/Metadata JSON contract
