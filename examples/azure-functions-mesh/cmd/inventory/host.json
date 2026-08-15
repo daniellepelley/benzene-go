@@ -1,0 +1,16 @@
+{
+  "version": "2.0",
+  "customHandler": {
+    "description": {
+      "defaultExecutablePath": "handler",
+      "workingDirectory": "",
+      "arguments": []
+    },
+    "enableForwardingHttpRequest": false
+  },
+  "extensions": {
+    "http": {
+      "routePrefix": ""
+    }
+  }
+}

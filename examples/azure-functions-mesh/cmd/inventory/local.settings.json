@@ -1,0 +1,10 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "",
+    "FUNCTIONS_WORKER_RUNTIME": "custom",
+    "EventHubConnection": "",
+    "ORDER_PLACED_HUB": "order-placed",
+    "MESH_INVOKE_URL": ""
+  }
+}

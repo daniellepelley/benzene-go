@@ -1,0 +1,194 @@
+# Manual-only: builds the seven Azure Functions custom-handler binaries of
+# examples/azure-functions-mesh, applies its Terraform stack (deploy/), publishes each Function
+# App's zip, wires the Event Grid subscriptions (a second apply, once the consumer apps exist and
+# are warm), kicks the estate off with one POST /orders, and polls the mesh Function's
+# GET /mesh/discovered until all six service Functions have announced themselves - a real
+# end-to-end proof of the push-based fleet story (see
+# examples/azure-functions-mesh/README.md's "Divergence from .NET" section for why it's push, not
+# pull).
+#
+# Named to match benzene-dotnet's mesh-example-azure-functions-deploy.yml/-destroy.yml pair, and
+# follows this repo's OWN auth/gating convention - deploy-azure-functions-helloworld.yml's
+# secrets.AZURE_CREDENTIALS + a gate job that SKIPS (not fails) the deploy until it's configured -
+# rather than benzene-dotnet's GitHub-Environment-gated workflow, matching
+# mesh-example-aws-lambda-deploy.yml's own gate-job/secrets pattern for the other mesh example.
+# The two-phase Terraform apply (Event Grid subscriptions wired only after publish + warm) mirrors
+# benzene-dotnet's own proven workaround for the same Azure control-plane validation quirk - see
+# deploy/main.tf's own comment on azurerm_eventgrid_event_subscription.
+
+name: Mesh Example Azure Functions Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      location:
+        description: "Azure region"
+        required: true
+        default: "westeurope"
+      storage_account:
+        description: "Storage account for the Functions runtime (globally unique, lowercase alphanumeric, <=24 chars). The remote state uses <name>tfstate, so this MUST differ from other examples' value."
+        required: true
+        default: "benzenegofnmesh"
+
+permissions:
+  contents: read
+
+env:
+  RG: benzene-go-fnmesh-rg
+  PROJECT: benzene-go-fnmesh
+
+jobs:
+  # `secrets` is NOT one of the contexts available to a job-level `if:` (only github/needs/vars/
+  # inputs are) - this repo's other deploy workflows hit that compile-time restriction and fixed
+  # it with this tiny gate job (see e.g. deploy-azure-functions-helloworld.yml,
+  # mesh-example-aws-lambda-deploy.yml); the deploy job below follows the same pattern.
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      has_credentials: ${{ steps.check.outputs.has_credentials }}
+    steps:
+      - id: check
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+        run: |
+          if [ -n "$AZURE_CREDENTIALS" ]; then
+            echo "has_credentials=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_credentials=false" >> "$GITHUB_OUTPUT"
+            echo "AZURE_CREDENTIALS repo secret is not configured; skipping the deploy job." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  deploy:
+    needs: gate
+    if: ${{ needs.gate.outputs.has_credentials == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+
+      - uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # Terraform's provider is set to resource_provider_registrations = "none", so register the
+      # resource providers this stack needs up front (idempotent; safe to re-run).
+      - name: Register required Azure resource providers
+        run: |
+          for rp in Microsoft.Storage Microsoft.Web Microsoft.EventHub Microsoft.ServiceBus Microsoft.EventGrid; do
+            az provider register --namespace "$rp"
+          done
+
+      - name: Build the seven Function zips
+        run: examples/azure-functions-mesh/deploy/build.sh linux amd64
+
+      - uses: hashicorp/setup-terraform@v3
+
+      # Remote state in a per-subscription storage account, created on first use (idempotent). The
+      # resource group is created here to hold the state storage account; Terraform reads it as a
+      # data source (deploy/main.tf).
+      - name: Terraform init (remote azurerm state)
+        working-directory: examples/azure-functions-mesh/deploy
+        env:
+          LOCATION: ${{ inputs.location }}
+          STATE_SA: ${{ inputs.storage_account }}tfstate
+        run: |
+          az group create -n "$RG" -l "$LOCATION" >/dev/null
+          az storage account create -n "$STATE_SA" -g "$RG" -l "$LOCATION" --sku Standard_LRS >/dev/null 2>&1 || true
+          if ! az storage account show -g "$RG" -n "$STATE_SA" >/dev/null 2>&1; then
+            echo "::error::Remote-state storage account '$STATE_SA' is not available in resource group '$RG'."
+            echo "::error::Storage-account names are globally unique - re-run with a different 'storage_account' value."
+            exit 1
+          fi
+          az storage container create -n tfstate --account-name "$STATE_SA" --auth-mode login >/dev/null 2>&1 || true
+          terraform init -input=false \
+            -backend-config="resource_group_name=$RG" \
+            -backend-config="storage_account_name=$STATE_SA" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=azure-functions-mesh.tfstate"
+
+      # Create the storage, plan, and all seven Function Apps + the Service Bus/Event Hub/Event
+      # Grid messaging infrastructure. Event Grid subscriptions are wired in a second apply below -
+      # they need the target Functions to exist and be warm first (see deploy/main.tf's comment).
+      - name: Terraform apply
+        working-directory: examples/azure-functions-mesh/deploy
+        run: |
+          terraform apply -input=false -auto-approve \
+            -var "project=$PROJECT" \
+            -var "resource_group=$RG" \
+            -var "storage_account=${{ inputs.storage_account }}"
+
+      # Zip-deploy each Function App's package (built above). Custom handlers read their
+      # function.json bindings straight from the deployed package - unlike an isolated-worker
+      # language whose functions.metadata is generated by reflection after deploy, there is no
+      # ARM "sync triggers" step needed here; the zip already carries the full binding
+      # declarations for every local Function folder.
+      - name: Publish each Function App
+        working-directory: examples/azure-functions-mesh/deploy
+        run: |
+          set -uo pipefail
+          rc=0
+          for svc in orders payments shipping inventory notifications analytics mesh; do
+            echo "::group::zip deploy ${PROJECT}-${svc}"
+            az functionapp deployment source config-zip -g "$RG" -n "${PROJECT}-${svc}" \
+              --src "build/${svc}.zip" --timeout 600 || rc=1
+            echo "::endgroup::"
+          done
+          exit "$rc"
+
+      # Now that the consumer Functions exist, wire the Event Grid subscriptions onto them. They're
+      # subscribed via the Functions Event Grid extension WEBHOOK (validated against the live
+      # function, not an ARM lookup), so the consumer apps must be up: warm each one first (an
+      # anonymous HTTP hit cold-starts the worker, so the EG extension answers the
+      # subscription-validation handshake and the host-keys data source can read the extension
+      # system key). Consumption apps stay warm long enough to cover the apply that follows.
+      - name: Terraform apply (wire Event Grid subscriptions)
+        working-directory: examples/azure-functions-mesh/deploy
+        run: |
+          for svc in inventory notifications analytics; do
+            echo "warming ${PROJECT}-${svc}"
+            curl -sS -o /dev/null --max-time 120 "https://${PROJECT}-${svc}.azurewebsites.net/benzene/health" 2>/dev/null || true
+          done
+          terraform apply -input=false -auto-approve \
+            -var "project=$PROJECT" \
+            -var "resource_group=$RG" \
+            -var "storage_account=${{ inputs.storage_account }}" \
+            -var "wire_eventgrid_subscriptions=true"
+
+      - name: Kick off the cascade and assert all 6 services are discovered
+        working-directory: examples/azure-functions-mesh/deploy
+        run: |
+          ORDERS_URL="$(terraform output -raw orders_url)"
+          DISCOVERED_URL="$(terraform output -raw discovered_url)"
+          MESH_UI_URL="$(terraform output -raw mesh_ui_url)"
+
+          echo "POST $ORDERS_URL"
+          curl -fsS -X POST "$ORDERS_URL" -H 'content-type: application/json' \
+               -d '{"customerId":"cust-1","sku":"espresso","quantity":2}'
+          echo
+
+          echo "Waiting for all 6 services to announce themselves to the mesh..."
+          RESP=""
+          for i in $(seq 1 30); do
+            RESP="$(curl -fsS -m 10 "$DISCOVERED_URL" 2>/dev/null || true)"
+            echo "mesh/discovered -> $RESP"
+            echo "$RESP" | grep -q '"discovered":6' && break
+            sleep 5
+          done
+          echo "$RESP" | grep -q '"discovered":6' \
+            || { echo "::error::expected 6 discovered, got: $RESP"; exit 1; }
+
+          curl -fsS -m 10 -o /dev/null "$MESH_UI_URL" \
+            || { echo "::error::Fleet View did not answer at $MESH_UI_URL"; exit 1; }
+
+      - name: Print the URLs
+        working-directory: examples/azure-functions-mesh/deploy
+        run: |
+          {
+            echo "### Azure Functions mesh URLs"
+            echo "- Fleet View: $(terraform output -raw mesh_ui_url)"
+            echo "- Kick off the cascade: POST $(terraform output -raw orders_url)"
+            echo "- Discovered count: $(terraform output -raw discovered_url)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
