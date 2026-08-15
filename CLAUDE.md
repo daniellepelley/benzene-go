@@ -307,7 +307,14 @@ alongside the shared spec.
   self-contained HTML page - no JS framework, per the zero-dependency stance). Consumer
   edges are derived from trace parentage at query time; providers from descriptors;
   nothing is declared. It must accept partial fleets: a missing feed renders a service
-  as reduced (`missingFeeds`), never fails ingestion or queries.
+  as reduced (`missingFeeds`), never fails ingestion or queries. There is deliberately **no**
+  Kubernetes API service-discovery counterpart to .NET's `Benzene.Mesh.Discovery.Kubernetes`
+  (no `KubernetesServiceDiscoveryProvider` equivalent, no RBAC-scoped `list`/`get` on Services) -
+  a documented divergence, not a gap on the punch list: this push-based collector already gives a
+  fully live, real fleet (registered services + health + traces) with no pull side needed, and
+  `examples/k8s-mesh-helloworld/` is the Kubernetes mesh estate built entirely on it (three
+  domain services chaining over HTTP, reporting to `meshd`, no discovery RBAC at all) - see that
+  example's README for the full story.
 - `awslambda/` - AWS Lambda binding: a hand-rolled Lambda Runtime API bootstrap loop, plus
   HTTP (API Gateway v2 / Function URL) and envelope adapters.
 - `azurefunctions/` - Azure Functions custom-handler binding (the Data/Metadata JSON contract

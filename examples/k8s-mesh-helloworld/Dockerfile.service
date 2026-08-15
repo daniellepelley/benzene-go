@@ -1,0 +1,17 @@
+# Build context MUST be the repo root (this example imports the root module and mesh/meshd/
+# httpbinding/httpclient/healthcheck via go.work-style sibling imports):
+#   docker build -f examples/k8s-mesh-helloworld/Dockerfile.service -t benzene-k8smesh-service:local .
+#
+# One image, deployed three times (orders/payments/shipping) — MESH_SERVICE picks the domain at
+# runtime (see cmd/service/main.go and k8s/services.yaml).
+
+FROM golang:1.24 AS build
+WORKDIR /src
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/service ./examples/k8s-mesh-helloworld/cmd/service
+
+FROM gcr.io/distroless/static-debian12
+COPY --from=build /out/service /service
+ENV PORT=8080
+EXPOSE 8080
+ENTRYPOINT ["/service"]

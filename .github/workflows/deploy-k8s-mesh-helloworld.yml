@@ -1,0 +1,92 @@
+name: Deploy K8s Mesh helloworld
+
+# Manual-only: builds the two images, spins up a throwaway kind cluster, deploys
+# examples/k8s-mesh-helloworld, and asserts the mesh's push-based fleet plane sees all three
+# domain services. Fully self-contained — no cloud credentials needed, so this is a real
+# end-to-end proof of the service-to-service chain + mesh reporting story in CI.
+#
+# Mirrors benzene-dotnet's "Deploy K8s Mesh Example" workflow, with one adapted assertion: .NET's
+# mesh PULLS the catalog (POST /mesh/refresh -> {"discovered":3}), this port's mesh is PUSH-only
+# (see examples/k8s-mesh-helloworld/README.md's "Divergence from .NET") — there is no discovery
+# pass to trigger, so this workflow instead polls GET /mesh/discovered, which reads the fleet the
+# three services have already registered themselves into, and expects the same {"discovered":3}
+# shape once their announce loops land.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kind:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build images (context = repo root)
+        run: |
+          docker build -f examples/k8s-mesh-helloworld/Dockerfile.service -t benzene-k8smesh-service:local .
+          docker build -f examples/k8s-mesh-helloworld/Dockerfile.mesh    -t benzene-k8smesh-mesh:local .
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: benzene
+
+      - name: Load images into kind
+        run: |
+          kind load docker-image benzene-k8smesh-service:local --name benzene
+          kind load docker-image benzene-k8smesh-mesh:local --name benzene
+
+      - name: Deploy
+        run: kubectl apply -k examples/k8s-mesh-helloworld/k8s/
+
+      - name: Wait for rollout
+        run: |
+          for d in orders payments shipping mesh; do
+            kubectl -n benzene-mesh rollout status "deploy/$d" --timeout=180s
+          done
+
+      # The three services announce on startup (retrying every 2s for up to 60s) and then
+      # heartbeat every 10s — poll rather than a single fixed sleep, so a slightly slow announce
+      # doesn't flake the run.
+      - name: Assert all 3 services are registered with the mesh
+        run: |
+          kubectl -n benzene-mesh port-forward svc/mesh 8080:80 >/dev/null 2>&1 &
+          PF=$!
+          trap 'kill $PF 2>/dev/null || true' EXIT
+          sleep 5
+          RESP=""
+          for i in $(seq 1 30); do
+            RESP="$(curl -fsS http://localhost:8080/mesh/discovered 2>/dev/null || true)"
+            echo "mesh/discovered -> $RESP"
+            echo "$RESP" | grep -q '"discovered":3' && break
+            sleep 3
+          done
+          echo "$RESP" | grep -q '"discovered":3' \
+            || { echo "::error::expected 3 discovered, got: $RESP"; exit 1; }
+
+      - name: Exercise the chain (orders -> payments -> shipping) and check the fleet view answers
+        run: |
+          kubectl -n benzene-mesh port-forward svc/orders 8081:80 >/dev/null 2>&1 &
+          PF=$!
+          trap 'kill $PF 2>/dev/null || true' EXIT
+          sleep 3
+          curl -fsS -XPOST localhost:8081/orders -H 'content-type: application/json' \
+               -d '{"customerId":"cust-1","sku":"espresso","quantity":2}'
+          echo
+          kubectl -n benzene-mesh port-forward svc/mesh 8080:80 >/dev/null 2>&1 &
+          PF2=$!
+          trap 'kill $PF 2>/dev/null || true; kill $PF2 2>/dev/null || true' EXIT
+          sleep 3
+          curl -fsS -o /dev/null http://localhost:8080/benzene/fleet-ui \
+            || { echo "::error::Mesh View did not answer at http://localhost:8080/benzene/fleet-ui"; exit 1; }
+
+      - name: Dump diagnostics on failure
+        if: failure()
+        run: |
+          kubectl -n benzene-mesh get pods -o wide || true
+          kubectl -n benzene-mesh logs deploy/mesh --tail=100 || true
+          kubectl -n benzene-mesh logs deploy/orders --tail=100 || true
+          kubectl -n benzene-mesh logs deploy/payments --tail=100 || true
+          kubectl -n benzene-mesh logs deploy/shipping --tail=100 || true

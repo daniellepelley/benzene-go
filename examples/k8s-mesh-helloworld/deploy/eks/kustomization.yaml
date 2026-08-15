@@ -1,0 +1,36 @@
+# EKS overlay over the unchanged examples/k8s-mesh-helloworld/k8s manifests: the deploy workflow
+# points the two image names at the ECR repositories (`kustomize edit set image
+# benzene-k8smesh-service=<repo>:<tag>` etc. — which appends an `images:` block here at deploy
+# time), and the patches below turn the mesh's NodePort Service into an internet-facing
+# LoadBalancer so the Mesh View gets a public URL, and do the same for every `benzene`-labelled
+# Service so orders/payments/shipping are directly callable from the internet too
+# (/benzene/spec, /benzene/health, /benzene/invoke). Everything else — labels, probes, the three
+# service Deployments, the mesh's lack of RBAC — is exactly what kind runs.
+#
+# NOTE: each LoadBalancer Service is its own classic ELB (billed hourly) — four in total. The
+# workflow's destroy path deletes the namespace first, which releases them all.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../k8s
+patches:
+  - patch: |-
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: mesh
+        namespace: benzene-mesh
+      spec:
+        type: LoadBalancer
+  # Same exposure for the discoverable-by-label services (the label isn't read by anything in
+  # this push-only port, but it's still a convenient selector for "the three domain Services").
+  - target:
+      kind: Service
+      labelSelector: benzene=true
+    patch: |-
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: benzene-labelled
+      spec:
+        type: LoadBalancer

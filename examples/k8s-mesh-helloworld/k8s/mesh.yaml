@@ -1,0 +1,36 @@
+# The mesh collector — push-only (see ../README.md's "Divergence from .NET"): no ServiceAccount,
+# no RBAC, no Kubernetes API access at all. It only needs its own Deployment + Service; the three
+# domain services find it by the in-cluster DNS name of the Service below
+# (MESH_COLLECTOR_ENVELOPE_URL: http://mesh/benzene/invoke).
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mesh
+  namespace: benzene-mesh
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: mesh }
+  template:
+    metadata:
+      labels: { app: mesh }
+    spec:
+      containers:
+        - name: mesh
+          image: benzene-k8smesh-mesh:local
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8080 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mesh
+  namespace: benzene-mesh
+spec:
+  type: NodePort
+  selector: { app: mesh }
+  ports:
+    - port: 80
+      targetPort: 8080
+      nodePort: 30080

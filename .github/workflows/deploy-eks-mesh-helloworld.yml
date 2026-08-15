@@ -1,0 +1,207 @@
+name: Deploy EKS Mesh helloworld
+
+# Manual-only: deploys examples/k8s-mesh-helloworld to a real EKS cluster — the AWS leg of the
+# Kubernetes mesh example (the kind workflow proves the same story credential-free). Terraform
+# creates the cluster + ECR (examples/k8s-mesh-helloworld/deploy), the two images are built and
+# pushed, and the UNCHANGED k8s manifests are applied via the deploy/eks kustomize overlay, which
+# exposes the Mesh View through an internet-facing LoadBalancer. Ends by asserting
+# {"discovered":3} (see deploy-k8s-mesh-helloworld.yml's comment for why this is a GET, not a
+# POST /mesh/refresh: this port's mesh is push-only) and printing the public URLs.
+#
+# Requires repo secrets AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, matching this repo's other
+# AWS deploy workflows (see e.g. deploy-aws-lambda-helloworld.yml) rather than benzene-dotnet's
+# GitHub-Environment convention — same credentials, this repo's existing pattern for reading them.
+# NOTE: an EKS control plane bills ~$0.10/hour plus the EC2 nodes — re-run with destroy=true to
+# tear everything down when finished (single workflow, destroy input — matching benzene-dotnet's
+# own choice for K8s/EKS specifically, rather than splitting deploy/destroy into two files).
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "AWS region"
+        required: true
+        default: "eu-west-1"
+      destroy:
+        description: "Tear down: delete the Kubernetes namespace (releasing the ELBs), then terraform destroy."
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  PROJECT: benzene-go-k8smesh
+  NAMESPACE: benzene-mesh
+
+jobs:
+  # `secrets` is NOT one of the contexts available to a job-level `if:` (only github/needs/vars/
+  # inputs are) — this repo's other deploy workflows hit that compile-time restriction and fixed
+  # it with this tiny gate job (see e.g. deploy-aws-lambda-helloworld.yml); the deploy job below
+  # follows the same pattern.
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      has_credentials: ${{ steps.check.outputs.has_credentials }}
+    steps:
+      - id: check
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        run: |
+          if [ -n "$AWS_ACCESS_KEY_ID" ]; then
+            echo "has_credentials=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_credentials=false" >> "$GITHUB_OUTPUT"
+            echo "AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY repo secrets are not configured; skipping the deploy job." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  deploy:
+    needs: gate
+    if: ${{ needs.gate.outputs.has_credentials == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.region }}
+
+      - uses: hashicorp/setup-terraform@v3
+
+      # Remote state lives in a per-account S3 bucket under this example's own key, so the state
+      # survives between (ephemeral) CI runs. Create the bucket on first use.
+      - name: Terraform init (remote S3 state)
+        working-directory: examples/k8s-mesh-helloworld/deploy
+        env:
+          REGION: ${{ inputs.region }}
+        run: |
+          ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+          STATE_BUCKET="benzene-go-k8smesh-tfstate-${ACCOUNT}"
+          if ! aws s3api head-bucket --bucket "$STATE_BUCKET" 2>/dev/null; then
+            echo "Creating state bucket $STATE_BUCKET"
+            if [ "$REGION" = "us-east-1" ]; then
+              aws s3api create-bucket --bucket "$STATE_BUCKET" --region "$REGION"
+            else
+              aws s3api create-bucket --bucket "$STATE_BUCKET" --region "$REGION" \
+                --create-bucket-configuration LocationConstraint="$REGION"
+            fi
+            aws s3api put-bucket-versioning --bucket "$STATE_BUCKET" \
+              --versioning-configuration Status=Enabled
+          fi
+          terraform init -input=false \
+            -backend-config="bucket=$STATE_BUCKET" \
+            -backend-config="key=k8s-mesh/terraform.tfstate" \
+            -backend-config="region=$REGION"
+
+      # Teardown path: the internet-facing ELBs are owned by the Kubernetes Services, not by
+      # Terraform, so delete the namespace first (the cloud controller reaps the ELBs) and only
+      # then destroy the cluster — otherwise the ELBs (and their cost) would outlive the stack.
+      - name: Destroy
+        if: ${{ inputs.destroy }}
+        working-directory: examples/k8s-mesh-helloworld/deploy
+        run: |
+          if aws eks describe-cluster --name "$PROJECT" --region "${{ inputs.region }}" >/dev/null 2>&1; then
+            aws eks update-kubeconfig --name "$PROJECT" --region "${{ inputs.region }}"
+            kubectl delete namespace "$NAMESPACE" --ignore-not-found --timeout=5m || true
+          fi
+          terraform destroy -input=false -auto-approve -var "region=${{ inputs.region }}"
+
+      - name: Terraform apply (EKS cluster + ECR)
+        if: ${{ ! inputs.destroy }}
+        working-directory: examples/k8s-mesh-helloworld/deploy
+        run: terraform apply -input=false -auto-approve -var "region=${{ inputs.region }}"
+
+      - name: Build and push images to ECR
+        if: ${{ ! inputs.destroy }}
+        working-directory: examples/k8s-mesh-helloworld/deploy
+        run: |
+          SERVICE_REPO="$(terraform output -raw service_image_repository)"
+          MESH_REPO="$(terraform output -raw mesh_image_repository)"
+          aws ecr get-login-password --region "${{ inputs.region }}" \
+            | docker login --username AWS --password-stdin "${SERVICE_REPO%%/*}"
+          # Context = repo root: the Dockerfiles build the sibling root-module packages
+          # (mesh/meshd/httpbinding/httpclient/healthcheck) alongside the example.
+          docker build -f "$GITHUB_WORKSPACE/examples/k8s-mesh-helloworld/Dockerfile.service" -t "$SERVICE_REPO:${GITHUB_SHA::12}" "$GITHUB_WORKSPACE"
+          docker build -f "$GITHUB_WORKSPACE/examples/k8s-mesh-helloworld/Dockerfile.mesh"    -t "$MESH_REPO:${GITHUB_SHA::12}"    "$GITHUB_WORKSPACE"
+          docker push "$SERVICE_REPO:${GITHUB_SHA::12}"
+          docker push "$MESH_REPO:${GITHUB_SHA::12}"
+
+      - name: Deploy the manifests (eks overlay)
+        if: ${{ ! inputs.destroy }}
+        working-directory: examples/k8s-mesh-helloworld/deploy
+        run: |
+          SERVICE_REPO="$(terraform output -raw service_image_repository)"
+          MESH_REPO="$(terraform output -raw mesh_image_repository)"
+          aws eks update-kubeconfig --name "$(terraform output -raw cluster_name)" --region "${{ inputs.region }}"
+          (cd eks \
+            && kustomize edit set image "benzene-k8smesh-service=$SERVICE_REPO:${GITHUB_SHA::12}" \
+            && kustomize edit set image "benzene-k8smesh-mesh=$MESH_REPO:${GITHUB_SHA::12}")
+          kubectl apply -k eks
+          for d in orders payments shipping mesh; do
+            kubectl -n "$NAMESPACE" rollout status "deploy/$d" --timeout=300s
+          done
+
+      # The LoadBalancer hostname appears on the Service once AWS provisions the ELB, and the DNS
+      # name takes a couple of minutes to start resolving — poll for both before asserting. The
+      # advertised URL is the Mesh View itself, so assert GET /benzene/fleet-ui answers too, not
+      # just the discovered count (a broken handler wiring can 404 one but not the other).
+      - name: Wait for the mesh ELB and assert 3 services discovered
+        if: ${{ ! inputs.destroy }}
+        run: |
+          echo "Waiting for the mesh Service's LoadBalancer hostname..."
+          HOST=""
+          for i in $(seq 1 30); do
+            HOST="$(kubectl -n "$NAMESPACE" get svc mesh -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)"
+            [ -n "$HOST" ] && break
+            sleep 10
+          done
+          [ -z "$HOST" ] && { echo "::error::LoadBalancer hostname never appeared on svc/mesh"; exit 1; }
+          echo "ELB: $HOST — waiting for it to answer..."
+          RESP=""
+          for i in $(seq 1 60); do
+            RESP="$(curl -fsS -m 10 "http://$HOST/mesh/discovered" 2>/dev/null || true)"
+            echo "$RESP" | grep -q '"discovered":3' && break
+            sleep 10
+          done
+          echo "mesh/discovered -> $RESP"
+          echo "$RESP" | grep -q '"discovered":3' \
+            || { echo "::error::expected 3 discovered, got: $RESP"; exit 1; }
+          curl -fsS -m 10 -o /dev/null "http://$HOST/benzene/fleet-ui" \
+            || { echo "::error::Mesh View did not answer at http://$HOST/benzene/fleet-ui"; exit 1; }
+          echo "MESH_HOST=$HOST" >> "$GITHUB_ENV"
+
+      # The eks overlay also exposes each benzene-labelled Service through its own internet-facing
+      # LoadBalancer — resolve those hostnames, prove each answers over the public internet, and
+      # put every URL (Mesh View + services) in the run summary as one list.
+      - name: Print the public URLs
+        if: ${{ ! inputs.destroy }}
+        run: |
+          echo "### Public URLs" >> "$GITHUB_STEP_SUMMARY"
+          echo "Mesh View: http://$MESH_HOST/benzene/fleet-ui"
+          echo "- Mesh View: http://$MESH_HOST/benzene/fleet-ui" >> "$GITHUB_STEP_SUMMARY"
+          for s in orders payments shipping; do
+            HOST=""
+            for i in $(seq 1 30); do
+              HOST="$(kubectl -n "$NAMESPACE" get svc "$s" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)"
+              [ -n "$HOST" ] && break
+              sleep 10
+            done
+            [ -z "$HOST" ] && { echo "::error::LoadBalancer hostname never appeared on svc/$s"; exit 1; }
+            for i in $(seq 1 60); do
+              curl -fsS -m 10 "http://$HOST/benzene/health" >/dev/null 2>&1 && break
+              [ "$i" = "60" ] && { echo "::error::svc/$s never answered at http://$HOST/benzene/health"; exit 1; }
+              sleep 10
+            done
+            echo "$s: http://$HOST/benzene/spec"
+            echo "- $s: http://$HOST/benzene/spec" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Dump diagnostics on failure
+        if: ${{ failure() && ! inputs.destroy }}
+        run: |
+          kubectl -n "$NAMESPACE" get pods -o wide || true
+          kubectl -n "$NAMESPACE" get svc || true
+          kubectl -n "$NAMESPACE" describe svc mesh || true
+          kubectl -n "$NAMESPACE" logs deploy/mesh --tail=100 || true

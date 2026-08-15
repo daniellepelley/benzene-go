@@ -1,0 +1,17 @@
+# Build context MUST be the repo root:
+#   docker build -f examples/k8s-mesh-helloworld/Dockerfile.mesh -t benzene-k8smesh-mesh:local .
+#
+# The mesh collector — see cmd/mesh/main.go and the package comment there for what it does and
+# how it deliberately diverges from benzene-dotnet's Mesh/ (push-only, no Kubernetes API
+# discovery).
+
+FROM golang:1.24 AS build
+WORKDIR /src
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/mesh ./examples/k8s-mesh-helloworld/cmd/mesh
+
+FROM gcr.io/distroless/static-debian12
+COPY --from=build /out/mesh /mesh
+ENV PORT=8080
+EXPOSE 8080
+ENTRYPOINT ["/mesh"]
