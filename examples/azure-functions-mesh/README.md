@@ -145,6 +145,18 @@ Function folder, all sharing one `http.ServeMux` in `main.go`:
 | `analytics` | HTTP: `Spec`, `Health`, `Invoke`; Event Grid: `IntegrationEvents` (both event types) | `payment:captured`, `shipment:dispatched` | — (pure consumer) |
 | `mesh` | HTTP only: `FleetUi`, `Invoke`, `Discovered` | `benzene:mesh:*` (via `meshd.Collector`) | — |
 
+Both columns above are **hard-coded contract, never inferred**. *Registers* is each service's
+`benzene.Register` calls (what it receives); *Publishes* is its `mesh.RegisterOutbound` records
+(what it sends, `mesh.md` §2.3), declared for the whole estate in one switch —
+[`domain.RegisterOutbound`](domain/domain.go), called from every `cmd/<service>/main.go` beside
+that service's handler registration. The two together are the *only* source of the mesh's
+producer/consumer graph: the collector draws a topic's **providers** from the descriptors that
+registered a handler for it and its **consumers** from the descriptors that declared they send it,
+before a single message flows (`mesh.md` §4). Trace propagation
+(`mesh.WithTraceContext`, wired on every outbound client here) only marks those declared edges as
+*observed* (§4.2) — it never adds one. Skip the outbound declaration and the catalog comes out
+half-drawn: every topic with providers, no consumers, and nothing in the UI to say why.
+
 Domain logic is deliberately trivial (see [`domain/domain.go`](domain/domain.go)) — the point of
 this example is proving the mesh's transport wiring, not rich business behaviour, matching every
 sibling mesh example's own stance.

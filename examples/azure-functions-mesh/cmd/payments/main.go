@@ -31,12 +31,16 @@ import (
 // newApp is the composition root both main() and the tests boot from.
 func newApp(shipping, paymentCaptured client.Sender, meshClient *httpclient.Client) *meshapp.App {
 	return meshapp.New(meshapp.Config{
-		ServiceName: "payments",
+		ServiceName: domain.ServicePayments,
 		MeshClient:  meshClient,
-		Register: func(registry *benzene.Registry) []httpbinding.Route {
+		Register: func(registry *benzene.Registry, outbound *mesh.OutboundRegistry) []httpbinding.Route {
 			handler := domain.TakePaymentHandler(shipping, paymentCaptured)
 			if err := benzene.Register(registry, benzene.NewTopic(domain.TopicPaymentTake), handler); err != nil {
 				log.Fatalf("register %s: %v", domain.TopicPaymentTake, err)
+			}
+			// What this service SENDS: shipment:book (Service Bus) + payment:captured (Event Grid).
+			if err := domain.RegisterOutbound(outbound, domain.ServicePayments); err != nil {
+				log.Fatalf("register outbound for %s: %v", domain.ServicePayments, err)
 			}
 			return nil
 		},

@@ -27,16 +27,22 @@ import (
 )
 
 // newApp is the composition root both main() and the tests boot from. payments/orderPlaced are
-// wrapped in mesh.WithTraceContext by the caller (main) so the collector can derive consumer
-// edges from trace parentage, exactly like every other mesh example's downstream client.
+// wrapped in mesh.WithTraceContext by the caller (main), exactly like every other mesh example's
+// downstream client - propagation lets the collector show this service's declared consumer edges
+// as observed (mesh.md §4.2), on top of the graph itself, which comes from the registered
+// ServiceDescriptor.Consumes declared below (mesh.md §4) and from nothing else.
 func newApp(payments, orderPlaced client.Sender, meshClient *httpclient.Client) *meshapp.App {
 	return meshapp.New(meshapp.Config{
-		ServiceName: "orders",
+		ServiceName: domain.ServiceOrders,
 		MeshClient:  meshClient,
-		Register: func(registry *benzene.Registry) []httpbinding.Route {
+		Register: func(registry *benzene.Registry, outbound *mesh.OutboundRegistry) []httpbinding.Route {
 			handler := domain.CreateOrderHandler(payments, orderPlaced)
 			if err := benzene.Register(registry, benzene.NewTopic(domain.TopicOrderCreate), handler); err != nil {
 				log.Fatalf("register %s: %v", domain.TopicOrderCreate, err)
+			}
+			// What this service SENDS: payment:take (Service Bus) + order:placed (Event Hub).
+			if err := domain.RegisterOutbound(outbound, domain.ServiceOrders); err != nil {
+				log.Fatalf("register outbound for %s: %v", domain.ServiceOrders, err)
 			}
 			return []httpbinding.Route{{Method: http.MethodPost, Path: "/Orders", Topic: benzene.NewTopic(domain.TopicOrderCreate)}}
 		},

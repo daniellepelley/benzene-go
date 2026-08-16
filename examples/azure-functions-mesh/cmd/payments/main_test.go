@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -126,5 +127,27 @@ func TestPortFromEnv_DefaultsWhenUnset(t *testing.T) {
 	t.Setenv("FUNCTIONS_CUSTOMHANDLER_PORT", "")
 	if got := portFromEnv(); got != "8080" {
 		t.Errorf("portFromEnv() = %q, want %q", got, "8080")
+	}
+}
+
+// TestPayments_DescriptorDeclaresWhatItSends proves this Function actually wires the outbound half of
+// its contract: what domain.RegisterOutbound declares for payments must reach the descriptor it
+// announces, since Descriptor.Consumes - not observed traffic - is what draws this service's
+// consumer edges on the mesh's topic catalog (mesh.md §4). Built with nil senders on purpose: the
+// declaration is a contract, not a function of which transports a given deployment happened to
+// wire up.
+func TestPayments_DescriptorDeclaresWhatItSends(t *testing.T) {
+	desc := newApp(nil, nil, nil).Descriptor()
+
+	got := []string{}
+	for _, topic := range desc.Consumes {
+		got = append(got, topic.ID)
+	}
+	// Sorted by topic ID, matching mesh.OutboundRegistry.Topics().
+	if want := []string{domain.TopicPaymentCaptured, domain.TopicShipmentBook}; !slices.Equal(got, want) {
+		t.Errorf("Descriptor.Consumes = %v, want %v", got, want)
+	}
+	if len(desc.Degraded) != 0 {
+		t.Errorf("Descriptor.Degraded = %v, want none (both feeds are wired)", desc.Degraded)
 	}
 }

@@ -53,13 +53,18 @@ type Config struct {
 	// ServiceName identifies the service in the mesh (mesh.ServiceInfo.Service) and is used as
 	// its InstanceID too - one instance per deployed Function App, so the two coincide.
 	ServiceName string
-	// Register runs once at startup: register this service's domain handler(s) on registry and
-	// return any HTTP routes beyond the standard GET /Spec -> benzene:mesh and
-	// GET /Health -> benzene:healthcheck routes, which New always adds. A pure event consumer
-	// (inventory/notifications/analytics) returns nil routes - its only HTTP surface is the
-	// standard Cloud Service Profile one, everything else arrives over Service Bus/Event
-	// Hub/Event Grid triggers mounted directly in cmd/<service>/main.go.
-	Register func(registry *benzene.Registry) []httpbinding.Route
+	// Register runs once at startup: register this service's domain handler(s) on registry -
+	// what it RECEIVES - and its outbound records on outbound - what it SENDS (mesh.md §2.3,
+	// domain.RegisterOutbound) - then return any HTTP routes beyond the standard
+	// GET /Spec -> benzene:mesh and GET /Health -> benzene:healthcheck routes, which New always
+	// adds. A pure event consumer (inventory/notifications/analytics) registers nothing outbound
+	// and returns nil routes - its only HTTP surface is the standard Cloud Service Profile one,
+	// everything else arrives over Service Bus/Event Hub/Event Grid triggers mounted directly in
+	// cmd/<service>/main.go.
+	//
+	// Both registries reach the one callback (matching examples/k8s-mesh-helloworld/cmd/service's
+	// registerDomain) so each service declares both halves of its contract in the same place.
+	Register func(registry *benzene.Registry, outbound *mesh.OutboundRegistry) []httpbinding.Route
 	// MeshClient pushes register/heartbeat/trace/issue reports to the mesh Function's
 	// POST /benzene/invoke over plain HTTP (httpclient.Client already satisfies mesh.Sender's
 	// Send signature, so it plugs into PushExporter/PushIssueExporter with no adapter needed -
@@ -84,21 +89,26 @@ type App struct {
 	issueExporter *mesh.PushIssueExporter
 }
 
-// New builds the App: registers the domain handler(s), derives the descriptor from the now-final
-// registry, wires the standard "self" health check, and - when cfg.MeshClient is set - starts the
-// background trace/issue exporters. All startup work, done once.
+// New builds the App: registers the domain handler(s) and the service's outbound records, derives
+// the descriptor from the now-final registries, wires the standard "self" health check, and - when
+// cfg.MeshClient is set - starts the background trace/issue exporters. All startup work, done once.
+//
+// The OutboundRegistry is always real (never nil), even for a service that declares nothing: a
+// present-but-empty one describes a service that genuinely sends nothing, whereas a nil one would
+// mark the feed Degraded - "send side not wired up" - which is a different claim entirely.
 func New(cfg Config) *App {
 	registry := benzene.NewRegistry()
+	outbound := mesh.NewOutboundRegistry()
 	routes := []httpbinding.Route{
 		{Method: http.MethodGet, Path: "/Spec", Topic: benzene.NewTopic(mesh.TopicID)},
 		{Method: http.MethodGet, Path: "/Health", Topic: benzene.NewTopic(healthcheck.ReservedTopic)},
 	}
 	if cfg.Register != nil {
-		routes = append(routes, cfg.Register(registry)...)
+		routes = append(routes, cfg.Register(registry, outbound)...)
 	}
 
 	info := mesh.ServiceInfo{Service: cfg.ServiceName, ServiceVersion: "1.0.0", InstanceID: cfg.ServiceName, Binding: "azure-functions"}
-	descriptor := mesh.Describe(registry, info)
+	descriptor := mesh.Describe(registry, outbound, info)
 
 	checks := []healthcheck.Check{healthcheck.NamedCheck("self", func(context.Context) healthcheck.CheckResult {
 		return healthcheck.CheckResult{Status: healthcheck.StatusOk, Type: "self", Data: map[string]any{"service": cfg.ServiceName}}

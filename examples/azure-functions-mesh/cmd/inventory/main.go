@@ -15,6 +15,7 @@ import (
 	"github.com/daniellepelley/benzene-go/azurefunctions"
 	"github.com/daniellepelley/benzene-go/httpbinding"
 	"github.com/daniellepelley/benzene-go/httpclient"
+	"github.com/daniellepelley/benzene-go/mesh"
 
 	"github.com/daniellepelley/benzene-go/examples/azure-functions-mesh/domain"
 	"github.com/daniellepelley/benzene-go/examples/azure-functions-mesh/meshapp"
@@ -23,14 +24,20 @@ import (
 // newApp is the composition root both main() and the tests boot from.
 func newApp(meshClient *httpclient.Client) *meshapp.App {
 	return meshapp.New(meshapp.Config{
-		ServiceName: "inventory",
+		ServiceName: domain.ServiceInventory,
 		MeshClient:  meshClient,
-		Register: func(registry *benzene.Registry) []httpbinding.Route {
+		Register: func(registry *benzene.Registry, outbound *mesh.OutboundRegistry) []httpbinding.Route {
 			if err := benzene.Register(registry, benzene.NewTopic(domain.TopicOrderPlaced), domain.AckHandler[domain.OrderPlaced]()); err != nil {
 				log.Fatalf("register %s: %v", domain.TopicOrderPlaced, err)
 			}
 			if err := benzene.Register(registry, benzene.NewTopic(domain.TopicShipmentDispatched), domain.AckHandler[domain.ShipmentBooked]()); err != nil {
 				log.Fatalf("register %s: %v", domain.TopicShipmentDispatched, err)
+			}
+			// Declares nothing outbound - a pure event consumer - but every service routes its
+			// send side through the same call, so the day this one gains a hop there is exactly
+			// one place to declare it.
+			if err := domain.RegisterOutbound(outbound, domain.ServiceInventory); err != nil {
+				log.Fatalf("register outbound for %s: %v", domain.ServiceInventory, err)
 			}
 			return nil
 		},

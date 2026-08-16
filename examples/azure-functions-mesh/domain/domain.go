@@ -13,9 +13,11 @@ package domain
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/client"
+	"github.com/daniellepelley/benzene-go/mesh"
 )
 
 // Topic ids for the estate's five cross-service hops, matching
@@ -32,6 +34,76 @@ const (
 	TopicPaymentCaptured    = "payment:captured"
 	TopicShipmentDispatched = "shipment:dispatched"
 )
+
+// Service names for the estate's six domain Functions - the mesh.ServiceInfo.Service each
+// cmd/<service>/main.go announces itself under, and the selector RegisterOutbound switches on.
+// Constants rather than repeated literals so the name a service announces and the outbound
+// declaration it picks up can never drift apart.
+const (
+	ServiceOrders        = "orders"
+	ServicePayments      = "payments"
+	ServiceShipping      = "shipping"
+	ServiceInventory     = "inventory"
+	ServiceNotifications = "notifications"
+	ServiceAnalytics     = "analytics"
+)
+
+// RegisterOutbound declares on outbound every topic service SENDS (mesh.md §2.3) - the
+// counterpart to the benzene.Register calls each cmd/<service>/main.go makes for what it
+// RECEIVES. Both halves are hard-coded contract, never inferred: this switch is the estate's
+// single source for the send side, deliberately kept in the same file as the handlers whose
+// bodies do the sending (CreateOrderHandler/TakePaymentHandler/BookShipmentHandler), so a hop
+// added to a handler and left undeclared here is visible as a one-file discrepancy. Without it
+// the mesh's topic catalog would show every topic with providers and no consumers - a silently
+// half-drawn graph, since Descriptor.Consumes, not observed trace parentage, is the sole source
+// of a consumer edge (mesh.md §4).
+//
+// Unlike examples/k8s-mesh-helloworld's equivalent switch, registration here is NOT conditional
+// on the matching client.Sender being wired: that example's nil downstream selects a different
+// ROLE (one image, three deployments, shipping terminal), whereas each service here is its own
+// Function App whose role is fixed at compile time and whose senders differ only by deployment
+// wiring. Per mesh.OutboundRegistry's own rule - a declaration carries no destination address,
+// so "the descriptor doesn't change between environments, only the wiring does" - an orders
+// Function booted with nil senders still declares payment:take and order:placed.
+//
+// Every hop in this estate is one-way (Service Bus, Event Hub and Event Grid each answer a send
+// with an acknowledgement and no payload - see azureservicebus/azureeventhub/azureeventgrid's
+// Client.Send), so every record declares TRes as `any`: mesh.md §2.3's "no expected response
+// type", which derives the unconstrained {} responseSchema rather than claiming a response shape
+// that never comes back.
+//
+// Returns an error for an unrecognised service - the six names are compile-time fixed, so an
+// unknown one is a wiring bug, not a default worth silently absorbing.
+func RegisterOutbound(outbound *mesh.OutboundRegistry, service string) error {
+	switch service {
+	case ServiceOrders:
+		// payment:take over a Service Bus queue (the command chain) + order:placed over Event
+		// Hub (the fan-out stream) - CreateOrderHandler's two sends.
+		if err := mesh.RegisterOutbound[TakePaymentRequest, any](outbound, benzene.NewTopic(TopicPaymentTake)); err != nil {
+			return err
+		}
+		return mesh.RegisterOutbound[OrderPlaced, any](outbound, benzene.NewTopic(TopicOrderPlaced))
+	case ServicePayments:
+		// shipment:book over Service Bus + payment:captured over Event Grid -
+		// TakePaymentHandler's two sends.
+		if err := mesh.RegisterOutbound[BookShipmentRequest, any](outbound, benzene.NewTopic(TopicShipmentBook)); err != nil {
+			return err
+		}
+		return mesh.RegisterOutbound[PaymentTaken, any](outbound, benzene.NewTopic(TopicPaymentCaptured))
+	case ServiceShipping:
+		// Terminal for the command chain (no further Service Bus hop), but it does fan
+		// shipment:dispatched out over Event Grid - BookShipmentHandler's one send.
+		return mesh.RegisterOutbound[ShipmentBooked, any](outbound, benzene.NewTopic(TopicShipmentDispatched))
+	case ServiceInventory, ServiceNotifications, ServiceAnalytics:
+		// Pure event consumers: AckHandler sends nothing, so there is nothing to declare. An
+		// empty (but present) outbound registry is the honest answer - it leaves Consumes empty
+		// without degrading the feed, which is exactly "this service sends nothing" rather than
+		// "this service's send side wasn't wired up".
+		return nil
+	default:
+		return fmt.Errorf("domain: unknown service %q", service)
+	}
+}
 
 // CreateOrderRequest is the order:create request body (orders' native POST /orders route).
 type CreateOrderRequest struct {

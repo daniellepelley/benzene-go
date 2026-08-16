@@ -29,12 +29,17 @@ import (
 // newApp is the composition root both main() and the tests boot from.
 func newApp(shipmentDispatched client.Sender, meshClient *httpclient.Client) *meshapp.App {
 	return meshapp.New(meshapp.Config{
-		ServiceName: "shipping",
+		ServiceName: domain.ServiceShipping,
 		MeshClient:  meshClient,
-		Register: func(registry *benzene.Registry) []httpbinding.Route {
+		Register: func(registry *benzene.Registry, outbound *mesh.OutboundRegistry) []httpbinding.Route {
 			handler := domain.BookShipmentHandler(shipmentDispatched)
 			if err := benzene.Register(registry, benzene.NewTopic(domain.TopicShipmentBook), handler); err != nil {
 				log.Fatalf("register %s: %v", domain.TopicShipmentBook, err)
+			}
+			// What this service SENDS: shipment:dispatched (Event Grid) - terminal for the
+			// command chain, but still a publisher of its own integration event.
+			if err := domain.RegisterOutbound(outbound, domain.ServiceShipping); err != nil {
+				log.Fatalf("register outbound for %s: %v", domain.ServiceShipping, err)
 			}
 			return nil
 		},
