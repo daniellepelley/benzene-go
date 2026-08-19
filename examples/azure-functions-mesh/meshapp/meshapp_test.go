@@ -353,18 +353,18 @@ func TestApp_Descriptor_ReflectsRegisteredTopics(t *testing.T) {
 }
 
 // TestApp_Descriptor_ReflectsOutboundRegistrations is the send-side counterpart of the test
-// above: what Config.Register declares on the OutboundRegistry must reach Descriptor.Consumes,
+// above: what Config.Register declares on the OutboundRegistry must reach Descriptor.Produces,
 // since that list - not observed trace parentage - is the sole source of this service's consumer
 // edges on the mesh's topic catalog (mesh.md §4).
 func TestApp_Descriptor_ReflectsOutboundRegistrations(t *testing.T) {
 	desc := newTestApp(t, nil).Descriptor()
 
-	if len(desc.Consumes) != 1 || desc.Consumes[0].ID != "downstream" {
-		t.Fatalf("Descriptor.Consumes = %+v, want exactly [downstream]", desc.Consumes)
+	if len(desc.Produces) != 1 || desc.Produces[0].ID != "downstream" {
+		t.Fatalf("Descriptor.Produces = %+v, want exactly [downstream]", desc.Produces)
 	}
 	// TRes = any derives the unconstrained {} responseSchema mesh.md §2.3 specifies for a
 	// sender with no expected response type - present, not omitted.
-	if got := desc.Consumes[0].ResponseSchema; got == nil || len(got) != 0 {
+	if got := desc.Produces[0].ResponseSchema; got == nil || len(got) != 0 {
 		t.Errorf("downstream ResponseSchema = %v, want a present, empty ({}) schema", got)
 	}
 	if len(desc.Degraded) != 0 {
@@ -389,8 +389,8 @@ func TestApp_Descriptor_NoOutboundRegistrationsIsEmptyNotDegraded(t *testing.T) 
 	})
 	desc := app.Descriptor()
 
-	if len(desc.Consumes) != 0 {
-		t.Errorf("Descriptor.Consumes = %+v, want empty", desc.Consumes)
+	if len(desc.Produces) != 0 {
+		t.Errorf("Descriptor.Produces = %+v, want empty", desc.Produces)
 	}
 	for _, feed := range desc.Degraded {
 		if feed == mesh.FeedOutboundRegistry {

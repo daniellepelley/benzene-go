@@ -166,8 +166,8 @@ func TestNew_PlacementInstanceAndContainer(t *testing.T) {
 func TestNew_WithConsumesDerivesConsumesElseDegrades(t *testing.T) {
 	t.Run("unset degrades the outbound-registry feed", func(t *testing.T) {
 		svc := New("greeter", newRegistry(t))
-		if len(svc.Descriptor.Consumes) != 0 {
-			t.Errorf("Consumes = %v, want empty", svc.Descriptor.Consumes)
+		if len(svc.Descriptor.Produces) != 0 {
+			t.Errorf("Consumes = %v, want empty", svc.Descriptor.Produces)
 		}
 		degraded := false
 		for _, feed := range svc.Descriptor.Degraded {
@@ -187,8 +187,8 @@ func TestNew_WithConsumesDerivesConsumesElseDegrades(t *testing.T) {
 		}
 		svc := New("greeter", newRegistry(t), WithConsumes(outbound))
 
-		if len(svc.Descriptor.Consumes) != 1 || svc.Descriptor.Consumes[0].ID != "payments:capture" {
-			t.Errorf("Consumes = %+v, want one entry for payments:capture", svc.Descriptor.Consumes)
+		if len(svc.Descriptor.Produces) != 1 || svc.Descriptor.Produces[0].ID != "payments:capture" {
+			t.Errorf("Consumes = %+v, want one entry for payments:capture", svc.Descriptor.Produces)
 		}
 		for _, feed := range svc.Descriptor.Degraded {
 			if feed == mesh.FeedOutboundRegistry {

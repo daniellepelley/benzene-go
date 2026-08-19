@@ -150,19 +150,20 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 		t.Errorf("legacy-portal invocations = 0, want its traced traffic counted despite the reduced feeds")
 	}
 
-	// Consumer edges are declared (frontdoor's outbound registration), not trace-derived:
-	// legacy-portal called greeter just as much, but it never registered a descriptor, so it
-	// has no declared Consumes to show an edge from (mesh.md §4, §4.2).
+	// Graph edges are declared (frontdoor's outbound registration makes it the PROVIDER;
+	// greeter handling greet makes it the consumer), not trace-derived: legacy-portal called
+	// greeter just as much, but it never registered a descriptor, so it has no declared
+	// Produces to show an edge from (mesh.md §4, §4.2).
 	topicResult := meshdClient.Send(ctx, benzene.NewTopic(mesh.TopicQueryTopic), nil, []byte(`{"topic":"greet"}`))
 	greet, err := httpclient.Unmarshal[meshd.TopicSummary](topicResult)
 	if err != nil || greet.Payload == nil {
 		t.Fatalf("topic query: %v %v", topicResult.Status, err)
 	}
-	if len(greet.Payload.Providers) != 1 || greet.Payload.Providers[0] != "greeter" {
-		t.Errorf("greet providers = %v, want [greeter]", greet.Payload.Providers)
+	if len(greet.Payload.Providers) != 1 || greet.Payload.Providers[0] != "frontdoor" {
+		t.Errorf("greet providers = %v, want [frontdoor] (declared via outbound registration; legacy-portal never registered)", greet.Payload.Providers)
 	}
-	if len(greet.Payload.Consumers) != 1 || greet.Payload.Consumers[0] != "frontdoor" {
-		t.Errorf("greet consumers = %v, want [frontdoor] (declared via outbound registration; legacy-portal never registered)", greet.Payload.Consumers)
+	if len(greet.Payload.Consumers) != 1 || greet.Payload.Consumers[0] != "greeter" {
+		t.Errorf("greet consumers = %v, want [greeter] (it handles the topic)", greet.Payload.Consumers)
 	}
 	// legacy-portal's traffic is still real: it counts in the topic's invocation stats even
 	// though it left no declared edge.

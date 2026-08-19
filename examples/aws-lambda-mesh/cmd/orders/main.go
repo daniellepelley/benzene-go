@@ -33,7 +33,7 @@ import (
 // wrapped in mesh.WithTraceContext by the caller (main), exactly like
 // examples/k8s-mesh-helloworld's downstream client - propagation lets the collector show this
 // service's declared consumer edges as observed (mesh.md §4.2), on top of the graph itself,
-// which comes from a registered ServiceDescriptor.Consumes (mesh.md §4). This example does not
+// which comes from a registered ServiceDescriptor.Produces (mesh.md §4). This example does not
 // yet register outbound consumption for payment:capture/order:placed (ROADMAP), so today "orders"
 // appears as a provider only on the mesh's topic catalog, not as their declared consumer.
 func newApp(payments, orderPlaced client.Sender, meshClient *awslambdaclient.Client) *meshapp.App {

@@ -123,15 +123,19 @@ func TestChain_OrdersToPaymentsToShipping(t *testing.T) {
 		t.Errorf("expected traced invocations on every hop, got %+v", services)
 	}
 
-	// Consumer edges are declared: orders' outbound registration (registerDomain in main.go)
-	// is what puts it on payment:take's consumers, not the traffic just asserted above.
+	// Graph edges are declared: orders' outbound registration (registerDomain in main.go) is
+	// what puts it on payment:take's PROVIDERS, and payments handling the topic is what puts
+	// it on the consumers - not the traffic just asserted above (mesh.md §4).
 	topicResult := collectorClient.Send(ctx, benzene.NewTopic(mesh.TopicQueryTopic), nil, []byte(`{"topic":"payment:take"}`))
 	paymentTopic, err := httpclient.Unmarshal[meshd.TopicSummary](topicResult)
 	if err != nil || paymentTopic.Payload == nil {
 		t.Fatalf("topic query: %v %v", topicResult.Status, err)
 	}
-	if len(paymentTopic.Payload.Consumers) != 1 || paymentTopic.Payload.Consumers[0] != "orders" {
-		t.Errorf("payment:take consumers = %v, want [orders]", paymentTopic.Payload.Consumers)
+	if len(paymentTopic.Payload.Providers) != 1 || paymentTopic.Payload.Providers[0] != "orders" {
+		t.Errorf("payment:take providers = %v, want [orders]", paymentTopic.Payload.Providers)
+	}
+	if len(paymentTopic.Payload.Consumers) != 1 || paymentTopic.Payload.Consumers[0] != "payments" {
+		t.Errorf("payment:take consumers = %v, want [payments] (it handles the topic)", paymentTopic.Payload.Consumers)
 	}
 }
 

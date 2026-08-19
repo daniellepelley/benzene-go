@@ -55,7 +55,7 @@ const (
 // bodies do the sending (CreateOrderHandler/TakePaymentHandler/BookShipmentHandler), so a hop
 // added to a handler and left undeclared here is visible as a one-file discrepancy. Without it
 // the mesh's topic catalog would show every topic with providers and no consumers - a silently
-// half-drawn graph, since Descriptor.Consumes, not observed trace parentage, is the sole source
+// half-drawn graph, since Descriptor.Produces, not observed trace parentage, is the sole source
 // of a consumer edge (mesh.md §4).
 //
 // Unlike examples/k8s-mesh-helloworld's equivalent switch, registration here is NOT conditional

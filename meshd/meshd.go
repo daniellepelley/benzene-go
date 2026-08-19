@@ -6,7 +6,7 @@
 // exercise as deploying any other service.
 //
 // The producer/consumer graph (store.go's register) is built solely from the latest registered
-// ServiceDescriptor's Topics/Consumes - present in full for a service with zero traffic, and
+// ServiceDescriptor's Produces/Topics - present in full for a service with zero traffic, and
 // replaced wholesale on re-registration. Trace parentage (store.go's addEvents) never touches
 // that graph; it feeds invocation stats plus two additive, observed-only signals (mesh.md §4.2):
 // per-declared-edge last-observed-at, and contract-drift issues when a *registered* service's
@@ -93,7 +93,7 @@ type ServiceSummary struct {
 	Binding      string         `json:"binding,omitempty"`
 	Placement    mesh.Placement `json:"placement"`
 	Topics       int            `json:"topics"`
-	Consumes     int            `json:"consumes"`
+	Produces     int            `json:"produces"`
 	Instances    int            `json:"instances"`
 	Health       string         `json:"health"`
 	LastSeen     time.Time      `json:"lastSeen"`
@@ -104,7 +104,7 @@ type ServiceSummary struct {
 
 // TopicSummary is one topic's catalog row. Providers/Consumers are the declared
 // producer/consumer graph (mesh.md §4): built from the latest registered ServiceDescriptor's
-// Topics/Consumes alone, present even for a topic with zero traffic - never derived from trace
+// Produces/Topics alone, present even for a topic with zero traffic - never derived from trace
 // parentage. ProviderActivity/ConsumerActivity are the additive, observed-only signal of mesh.md
 // §4.2 layered on top: per declared edge, the last time a trace actually observed it (absent
 // means never observed in the retention window - a decommission candidate, not a fact).

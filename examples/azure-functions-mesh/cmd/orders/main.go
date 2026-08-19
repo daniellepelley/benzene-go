@@ -31,7 +31,7 @@ import (
 // wrapped in mesh.WithTraceContext by the caller (main), exactly like every other mesh example's
 // downstream client - propagation lets the collector show this service's declared consumer edges
 // as observed (mesh.md §4.2), on top of the graph itself, which comes from the registered
-// ServiceDescriptor.Consumes declared below (mesh.md §4) and from nothing else.
+// ServiceDescriptor.Produces declared below (mesh.md §4) and from nothing else.
 func newApp(payments, orderPlaced client.Sender, meshClient *httpclient.Client) *meshapp.App {
 	return meshapp.New(meshapp.Config{
 		ServiceName: domain.ServiceOrders,

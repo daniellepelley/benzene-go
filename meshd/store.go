@@ -18,7 +18,7 @@ import (
 //
 // The producer/consumer graph itself is NOT derived from the ring: per the main repo's 2026-08
 // revision, register (below) is the graph's sole source - topicState.providers/consumers are
-// written straight from the latest registered ServiceDescriptor's Topics/Consumes, replaced
+// written straight from the latest registered ServiceDescriptor's Produces/Topics, replaced
 // wholesale on every re-registration. The ring instead feeds two things that are deliberately
 // NOT graph membership (mesh.md §4.2): providerLastSeen/consumerLastSeen ("Unobserved" liveness
 // - a declared edge nobody has exercised is a decommission candidate, not a fact) and drift
@@ -89,7 +89,7 @@ type instanceState struct {
 }
 
 // topicState is one topic's catalog row. providers/consumers are the declared graph (mesh.md
-// §4): written only by register, from the latest ServiceDescriptor's Topics/Consumes.
+// §4): written only by register, from the latest ServiceDescriptor's Produces/Topics.
 // providerLastSeen/consumerLastSeen are the observed-activity signal of §4.2, keyed by service
 // name regardless of declared-ness (topicSummary filters them down to the declared sets when
 // reporting "Unobserved"/last-observed-at per edge).
@@ -140,7 +140,7 @@ func (s *store) ensureTopic(key topicKey) *topicState {
 }
 
 // register stores desc as the service's current contract, replacing any previous registration
-// wholesale - including both the claim to provide (Topics) and the claim to consume (Consumes)
+// wholesale - including both the claim to provide (Produces) and the claim to consume (Topics)
 // each topic: a redeploy that drops a topic from either list drops that edge with it, the same
 // rule applied symmetrically to both declared lists (mesh.md §4). This is the producer/consumer
 // graph's sole write path - traces never call it.
@@ -157,11 +157,13 @@ func (s *store) register(desc mesh.Descriptor) {
 	state.descriptor = &desc
 	state.lastSeen = s.now()
 
+	// Topics -> consumers, Produces -> providers (mesh.md §4, the 2026-08 role inversion):
+	// handling a topic makes you its consumer, sending it makes you its provider.
 	for _, topic := range desc.Topics {
-		s.ensureTopic(topicKey{id: topic.ID, version: topic.Version}).providers[desc.Service] = true
-	}
-	for _, topic := range desc.Consumes {
 		s.ensureTopic(topicKey{id: topic.ID, version: topic.Version}).consumers[desc.Service] = true
+	}
+	for _, topic := range desc.Produces {
+		s.ensureTopic(topicKey{id: topic.ID, version: topic.Version}).providers[desc.Service] = true
 	}
 }
 
@@ -210,20 +212,21 @@ func (s *store) addEvents(events []mesh.TraceEvent) int {
 				service.errors++
 			}
 
-			// Observed provider activity (§4.2 "Unobserved") + undeclared-provider drift: this
-			// service actually served the topic, regardless of whether it declared providing it.
-			topic.providerLastSeen[event.Service] = laterOf(topic.providerLastSeen[event.Service], event.StartedAt)
-			s.checkProviderDrift(event)
+			// Observed CONSUMER activity (§4.2 "Unobserved") + undeclared-consumer drift: this
+			// service actually handled the topic, regardless of whether it declared doing so.
+			// The observed layer follows the same inversion as the declared graph above.
+			topic.consumerLastSeen[event.Service] = laterOf(topic.consumerLastSeen[event.Service], event.StartedAt)
+			s.checkHandlerDrift(event)
 		}
 
 		if event.ParentSpanID != "" {
 			if caller, ok := s.spanService[event.ParentSpanID]; ok && caller != "" && caller != event.Service {
-				// Observed consumer activity + undeclared-consumer drift: the parent span's
-				// owner called into this topic, regardless of whether it declared consuming it.
+				// Observed PROVIDER activity + undeclared-provider drift: the parent span's
+				// owner sent this topic, regardless of whether it declared producing it.
 				// Trace parentage informs these two observed-only signals and nothing else -
 				// it never admits or removes a graph edge (mesh.md §4).
-				topic.consumerLastSeen[caller] = laterOf(topic.consumerLastSeen[caller], event.StartedAt)
-				s.checkConsumerDrift(caller, event)
+				topic.providerLastSeen[caller] = laterOf(topic.providerLastSeen[caller], event.StartedAt)
+				s.checkSenderDrift(caller, event)
 			}
 		}
 	}
@@ -256,11 +259,12 @@ func laterOf(current, candidate time.Time) time.Time {
 	return current
 }
 
-// checkProviderDrift flags event as contract-drift when event.Service has a registered
+// checkHandlerDrift flags event as contract-drift when event.Service has a registered
 // descriptor that does not declare event.Topic(+Version) among its Topics (mesh.md §4.2
-// "Undeclared"). A service that never registered has no contract to diverge from and is never
-// flagged. Caller holds s.mu.
-func (s *store) checkProviderDrift(event mesh.TraceEvent) {
+// "Undeclared"). Since the role inversion, Topics is the CONSUMER claim, so this is the
+// undeclared-consumer check. A service that never registered has no contract to diverge from
+// and is never flagged. Caller holds s.mu.
+func (s *store) checkHandlerDrift(event mesh.TraceEvent) {
 	service, ok := s.services[event.Service]
 	if !ok || service.descriptor == nil {
 		return
@@ -273,15 +277,15 @@ func (s *store) checkProviderDrift(event mesh.TraceEvent) {
 	s.recordDriftIssue(event.Service, event)
 }
 
-// checkConsumerDrift flags event as contract-drift when caller has a registered descriptor that
-// does not declare event.Topic(+Version) among its Consumes (mesh.md §4.2 "Undeclared",
-// symmetric to checkProviderDrift). Caller holds s.mu.
-func (s *store) checkConsumerDrift(caller string, event mesh.TraceEvent) {
+// checkSenderDrift flags event as contract-drift when caller has a registered descriptor that
+// does not declare event.Topic(+Version) among its Produces (mesh.md §4.2 "Undeclared",
+// symmetric to checkHandlerDrift). Caller holds s.mu.
+func (s *store) checkSenderDrift(caller string, event mesh.TraceEvent) {
 	service, ok := s.services[caller]
 	if !ok || service.descriptor == nil {
 		return
 	}
-	for _, topic := range service.descriptor.Consumes {
+	for _, topic := range service.descriptor.Produces {
 		if topic.ID == event.Topic && topic.Version == event.TopicVersion {
 			return
 		}
@@ -459,7 +463,7 @@ func (s *store) serviceSummary(name string) ServiceSummary {
 		summary.Binding = state.descriptor.Binding
 		summary.Placement = state.descriptor.Placement
 		summary.Topics = len(state.descriptor.Topics)
-		summary.Consumes = len(state.descriptor.Consumes)
+		summary.Produces = len(state.descriptor.Produces)
 	} else {
 		// Known only from traffic: anonymous but live, and visibly reduced.
 		summary.MissingFeeds = append(summary.MissingFeeds, "descriptor")

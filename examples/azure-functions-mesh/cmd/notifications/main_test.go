@@ -127,12 +127,12 @@ func TestNotifications_DescriptorDeclaresWhatItSends(t *testing.T) {
 	desc := newApp(nil).Descriptor()
 
 	got := []string{}
-	for _, topic := range desc.Consumes {
+	for _, topic := range desc.Produces {
 		got = append(got, topic.ID)
 	}
 	// Sorted by topic ID, matching mesh.OutboundRegistry.Topics().
 	if want := []string{}; !slices.Equal(got, want) {
-		t.Errorf("Descriptor.Consumes = %v, want %v", got, want)
+		t.Errorf("Descriptor.Produces = %v, want %v", got, want)
 	}
 	if len(desc.Degraded) != 0 {
 		t.Errorf("Descriptor.Degraded = %v, want none (both feeds are wired)", desc.Degraded)

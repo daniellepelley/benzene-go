@@ -190,7 +190,7 @@ func describeService(t *testing.T, service string) mesh.Descriptor {
 // Note the direction meshd's vocabulary uses, which is what these field names mean: a topic's
 // PROVIDERS are the services that registered a handler for it (they answer it), and its CONSUMERS
 // are the services that declared they send it (they call it) - store.go's register() writes
-// providers from Descriptor.Topics and consumers from Descriptor.Consumes. So orders, which sends
+// providers from Descriptor.Topics and consumers from Descriptor.Produces. So orders, which sends
 // payment:take, appears on payment:take's consumers, and payments, which handles it, on its
 // providers.
 func TestEstate_DeclaredProducerConsumerGraph(t *testing.T) {

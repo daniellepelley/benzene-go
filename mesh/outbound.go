@@ -12,7 +12,7 @@ import (
 // *may send*, with the request type it sends and the response type it expects back - no
 // handler, since nothing here receives. It mirrors Registry's handler discovery exactly, minus
 // the handler, for the identical reason core-concepts.md §9 requires explicit registration for
-// inbound: the list this type holds is what makes ServiceDescriptor.Consumes a hard-coded
+// inbound: the list this type holds is what makes ServiceDescriptor.Produces a hard-coded
 // contract rather than an inference. A port MUST NOT populate it by scanning call sites, string
 // literals, or any other static analysis over handler bodies - RegisterOutbound is the only path.
 //
@@ -92,7 +92,7 @@ func (r *OutboundRegistry) TopicTypes(topic benzene.Topic) (request, response re
 }
 
 // Topics returns every registered outbound topic, sorted by ID then Version - mirrors
-// Registry.Topics, the enumeration behind Descriptor.Consumes.
+// Registry.Topics, the enumeration behind Descriptor.Produces.
 func (r *OutboundRegistry) Topics() []benzene.Topic {
 	topics := make([]benzene.Topic, 0, len(r.entries))
 	for topic := range r.entries {

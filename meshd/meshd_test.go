@@ -48,12 +48,12 @@ func invoke[T any](t *testing.T, c *Collector, topic string, body any) (benzene.
 // testDescriptor builds a real derived descriptor providing topics ("id" or "id@version") and
 // consuming none.
 func testDescriptor(service string, topics ...string) mesh.Descriptor {
-	return testDescriptorConsuming(service, topics, nil)
+	return testDescriptorProducing(service, topics, nil)
 }
 
 // testDescriptorConsuming builds a real derived descriptor providing topics and, via a real
 // OutboundRegistry, consuming consumes - both "id" or "id@version".
-func testDescriptorConsuming(service string, topics, consumes []string) mesh.Descriptor {
+func testDescriptorProducing(service string, topics, produces []string) mesh.Descriptor {
 	registry := benzene.NewRegistry()
 	for _, spec := range topics {
 		topic := parseTestTopic(spec)
@@ -65,7 +65,7 @@ func testDescriptorConsuming(service string, topics, consumes []string) mesh.Des
 		}
 	}
 	outbound := mesh.NewOutboundRegistry()
-	for _, spec := range consumes {
+	for _, spec := range produces {
 		if err := mesh.RegisterOutbound[struct{}, struct{}](outbound, parseTestTopic(spec)); err != nil {
 			panic(err)
 		}
@@ -145,8 +145,13 @@ func TestCollector_RegisterAndFleet(t *testing.T) {
 			t.Errorf("Topics[%d] = %+v, want %v with zero stats", i, fleet.Topics[i], want)
 		}
 	}
-	if len(fleet.Topics[0].Providers) != 1 || fleet.Topics[0].Providers[0] != "orders" {
-		t.Errorf("Providers = %v, want [orders]", fleet.Topics[0].Providers)
+	// orders HANDLES these topics, so it is their consumer (mesh.md §4, the 2026-08 role
+	// inversion). It declared no Produces, so nothing provides them yet.
+	if len(fleet.Topics[0].Consumers) != 1 || fleet.Topics[0].Consumers[0] != "orders" {
+		t.Errorf("Consumers = %v, want [orders]", fleet.Topics[0].Consumers)
+	}
+	if len(fleet.Topics[0].Providers) != 0 {
+		t.Errorf("Providers = %v, want none - orders declared no produces", fleet.Topics[0].Providers)
 	}
 }
 
@@ -250,11 +255,11 @@ func TestCollector_HashMatchNilWhenEitherSideLacksAHash(t *testing.T) {
 	}
 }
 
-func TestCollector_TracesDriveStatsButNotConsumers(t *testing.T) {
-	// Per the main repo's 2026-08 revision (mesh.md §4): trace parentage feeds invocation
-	// stats and the §4.2 observed-activity/drift signals, but it MUST NOT create a consumer
-	// edge - the declared graph comes from ServiceDescriptor.Consumes alone. frontdoor here
-	// never registers anything, so "greet"'s Consumers stays empty despite the parentage.
+func TestCollector_TracesDriveStatsButNotGraphEdges(t *testing.T) {
+	// Per mesh.md §4: trace parentage feeds invocation stats and the §4.2 observed-activity
+	// and drift signals, but it MUST NOT create a graph edge - the declared graph comes from
+	// the descriptor alone. frontdoor here never registers anything, so "greet"'s Providers
+	// stays empty despite the parentage, while greeter (which HANDLES greet) is its consumer.
 	c := newTestCollector(t)
 	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("greeter", "greet"))
 
@@ -281,11 +286,11 @@ func TestCollector_TracesDriveStatsButNotConsumers(t *testing.T) {
 	if greet.AvgDurationMs != 15 {
 		t.Errorf("AvgDurationMs = %v, want 15", greet.AvgDurationMs)
 	}
-	if len(greet.Consumers) != 0 {
-		t.Errorf("Consumers = %v, want none - frontdoor never declared consuming greet", greet.Consumers)
+	if len(greet.Providers) != 0 {
+		t.Errorf("Providers = %v, want none - frontdoor never declared producing greet", greet.Providers)
 	}
-	if len(greet.Providers) != 1 || greet.Providers[0] != "greeter" {
-		t.Errorf("Providers = %v, want [greeter] (declared)", greet.Providers)
+	if len(greet.Consumers) != 1 || greet.Consumers[0] != "greeter" {
+		t.Errorf("Consumers = %v, want [greeter] (declared: it handles the topic)", greet.Consumers)
 	}
 
 	// frontdoor never registered: anonymous but live, visibly reduced.
@@ -327,50 +332,52 @@ func TestCollector_TracesDriveStatsButNotConsumers(t *testing.T) {
 func TestCollector_DeclaredGraphExistsWithZeroTraffic(t *testing.T) {
 	c := newTestCollector(t)
 	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("payments", "payments:capture"))
-	invoke[Ack](t, c, mesh.TopicRegister, testDescriptorConsuming("orders", []string{"order:create"}, []string{"payments:capture"}))
+	invoke[Ack](t, c, mesh.TopicRegister, testDescriptorProducing("orders", []string{"order:create"}, []string{"payments:capture"}))
 
 	status, topic := invoke[TopicSummary](t, c, mesh.TopicQueryTopic, TopicQuery{Topic: "payments:capture"})
 	if status != benzene.StatusOk {
 		t.Fatalf("topic query = %v, want Ok", status)
 	}
-	if len(topic.Providers) != 1 || topic.Providers[0] != "payments" {
-		t.Errorf("Providers = %v, want [payments]", topic.Providers)
+	// orders PRODUCES payments:capture (outbound registration); payments HANDLES it, so it
+	// consumes it (mesh.md §4).
+	if len(topic.Providers) != 1 || topic.Providers[0] != "orders" {
+		t.Errorf("Providers = %v, want [orders]", topic.Providers)
 	}
-	if len(topic.Consumers) != 1 || topic.Consumers[0] != "orders" {
-		t.Errorf("Consumers = %v, want [orders] - declared, with zero traffic", topic.Consumers)
+	if len(topic.Consumers) != 1 || topic.Consumers[0] != "payments" {
+		t.Errorf("Consumers = %v, want [payments] - declared, with zero traffic", topic.Consumers)
 	}
 	if topic.Invocations != 0 {
 		t.Errorf("Invocations = %d, want 0 - the graph is the declared contract, not a traffic summary", topic.Invocations)
 	}
 }
 
-// TestCollector_ReregistrationReplacesConsumerEdgesToo extends
-// TestCollector_ReregistrationReplacesProviderEdges to the consumer side: a redeploy that drops
-// a topic from Consumes MUST drop that consumer edge with it, symmetrically to Topics/providers
+// TestCollector_ReregistrationReplacesProducerEdgesToo extends
+// TestCollector_ReregistrationReplacesProviderEdges to the outbound side: a redeploy that drops
+// a topic from Produces MUST drop that PROVIDER edge with it, symmetrically to Topics/consumers
 // (mesh.md §4).
-func TestCollector_ReregistrationReplacesConsumerEdgesToo(t *testing.T) {
+func TestCollector_ReregistrationReplacesProducerEdgesToo(t *testing.T) {
 	c := newTestCollector(t)
 	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("payments", "payments:capture"))
-	invoke[Ack](t, c, mesh.TopicRegister, testDescriptorConsuming("orders", []string{"order:create"}, []string{"payments:capture"}))
-	// Redeploy: orders no longer declares consuming payments:capture.
+	invoke[Ack](t, c, mesh.TopicRegister, testDescriptorProducing("orders", []string{"order:create"}, []string{"payments:capture"}))
+	// Redeploy: orders no longer declares producing payments:capture.
 	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("orders", "order:cancel"))
 
 	status, topic := invoke[TopicSummary](t, c, mesh.TopicQueryTopic, TopicQuery{Topic: "payments:capture"})
 	if status != benzene.StatusOk {
-		t.Fatalf("topic query = %v, want Ok (the topic row survives with its provider)", status)
+		t.Fatalf("topic query = %v, want Ok (the topic row survives with its consumer)", status)
 	}
-	if len(topic.Providers) != 1 || topic.Providers[0] != "payments" {
-		t.Errorf("Providers = %v, want [payments] (unaffected)", topic.Providers)
+	if len(topic.Consumers) != 1 || topic.Consumers[0] != "payments" {
+		t.Errorf("Consumers = %v, want [payments] (unaffected)", topic.Consumers)
 	}
-	if len(topic.Consumers) != 0 {
-		t.Errorf("Consumers = %v, want none after the redeploy dropped payments:capture from Consumes", topic.Consumers)
+	if len(topic.Providers) != 0 {
+		t.Errorf("Providers = %v, want none after the redeploy dropped payments:capture from Produces", topic.Providers)
 	}
 }
 
 // TestCollector_TraceParentageNeverAdmitsOrRemovesAGraphEdge is the direct §4 negative case:
 // heavy, repeated observed traffic between two services on an undeclared topic must never
-// create a consumer edge, and traffic on a topic a registered provider dropped must never
-// resurrect its provider edge.
+// create a provider edge, and traffic on a topic a registered consumer dropped must never
+// resurrect its consumer edge.
 func TestCollector_TraceParentageNeverAdmitsOrRemovesAGraphEdge(t *testing.T) {
 	c := newTestCollector(t)
 	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("greeter", "greet"))
@@ -384,8 +391,8 @@ func TestCollector_TraceParentageNeverAdmitsOrRemovesAGraphEdge(t *testing.T) {
 	}
 
 	_, topic := invoke[TopicSummary](t, c, mesh.TopicQueryTopic, TopicQuery{Topic: "greet"})
-	if len(topic.Consumers) != 0 {
-		t.Errorf("Consumers = %v, want none no matter how much undeclared traffic is observed", topic.Consumers)
+	if len(topic.Providers) != 0 {
+		t.Errorf("Providers = %v, want none no matter how much undeclared traffic is observed", topic.Providers)
 	}
 }
 
@@ -396,30 +403,30 @@ func TestCollector_TraceParentageNeverAdmitsOrRemovesAGraphEdge(t *testing.T) {
 func TestCollector_UnobservedDeclaredEdgeReportsNoLastObservedAt(t *testing.T) {
 	c := newTestCollector(t)
 	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("payments", "payments:capture"))
-	invoke[Ack](t, c, mesh.TopicRegister, testDescriptorConsuming("orders", []string{"order:create"}, []string{"payments:capture"}))
+	invoke[Ack](t, c, mesh.TopicRegister, testDescriptorProducing("orders", []string{"order:create"}, []string{"payments:capture"}))
 
 	_, topic := invoke[TopicSummary](t, c, mesh.TopicQueryTopic, TopicQuery{Topic: "payments:capture"})
 
-	provider, ok := topic.ProviderActivity["payments"]
+	provider, ok := topic.ProviderActivity["orders"]
 	if !ok {
-		t.Fatalf("ProviderActivity = %v, want an entry for the declared provider payments", topic.ProviderActivity)
+		t.Fatalf("ProviderActivity = %v, want an entry for the declared provider orders", topic.ProviderActivity)
 	}
 	if !provider.LastObservedAt.IsZero() {
-		t.Errorf("payments LastObservedAt = %v, want zero (never observed) - a decommission candidate, not a fact", provider.LastObservedAt)
+		t.Errorf("orders LastObservedAt = %v, want zero (never observed) - a decommission candidate, not a fact", provider.LastObservedAt)
 	}
-	consumer, ok := topic.ConsumerActivity["orders"]
+	consumer, ok := topic.ConsumerActivity["payments"]
 	if !ok {
-		t.Fatalf("ConsumerActivity = %v, want an entry for the declared consumer orders", topic.ConsumerActivity)
+		t.Fatalf("ConsumerActivity = %v, want an entry for the declared consumer payments", topic.ConsumerActivity)
 	}
 	if !consumer.LastObservedAt.IsZero() {
-		t.Errorf("orders LastObservedAt = %v, want zero (never observed)", consumer.LastObservedAt)
+		t.Errorf("payments LastObservedAt = %v, want zero (never observed)", consumer.LastObservedAt)
 	}
 }
 
 func TestCollector_ObservedDeclaredEdgeReportsLastObservedAt(t *testing.T) {
 	c := newTestCollector(t)
 	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("payments", "payments:capture"))
-	invoke[Ack](t, c, mesh.TopicRegister, testDescriptorConsuming("orders", nil, []string{"payments:capture"}))
+	invoke[Ack](t, c, mesh.TopicRegister, testDescriptorProducing("orders", nil, []string{"payments:capture"}))
 
 	invoke[Ack](t, c, mesh.TopicTraces, mesh.TraceBatch{Events: []mesh.TraceEvent{
 		event("trace-1", "span-orders", "", "orders", "order:create", "ok", 1),
@@ -428,11 +435,13 @@ func TestCollector_ObservedDeclaredEdgeReportsLastObservedAt(t *testing.T) {
 
 	_, topic := invoke[TopicSummary](t, c, mesh.TopicQueryTopic, TopicQuery{Topic: "payments:capture"})
 
-	if got := topic.ProviderActivity["payments"].LastObservedAt; !got.Equal(testClock) {
-		t.Errorf("payments LastObservedAt = %v, want the observation clock %v", got, testClock)
-	}
-	if got := topic.ConsumerActivity["orders"].LastObservedAt; !got.Equal(testClock) {
+	// The observed side follows the declared side: orders SENT it (provider), payments
+	// HANDLED it (consumer).
+	if got := topic.ProviderActivity["orders"].LastObservedAt; !got.Equal(testClock) {
 		t.Errorf("orders LastObservedAt = %v, want the observation clock %v", got, testClock)
+	}
+	if got := topic.ConsumerActivity["payments"].LastObservedAt; !got.Equal(testClock) {
+		t.Errorf("payments LastObservedAt = %v, want the observation clock %v", got, testClock)
 	}
 }
 

@@ -85,14 +85,21 @@ func WithContainer(container *benzene.Container) Option {
 	return func(c *config) { c.container = container }
 }
 
-// WithConsumes supplies the OutboundRegistry the descriptor's consumes field is derived from
-// (mesh.md §2.3: what this service consumes - a hard-coded contract, not an inference, so
+// WithProduces supplies the OutboundRegistry the descriptor's produces field is derived from
+// (mesh.md §2.3: what this service produces - a hard-coded contract, not an inference, so
 // register every outbound call the same explicit way registry topics are registered). When
-// unset, consumes is degraded (mesh.FeedOutboundRegistry) rather than asserted empty - a service
-// that hasn't wired up outbound registration has no right to claim it consumes nothing.
-func WithConsumes(outbound *mesh.OutboundRegistry) Option {
+// unset, produces is degraded (mesh.FeedOutboundRegistry) rather than asserted empty - a service
+// that hasn't wired up outbound registration has no right to claim it produces nothing.
+func WithProduces(outbound *mesh.OutboundRegistry) Option {
 	return func(c *config) { c.outbound = outbound }
 }
+
+// WithConsumes is the former name of [WithProduces], kept so existing composition roots still
+// compile.
+//
+// Deprecated: the 2026-08 role inversion (mesh.md §4) made a service's outbound registration its
+// PRODUCER claim, so the old name says the opposite of what the option does. Use [WithProduces].
+func WithConsumes(outbound *mesh.OutboundRegistry) Option { return WithProduces(outbound) }
 
 // WithoutDescriptor disables the descriptor surfaces - the reserved benzene:mesh topic (R6) and the
 // GET /benzene/spec document (R5) are not mounted. Use it for a deployment that must not expose its

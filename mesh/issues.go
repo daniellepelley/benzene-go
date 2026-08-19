@@ -25,7 +25,7 @@ const (
 	// ClassificationContractDrift is the issue classification reserved for collector/reader-
 	// derived issues (mesh.md §4.1): a descriptor-hash mismatch, schema divergence, or - the
 	// case mesh.md §4.2 defines - a trace naming a topic absent from the caller's declared
-	// Consumes or the handler's declared Topics. ClassifyIssue's precedence table never
+	// Produces or the handler's declared Topics. ClassifyIssue's precedence table never
 	// produces it; a collector (meshd) assigns it directly when it detects one of these cases.
 	ClassificationContractDrift = "contract-drift"
 )

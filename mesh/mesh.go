@@ -38,8 +38,8 @@ const TopicID = "benzene:mesh"
 // descriptor's topic list is derived from.
 const FeedRegistry = "registry"
 
-// FeedOutboundRegistry names the consumed-topic feed in Descriptor.Degraded: the
-// OutboundRegistry the descriptor's Consumes list is derived from (mesh.md §2.3).
+// FeedOutboundRegistry names the produced-topic feed in Descriptor.Degraded: the
+// OutboundRegistry the descriptor's Produces list is derived from (mesh.md §2.3).
 const FeedOutboundRegistry = "outbound-registry"
 
 // Placement locates a service instance (mesh.md §4.3). Cloud is one of "aws", "azure",
@@ -77,12 +77,17 @@ type Descriptor struct {
 	Binding        string            `json:"binding,omitempty"`
 	Placement      Placement         `json:"placement"`
 	Topics         []TopicDescriptor `json:"topics"`
-	// Consumes is every registered outbound topic (mesh.md §2.3): what this service consumes.
-	// This is the field the collector's consumer-edge derivation reads (mesh.md §4) - a topic
-	// absent here is not consumed by this service, regardless of what traffic has or hasn't
-	// flowed. Populated the same way Topics is: always present, empty when the service consumes
+	// Produces is every registered outbound topic (mesh.md §2.3): what this service produces.
+	// This is the field the collector's PROVIDER-edge derivation reads (mesh.md §4) - a topic
+	// absent here is not produced by this service, regardless of what traffic has or hasn't
+	// flowed. Populated the same way Topics is: always present, empty when the service produces
 	// nothing (as opposed to a nil OutboundRegistry, which instead degrades the feed).
-	Consumes []TopicDescriptor `json:"consumes"`
+	//
+	// Named produces, and paired with Topics meaning what this service CONSUMES, since the
+	// 2026-08 role inversion (mesh.md §4): registering a handler for a topic makes a service
+	// that topic's consumer, which is how every broker in the field uses the word. Before that
+	// this field was consumes and the two roles were the other way round.
+	Produces []TopicDescriptor `json:"produces"`
 	// DescriptorHash is the contract hash (mesh.md §2.2): stable across instances and
 	// heartbeats of the same build, changed exactly when the contract changes - which is
 	// what lets a collector detect a redeploy (or a schema change without a version bump)
@@ -123,7 +128,7 @@ func Describe(registry *benzene.Registry, outbound *OutboundRegistry, info Servi
 		Binding:        info.Binding,
 		Placement:      info.Placement,
 		Topics:         []TopicDescriptor{},
-		Consumes:       []TopicDescriptor{},
+		Produces:       []TopicDescriptor{},
 	}
 	if desc.Placement.Cloud == "" {
 		desc.Placement = DetectPlacement()
@@ -151,7 +156,7 @@ func Describe(registry *benzene.Registry, outbound *OutboundRegistry, info Servi
 		for _, topic := range outbound.Topics() {
 			// Same blank-ok defensive rationale as the registry loop above.
 			requestType, responseType, _ := outbound.TopicTypes(topic)
-			desc.Consumes = append(desc.Consumes, TopicDescriptor{
+			desc.Produces = append(desc.Produces, TopicDescriptor{
 				ID:             topic.ID,
 				Version:        topic.Version,
 				RequestSchema:  deriveSchema(requestType),

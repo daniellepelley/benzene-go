@@ -137,8 +137,8 @@ func TestDescribe(t *testing.T) {
 	t.Run("nil outbound registry degrades the consumes feed, not the descriptor", func(t *testing.T) {
 		desc := Describe(newTestRegistry(t), nil, info)
 
-		if desc.Consumes == nil || len(desc.Consumes) != 0 {
-			t.Errorf("Consumes = %v, want empty non-nil", desc.Consumes)
+		if desc.Produces == nil || len(desc.Produces) != 0 {
+			t.Errorf("Consumes = %v, want empty non-nil", desc.Produces)
 		}
 		if len(desc.Degraded) != 1 || desc.Degraded[0] != FeedOutboundRegistry {
 			t.Errorf("Degraded = %v, want [%q]", desc.Degraded, FeedOutboundRegistry)
@@ -159,21 +159,21 @@ func TestDescribe(t *testing.T) {
 		if len(desc.Degraded) != 0 {
 			t.Errorf("Degraded = %v, want empty (a real, even partial, outbound registry is not degraded)", desc.Degraded)
 		}
-		if len(desc.Consumes) != 2 {
-			t.Fatalf("Consumes = %v, want 2 entries", desc.Consumes)
+		if len(desc.Produces) != 2 {
+			t.Fatalf("Consumes = %v, want 2 entries", desc.Produces)
 		}
 		// Sorted by id.
-		if desc.Consumes[0].ID != "audit:log" || desc.Consumes[1].ID != "payments:capture" {
-			t.Errorf("Consumes ids = [%q %q], want [audit:log payments:capture]", desc.Consumes[0].ID, desc.Consumes[1].ID)
+		if desc.Produces[0].ID != "audit:log" || desc.Produces[1].ID != "payments:capture" {
+			t.Errorf("Consumes ids = [%q %q], want [audit:log payments:capture]", desc.Produces[0].ID, desc.Produces[1].ID)
 		}
 		// No declared response type (TRes = any) derives the unconstrained {} responseSchema
 		// mesh.md §2.3 specifies, present rather than omitted.
-		if got := desc.Consumes[0].ResponseSchema; got == nil || len(got) != 0 {
+		if got := desc.Produces[0].ResponseSchema; got == nil || len(got) != 0 {
 			t.Errorf("audit:log ResponseSchema = %v, want a present, empty ({}) schema", got)
 		}
 		// A declared response type still derives its real schema.
-		if got := desc.Consumes[1].ResponseSchema["type"]; got != "object" {
-			t.Errorf("payments:capture ResponseSchema = %v, want a derived object schema", desc.Consumes[1].ResponseSchema)
+		if got := desc.Produces[1].ResponseSchema["type"]; got != "object" {
+			t.Errorf("payments:capture ResponseSchema = %v, want a derived object schema", desc.Produces[1].ResponseSchema)
 		}
 	})
 }
@@ -196,7 +196,7 @@ func TestDescriptor_WireFieldNamesAreCamelCase(t *testing.T) {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
 
-	for _, key := range []string{"service", "serviceVersion", "instanceId", "runtime", "binding", "placement", "topics", "consumes", "descriptorHash", "degraded"} {
+	for _, key := range []string{"service", "serviceVersion", "instanceId", "runtime", "binding", "placement", "topics", "produces", "descriptorHash", "degraded"} {
 		if _, ok := raw[key]; !ok {
 			t.Errorf("marshaled descriptor is missing key %q: %s", key, data)
 		}
