@@ -96,7 +96,7 @@ func TestClient_SuccessWithEmptyBodyHasNoPayload(t *testing.T) {
 }
 
 func TestClient_FailureStatusCarriesErrorDetail(t *testing.T) {
-	ep, err := wire.MarshalErrorPayload(wire.ErrorPayload{Status: "not-found", Detail: "no such thing"})
+	ep, err := wire.MarshalErrorPayload(wire.NewErrorPayload("not-found", []string{"no such thing"}))
 	if err != nil {
 		t.Fatalf("MarshalErrorPayload: %v", err)
 	}

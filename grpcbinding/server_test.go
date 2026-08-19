@@ -395,7 +395,11 @@ func TestErrorDetail(t *testing.T) {
 		resp wire.Response
 		want string
 	}{
-		{name: "detail from error payload", resp: wire.Response{StatusCode: "bad-request", Body: `{"status":"bad-request","detail":"name is required"}`}, want: "name is required"},
+		{name: "detail from problem document", resp: wire.Response{StatusCode: "bad-request", Body: `{"benzeneStatus":"bad-request","detail":"name is required","errors":[{"message":"name is required"}]}`}, want: "name is required"},
+		// A peer still on the pre-RFC-9457 body, where `status` carried the status STRING rather
+		// than the integer HTTP code. The mistyped member is dropped and the detail still read, so
+		// a version skew across a fleet degrades to "no benzeneStatus" rather than to lost text.
+		{name: "detail from a legacy peer's body", resp: wire.Response{StatusCode: "bad-request", Body: `{"status":"bad-request","detail":"name is required"}`}, want: "name is required"},
 		{name: "no body falls back to status", resp: wire.Response{StatusCode: "not-found", Body: ""}, want: "not-found"},
 		{name: "malformed body falls back to status", resp: wire.Response{StatusCode: "not-found", Body: "not json"}, want: "not-found"},
 		{name: "nothing at all", resp: wire.Response{}, want: "Error"},

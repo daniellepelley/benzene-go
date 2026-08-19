@@ -254,3 +254,47 @@ func TestUnmarshalRequest_CaseInsensitivePropertyMatching(t *testing.T) {
 		t.Errorf("got = %+v, want Topic=order:create Body={}", got)
 	}
 }
+
+// TestUnmarshalErrorPayload_ToleratesALegacyStatusString pins the version-skew path: a peer still
+// on the pre-RFC-9457 body put the status STRING in `status`, where this struct now expects the
+// integer HTTP code. Parsing strictly would fail the whole document and lose a readable `detail`,
+// so the mistyped member is dropped and everything else is kept.
+func TestUnmarshalErrorPayload_ToleratesALegacyStatusString(t *testing.T) {
+	got, err := UnmarshalErrorPayload([]byte(`{"status":"not-found","detail":"no such thing"}`))
+	if err != nil {
+		t.Fatalf("UnmarshalErrorPayload() error = %v, want a tolerant parse", err)
+	}
+	if got.Detail != "no such thing" {
+		t.Errorf("Detail = %q, want it preserved across the skew", got.Detail)
+	}
+	if got.Status != nil {
+		t.Errorf("Status = %v, want it dropped - a status string is not an HTTP code", *got.Status)
+	}
+	if got.BenzeneStatus != "" {
+		t.Errorf("BenzeneStatus = %q, want empty - an old peer never sent one", got.BenzeneStatus)
+	}
+	if want := []string{"no such thing"}; !reflect.DeepEqual(got.Messages(), want) {
+		t.Errorf("Messages() = %q, want %q", got.Messages(), want)
+	}
+}
+
+// A numeric status (the current shape, from an HTTP binding) still parses normally.
+func TestUnmarshalErrorPayload_KeepsANumericStatus(t *testing.T) {
+	got, err := UnmarshalErrorPayload([]byte(`{"status":404,"benzeneStatus":"not-found","detail":"missing"}`))
+	if err != nil {
+		t.Fatalf("UnmarshalErrorPayload() error = %v", err)
+	}
+	if got.Status == nil || *got.Status != 404 {
+		t.Errorf("Status = %v, want 404", got.Status)
+	}
+	if got.BenzeneStatus != "not-found" {
+		t.Errorf("BenzeneStatus = %q, want not-found", got.BenzeneStatus)
+	}
+}
+
+// Genuinely malformed JSON still errors - tolerance is for a mistyped member, not for garbage.
+func TestUnmarshalErrorPayload_StillErrorsOnMalformedJSON(t *testing.T) {
+	if _, err := UnmarshalErrorPayload([]byte("{not valid")); err == nil {
+		t.Error("UnmarshalErrorPayload() should return an error for malformed JSON")
+	}
+}

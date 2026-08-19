@@ -158,8 +158,35 @@ func MarshalErrorPayload(e ErrorPayload) ([]byte, error) {
 }
 
 // UnmarshalErrorPayload parses JSON into an ErrorPayload.
+//
+// Tolerant of a `status` member that is not a number. RFC 9457 types it as the integer HTTP code,
+// and so does this struct, but Benzene's own pre-9457 body used that name for the status STRING -
+// so a peer that has not upgraded yet sends {"status":"not-found","detail":"..."}. Parsing that
+// strictly would fail the whole document and throw away a perfectly readable `detail`, turning a
+// version skew into lost error text. Instead the mistyped member is dropped and the rest is kept:
+// the reader gets the detail, and `benzeneStatus` is simply absent, which is exactly what an old
+// peer means. Readers must ignore members they do not recognize (§1.3); this extends the same
+// courtesy to one they recognize but cannot use.
 func UnmarshalErrorPayload(data []byte) (ErrorPayload, error) {
 	var e ErrorPayload
-	err := json.Unmarshal(data, &e)
-	return e, err
+	if err := json.Unmarshal(data, &e); err == nil {
+		return e, nil
+	}
+
+	var loose map[string]json.RawMessage
+	if err := json.Unmarshal(data, &loose); err != nil {
+		return ErrorPayload{}, err
+	}
+	delete(loose, "status")
+
+	rest, err := json.Marshal(loose)
+	if err != nil {
+		return ErrorPayload{}, err
+	}
+
+	var relaxed ErrorPayload
+	if err := json.Unmarshal(rest, &relaxed); err != nil {
+		return ErrorPayload{}, err
+	}
+	return relaxed, nil
 }
