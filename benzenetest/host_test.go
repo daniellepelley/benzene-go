@@ -574,3 +574,24 @@ func TestWithServices_OverrideReachesHandler(t *testing.T) {
 		t.Errorf("StatusCode = %d, want 503 (publish failure propagated)", resp.StatusCode)
 	}
 }
+
+// NewHost must apply App.Run's router-only pipeline default too, so an app whose Configure sets
+// no pipeline is testable in exactly the shape it ships in - not a shape that only exists under
+// test.
+func TestNewHost_AppliesThePipelineDefaultWhenConfigureSetsNone(t *testing.T) {
+	app := benzene.App[struct{}]{
+		ConfigureServices: func(registry *benzene.Registry, _ *benzene.Container, _ struct{}) {
+			benzene.MustRegister(registry, benzene.NewTopic("greet"), greetHandler)
+		},
+	}
+
+	host := benzenetest.NewHost(app, benzenetest.WithRoutes(testRoutes()...))
+	if host.Builder().Pipeline == nil {
+		t.Fatal("NewHost left Pipeline nil; it must apply the same default App.Run does")
+	}
+
+	resp := benzenetest.SendAPIGateway(t, host, http.MethodPost, "/greet", greetRequest{Name: "World"}, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("statusCode = %d, want 200; body = %s", resp.StatusCode, resp.Body)
+	}
+}

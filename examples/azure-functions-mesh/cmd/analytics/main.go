@@ -28,12 +28,8 @@ func newApp(meshClient *httpclient.Client) *meshapp.App {
 		ServiceName: domain.ServiceAnalytics,
 		MeshClient:  meshClient,
 		Register: func(registry *benzene.Registry, outbound *mesh.OutboundRegistry) []httpbinding.Route {
-			if err := benzene.Register(registry, benzene.NewTopic(domain.TopicPaymentCaptured), domain.AckHandler[domain.PaymentTaken]()); err != nil {
-				log.Fatalf("register %s: %v", domain.TopicPaymentCaptured, err)
-			}
-			if err := benzene.Register(registry, benzene.NewTopic(domain.TopicShipmentDispatched), domain.AckHandler[domain.ShipmentBooked]()); err != nil {
-				log.Fatalf("register %s: %v", domain.TopicShipmentDispatched, err)
-			}
+			benzene.MustRegister(registry, benzene.NewTopic(domain.TopicPaymentCaptured), domain.AckHandler[domain.PaymentTaken]())
+			benzene.MustRegister(registry, benzene.NewTopic(domain.TopicShipmentDispatched), domain.AckHandler[domain.ShipmentBooked]())
 			// Declares nothing outbound - a pure event consumer - but every service routes its
 			// send side through the same call, so the day this one gains a hop there is exactly
 			// one place to declare it.
@@ -43,13 +39,6 @@ func newApp(meshClient *httpclient.Client) *meshapp.App {
 			return nil
 		},
 	})
-}
-
-func portFromEnv() string {
-	if port := os.Getenv("FUNCTIONS_CUSTOMHANDLER_PORT"); port != "" {
-		return port
-	}
-	return "8080"
 }
 
 func mux(app *meshapp.App) http.Handler {
@@ -75,7 +64,7 @@ func main() {
 	defer cancel()
 	go app.RunHeartbeatLoop(heartbeatCtx)
 
-	port := portFromEnv()
-	log.Printf("analytics listening on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, mux(app)))
+	addr := azurefunctions.ListenAddr()
+	log.Printf("analytics listening on %s", addr)
+	log.Fatal(http.ListenAndServe(addr, mux(app)))
 }

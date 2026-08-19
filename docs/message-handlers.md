@@ -93,22 +93,39 @@ to `ConfigureServices` — and bind handlers with the generic `benzene.Register`
 
 ```go
 func Register[TReq, TRes any](r *Registry, topic Topic, handler Handler[TReq, TRes]) error
-```
-
-```go
-if err := benzene.Register(
-	registry,
-	benzene.NewTopic("greet"),
-	benzene.Handler[greetRequest, greetResponse](greetHandler),
-); err != nil {
-	log.Fatalf("register greet handler: %v", err)
-}
+func MustRegister[TReq, TRes any](r *Registry, topic Topic, handler Handler[TReq, TRes])
 ```
 
 `Register` returns an error if a handler is **already registered for that topic**. Registering two
 handlers for the same `(ID, Version)` pair is a startup error, caught the moment you wire the service —
-not a runtime dispatch ambiguity. That's why the composition roots in the examples treat a `Register`
-error as fatal.
+not a runtime dispatch ambiguity.
+
+```go
+// Explicit: the caller decides what to do with the failure.
+if err := benzene.Register(registry, benzene.NewTopic("greet"), greetHandler); err != nil {
+	return err
+}
+```
+
+```go
+// Shorthand: MustRegister is exactly the above with `panic(err)` in place of the return.
+benzene.MustRegister(registry, benzene.NewTopic("greet"), greetHandler)
+```
+
+A composition root usually has nowhere better to send that error than a panic, which is why
+`MustRegister` exists and why the examples use it. The panic is a **start-up** check, not a runtime
+hazard: `ConfigureServices` runs once at boot, before any message is handled, so a duplicate topic
+crashes the process at start-up with the topic named — the same trade `regexp.MustCompile` makes.
+Reach for `Register` whenever the caller *does* have somewhere better to send the error: a
+registration loop that collects failures, a plugin host, a test.
+
+In both forms `TReq`/`TRes` are inferred from the handler's signature. A
+`benzene.Handler[greetRequest, greetResponse](greetHandler)` conversion is never required for a
+function that already has the handler shape; write it only when you need to name the types for
+clarity.
+
+The mesh's outbound registry mirrors this exactly: `mesh.RegisterOutbound` returns the error,
+`mesh.MustRegisterOutbound` panics with it.
 
 `Register` is generic over `TReq`/`TRes`, but the registry stores handlers in a type-erased form so a
 transport binding can dispatch by topic alone without knowing the request type at compile time. At the
@@ -151,8 +168,10 @@ The three phases, and what belongs in each:
    points are attached *after* `Run` returns, by calling a binding's own constructor against the
    builder.
 
-`ConfigureServices` and `Configure` are optional — an app with nothing to register or nothing to
-configure beyond the defaults may leave either `nil`.
+All three phases are optional. An app with no configuration may leave `GetConfiguration` `nil` (it
+gets `TConfig`'s zero value); an app with nothing to register may leave `ConfigureServices` `nil`; and
+an app whose pipeline is *just* the router may leave `Configure` `nil` — see the pipeline default
+below.
 
 `Run` executes the three phases once and returns the built builder:
 
@@ -165,6 +184,34 @@ against them, then constructs the `*ApplicationBuilder` and runs `Configure` aga
 whole service boots from one `App` value, a test exercises exactly the wiring that ships — the
 `benzenetest` package runs the same lifecycle in-process.
 
+### The pipeline default
+
+If `Configure` left no pipeline on the builder — it was `nil`, or it did other wiring but never
+called `UsePipeline` — `Run` installs one before returning. It is exactly this line, no more:
+
+```go
+builder.UsePipeline(benzene.NewPipeline(benzene.RouterMiddleware(builder.Registry)))
+```
+
+Route every message to its registered handler, and do nothing else. `builder.UseDefaultPipeline()` is
+the one-line form of that same line, for when you want the default *stated* in the composition root
+rather than implied — and any `UsePipeline` call in `Configure` wins over it outright. Adding a
+second middleware means dropping to the explicit form, since the router is registered last and
+everything else goes in front of it:
+
+```go
+builder.UsePipeline(benzene.NewPipeline(
+	healthcheck.Middleware(checks),
+	benzene.RouterMiddleware(builder.Registry),
+))
+```
+
+The default is applied at **start-up**, inside `Run`. A service that never states a pipeline routes
+correctly from its first message rather than discovering the omission in production. A hand-built
+`ApplicationBuilder` (one you constructed yourself instead of getting from `Run`) can still carry no
+pipeline; in that case `Pipeline.Run` returns an error naming the fix rather than dereferencing nil,
+so a binding turns it into a `service-unavailable` result instead of crashing the transport.
+
 The `ApplicationBuilder` is what a transport binding reads to build its native entry point:
 
 ```go
@@ -176,6 +223,7 @@ type ApplicationBuilder struct {
 }
 
 func (b *ApplicationBuilder) UsePipeline(pipeline *Pipeline) *ApplicationBuilder
+func (b *ApplicationBuilder) UseDefaultPipeline() *ApplicationBuilder
 func (b *ApplicationBuilder) UseReservedNames(names wire.ReservedNames) *ApplicationBuilder
 ```
 
@@ -189,15 +237,11 @@ every inbound binding built off the builder.
 ```go
 func newApp() benzene.App[struct{}] {
 	return benzene.App[struct{}]{
-		GetConfiguration: func() struct{} { return struct{}{} },
 		ConfigureServices: func(registry *benzene.Registry, container *benzene.Container, _ struct{}) {
 			benzene.AddSingleton(container, greetingCounterKey, func(_ *benzene.Scope) GreetingCounter {
 				return &inMemoryGreetingCounter{}
 			})
-			if err := benzene.Register(registry, benzene.NewTopic("greet"),
-				benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
-				log.Fatalf("register greet handler: %v", err)
-			}
+			benzene.MustRegister(registry, benzene.NewTopic("greet"), greetHandler)
 		},
 		Configure: func(builder *benzene.ApplicationBuilder, _ struct{}) {
 			builder.UsePipeline(benzene.NewPipeline(

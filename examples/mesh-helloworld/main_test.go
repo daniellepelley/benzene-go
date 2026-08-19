@@ -25,7 +25,7 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 	meshdEndpoint := meshdServer.URL + httpbinding.EnvelopePath
 
 	greeter := newService("greeter", meshdEndpoint, true, func(registry *benzene.Registry) {
-		if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
+		if err := benzene.Register(registry, benzene.NewTopic("greet"), greetHandler); err != nil {
 			t.Fatalf("register greet: %v", err)
 		}
 	}, nil, []httpbinding.Route{{Method: http.MethodPost, Path: "/greet", Topic: benzene.NewTopic("greet")}})
@@ -227,7 +227,7 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 func TestReducedMeshStillServes(t *testing.T) {
 	unreachable := "http://127.0.0.1:1" + httpbinding.EnvelopePath // nothing listens there
 	greeter := newService("greeter", unreachable, true, func(registry *benzene.Registry) {
-		if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
+		if err := benzene.Register(registry, benzene.NewTopic("greet"), greetHandler); err != nil {
 			t.Fatalf("register greet: %v", err)
 		}
 	}, nil, []httpbinding.Route{{Method: http.MethodPost, Path: "/greet", Topic: benzene.NewTopic("greet")}})

@@ -146,3 +146,33 @@ func (r *Registry) Topics() []Topic {
 	})
 	return topics
 }
+
+// MustRegister is Register with the error handling a composition root would otherwise write by
+// hand: it calls Register and panics if registration fails. The explicit form is Register -
+// reach for it when the caller has somewhere better to send the error than a panic (a
+// registration loop that collects failures, a plugin host, a test).
+//
+// The panic is a start-up check, not a runtime hazard: the only way Register fails is a
+// duplicate (id, version) topic, which is a wiring mistake, and ConfigureServices runs once at
+// boot before any message is handled (core-concepts.md §7). The panic therefore names the
+// offending topic and happens at start-up, never on the message path - the same trade
+// regexp.MustCompile and template.Must make.
+//
+// Explicit:
+//
+//	if err := benzene.Register(registry, benzene.NewTopic("greet"), greetHandler); err != nil {
+//		return err
+//	}
+//
+// Shorthand:
+//
+//	benzene.MustRegister(registry, benzene.NewTopic("greet"), greetHandler)
+//
+// In both forms TReq/TRes are inferred from handler's signature; the explicit
+// benzene.Handler[TReq, TRes](fn) conversion is never required for a function that already has
+// the handler shape.
+func MustRegister[TReq, TRes any](r *Registry, topic Topic, handler Handler[TReq, TRes]) {
+	if err := Register(r, topic, handler); err != nil {
+		panic(err)
+	}
+}

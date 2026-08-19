@@ -39,17 +39,3 @@ func TestNewHandler_MissingNameIsBadRequest(t *testing.T) {
 		t.Errorf("res.StatusCode = %d, want 400", resp.StatusCode)
 	}
 }
-
-func TestPortFromEnv_DefaultsWhenUnset(t *testing.T) {
-	t.Setenv("FUNCTIONS_CUSTOMHANDLER_PORT", "")
-	if got := portFromEnv(); got != "8080" {
-		t.Errorf("portFromEnv() = %q, want %q", got, "8080")
-	}
-}
-
-func TestPortFromEnv_UsesEnvWhenSet(t *testing.T) {
-	t.Setenv("FUNCTIONS_CUSTOMHANDLER_PORT", "9090")
-	if got := portFromEnv(); got != "9090" {
-		t.Errorf("portFromEnv() = %q, want %q", got, "9090")
-	}
-}

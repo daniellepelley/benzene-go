@@ -98,22 +98,13 @@ Add to `main.go`:
 ```go
 import (
 	// ...existing imports...
-	"log"
-
 	"github.com/daniellepelley/benzene-go/healthcheck"
 )
 
 func newApp() benzene.App[struct{}] {
 	return benzene.App[struct{}]{
-		GetConfiguration: func() struct{} { return struct{}{} },
 		ConfigureServices: func(registry *benzene.Registry, container *benzene.Container, _ struct{}) {
-			if err := benzene.Register(
-				registry,
-				benzene.NewTopic("greet"),
-				benzene.Handler[greetRequest, greetResponse](greetHandler),
-			); err != nil {
-				log.Fatalf("register greet handler: %v", err)
-			}
+			benzene.MustRegister(registry, benzene.NewTopic("greet"), greetHandler)
 		},
 		Configure: func(builder *benzene.ApplicationBuilder, _ struct{}) {
 			checks := []healthcheck.Check{
@@ -130,18 +121,35 @@ func newApp() benzene.App[struct{}] {
 }
 ```
 
-Two things to notice:
+Three things to notice:
 
-- **`benzene.Register`** binds the `"greet"` topic to the handler. Registration is explicit — there's
-  no reflection-based scanning; the registry is the complete, authoritative list of what this service
-  serves. It returns an error if a topic is registered twice.
+- **`benzene.MustRegister`** binds the `"greet"` topic to the handler. Registration is explicit —
+  there's no reflection-based scanning; the registry is the complete, authoritative list of what this
+  service serves. The explicit form it composes is **`benzene.Register`**, which *returns* an error
+  when a topic is registered twice:
+
+  ```go
+  benzene.MustRegister(registry, benzene.NewTopic("greet"), greetHandler)
+  ```
+
+  `MustRegister` panics with that same error instead. Both run in `ConfigureServices`, at start-up,
+  before any message is handled — so a duplicate topic fails at boot naming the topic, never on the
+  message path. Use `Register` when the caller has somewhere better to send the error than a panic.
+  The type parameters are inferred from the handler's signature in either form; a
+  `benzene.Handler[greetRequest, greetResponse](...)` conversion is never required for a function
+  that already has the handler shape.
 - **The pipeline order matters.** `healthcheck.Middleware` runs first and short-circuits the reserved
   health-check topic before the router ever sees it; `benzene.RouterMiddleware` is the terminal
   middleware that resolves the topic and dispatches to the handler, so it's registered last (see
   [Core concepts §4](https://benzene.app/docs/specification/core-concepts.html) on the pipeline).
 
 `TConfig` is `struct{}` here because this service has no configuration; a real service would make it
-a config struct returned by `GetConfiguration`. `ConfigureServices` is also where you'd register
+a config struct returned by `GetConfiguration`. All three phases are optional — this service leaves
+`GetConfiguration` out entirely, and a service whose pipeline is *just* the router can leave
+`Configure` out too, because `App.Run` installs
+`benzene.NewPipeline(benzene.RouterMiddleware(builder.Registry))` when `Configure` set none. Write
+that line yourself — or `builder.UseDefaultPipeline()`, the one-line form of it — whenever you want
+the default stated rather than implied. `ConfigureServices` is also where you'd register
 dependencies against the `*benzene.Container` (`benzene.AddSingleton`, `benzene.AddScoped`,
 `benzene.AddTransient`) and resolve them inside a handler with `benzene.ScopeFromContext(ctx)` +
 `benzene.GetService[T]` — the [helloworld example](https://github.com/daniellepelley/benzene-go/tree/main/examples/helloworld)

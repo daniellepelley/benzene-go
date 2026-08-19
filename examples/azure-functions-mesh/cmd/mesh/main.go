@@ -34,7 +34,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"os"
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/envelope"
@@ -42,6 +41,7 @@ import (
 	"github.com/daniellepelley/benzene-go/mesh"
 	"github.com/daniellepelley/benzene-go/meshd"
 
+	"github.com/daniellepelley/benzene-go/azurefunctions"
 	"github.com/daniellepelley/benzene-go/examples/azure-functions-mesh/meshapp"
 )
 
@@ -84,19 +84,9 @@ func mux(collector *meshd.Collector) http.Handler {
 	return m
 }
 
-// portFromEnv reads FUNCTIONS_CUSTOMHANDLER_PORT, the port the Functions host tells the custom
-// handler to listen on - defaulting to 8080, matching the host's own documented default for when
-// the variable is absent (e.g. running the binary directly, outside `func start`).
-func portFromEnv() string {
-	if port := os.Getenv("FUNCTIONS_CUSTOMHANDLER_PORT"); port != "" {
-		return port
-	}
-	return "8080"
-}
-
 func main() {
 	collector := meshd.New(meshd.Options{})
-	port := portFromEnv()
-	log.Printf("mesh listening on :%s (view %s, envelope %s)", port, meshd.ViewPath, httpbinding.EnvelopePath)
-	log.Fatal(http.ListenAndServe(":"+port, mux(collector)))
+	addr := azurefunctions.ListenAddr()
+	log.Printf("mesh listening on %s (view %s, envelope %s)", addr, meshd.ViewPath, httpbinding.EnvelopePath)
+	log.Fatal(http.ListenAndServe(addr, mux(collector)))
 }

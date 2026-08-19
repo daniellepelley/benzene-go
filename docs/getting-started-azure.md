@@ -63,14 +63,8 @@ boots from. `ConfigureServices` registers the handler under a
 ```go
 func newApp() benzene.App[struct{}] {
 	return benzene.App[struct{}]{
-		GetConfiguration: func() struct{} { return struct{}{} },
 		ConfigureServices: func(registry *benzene.Registry, _ *benzene.Container, _ struct{}) {
-			if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
-				log.Fatalf("register greet handler: %v", err)
-			}
-		},
-		Configure: func(builder *benzene.ApplicationBuilder, _ struct{}) {
-			builder.UsePipeline(benzene.NewPipeline(benzene.RouterMiddleware(builder.Registry)))
+			benzene.MustRegister(registry, benzene.NewTopic("greet"), greetHandler)
 		},
 	}
 }
@@ -108,22 +102,16 @@ headers, the same convention `httpbinding` uses.
 
 ## 4. `main`
 
-`main` reads the port the Functions host assigns via `FUNCTIONS_CUSTOMHANDLER_PORT` (the custom-handler
-analogue of Cloud Run's `PORT`), boots the app, and serves the handler:
+`azurefunctions.ListenAddr()` reads the port the Functions host assigns via
+`FUNCTIONS_CUSTOMHANDLER_PORT` (the custom-handler analogue of Cloud Run's `PORT`), defaulting to
+`:8080` when you run the handler outside the host. `main` boots the app and serves the handler on it:
 
 ```go
-func portFromEnv() string {
-	if port := os.Getenv("FUNCTIONS_CUSTOMHANDLER_PORT"); port != "" {
-		return port
-	}
-	return "8080"
-}
-
 func main() {
 	handler := newHandler(newApp().Run())
-	port := portFromEnv()
-	log.Printf("azure-functions-helloworld listening on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, handler))
+	addr := azurefunctions.ListenAddr()
+	log.Printf("azure-functions-helloworld listening on %s", addr)
+	log.Fatal(http.ListenAndServe(addr, handler))
 }
 ```
 

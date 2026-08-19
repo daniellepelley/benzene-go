@@ -131,32 +131,22 @@ func newService(meshService, downstreamURL, collectorURL string) *service {
 func registerDomain(registry *benzene.Registry, outbound *mesh.OutboundRegistry, routes []httpbinding.Route, meshService string, downstream client.Sender) (string, []httpbinding.Route) {
 	switch meshService {
 	case "payments":
-		if err := benzene.Register(registry, benzene.NewTopic(domain.TopicPaymentTake), domain.TakePaymentHandler(downstream)); err != nil {
-			log.Fatalf("register payment:take: %v", err)
-		}
+		benzene.MustRegister(registry, benzene.NewTopic(domain.TopicPaymentTake), domain.TakePaymentHandler(downstream))
 		routes = append(routes, httpbinding.Route{Method: http.MethodPost, Path: "/payments", Topic: benzene.NewTopic(domain.TopicPaymentTake)})
 		if downstream != nil {
-			if err := mesh.RegisterOutbound[domain.BookShipmentRequest, domain.ShipmentBooked](outbound, benzene.NewTopic(domain.TopicShipmentBook)); err != nil {
-				log.Fatalf("register outbound shipment:book: %v", err)
-			}
+			mesh.MustRegisterOutbound[domain.BookShipmentRequest, domain.ShipmentBooked](outbound, benzene.NewTopic(domain.TopicShipmentBook))
 		}
 		return "payments", routes
 	case "shipping":
-		if err := benzene.Register(registry, benzene.NewTopic(domain.TopicShipmentBook), domain.BookShipmentHandler()); err != nil {
-			log.Fatalf("register shipment:book: %v", err)
-		}
+		benzene.MustRegister(registry, benzene.NewTopic(domain.TopicShipmentBook), domain.BookShipmentHandler())
 		routes = append(routes, httpbinding.Route{Method: http.MethodPost, Path: "/shipments", Topic: benzene.NewTopic(domain.TopicShipmentBook)})
 		// shipping is terminal: no downstream, nothing to register as consumed.
 		return "shipping", routes
 	default:
-		if err := benzene.Register(registry, benzene.NewTopic(domain.TopicOrderCreate), domain.CreateOrderHandler(downstream)); err != nil {
-			log.Fatalf("register order:create: %v", err)
-		}
+		benzene.MustRegister(registry, benzene.NewTopic(domain.TopicOrderCreate), domain.CreateOrderHandler(downstream))
 		routes = append(routes, httpbinding.Route{Method: http.MethodPost, Path: "/orders", Topic: benzene.NewTopic(domain.TopicOrderCreate)})
 		if downstream != nil {
-			if err := mesh.RegisterOutbound[domain.TakePaymentRequest, domain.PaymentTaken](outbound, benzene.NewTopic(domain.TopicPaymentTake)); err != nil {
-				log.Fatalf("register outbound payment:take: %v", err)
-			}
+			mesh.MustRegisterOutbound[domain.TakePaymentRequest, domain.PaymentTaken](outbound, benzene.NewTopic(domain.TopicPaymentTake))
 		}
 		return "orders", routes
 	}

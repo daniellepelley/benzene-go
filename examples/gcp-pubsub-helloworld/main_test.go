@@ -50,17 +50,3 @@ func TestOtherPathsAreNotFound(t *testing.T) {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusNotFound)
 	}
 }
-
-func TestPortFromEnv_DefaultsWhenUnset(t *testing.T) {
-	t.Setenv("PORT", "")
-	if got := portFromEnv(); got != "8080" {
-		t.Errorf("portFromEnv() = %q, want %q", got, "8080")
-	}
-}
-
-func TestPortFromEnv_UsesEnvWhenSet(t *testing.T) {
-	t.Setenv("PORT", "9090")
-	if got := portFromEnv(); got != "9090" {
-		t.Errorf("portFromEnv() = %q, want %q", got, "9090")
-	}
-}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -338,4 +339,31 @@ func TestEnvelopeHandler_BodyReadErrorIsBadRequest(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
+}
+
+func TestListenAddr(t *testing.T) {
+	t.Run("uses the port the platform named", func(t *testing.T) {
+		t.Setenv(PortEnvVar, "9000")
+		if got := ListenAddr(); got != ":9000" {
+			t.Errorf("ListenAddr() = %q, want %q", got, ":9000")
+		}
+	})
+
+	t.Run("falls back to DefaultPort when the variable is unset", func(t *testing.T) {
+		t.Setenv(PortEnvVar, "")
+		if got := ListenAddr(); got != ":"+DefaultPort {
+			t.Errorf("ListenAddr() = %q, want %q", got, ":"+DefaultPort)
+		}
+	})
+
+	t.Run("is exactly the explicit form its doc names", func(t *testing.T) {
+		t.Setenv(PortEnvVar, "7001")
+		port := os.Getenv(PortEnvVar)
+		if port == "" {
+			port = DefaultPort
+		}
+		if got, want := ListenAddr(), ":"+port; got != want {
+			t.Errorf("ListenAddr() = %q, explicit form gives %q - the shorthand must compose it", got, want)
+		}
+	})
 }

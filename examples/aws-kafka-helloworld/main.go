@@ -42,14 +42,8 @@ func orderReceived(_ context.Context, o order) benzene.Result[struct{}] {
 // name ("orders") - one Kafka topic maps to one Benzene topic, verbatim.
 func newApp() benzene.App[struct{}] {
 	return benzene.App[struct{}]{
-		GetConfiguration: func() struct{} { return struct{}{} },
 		ConfigureServices: func(registry *benzene.Registry, _ *benzene.Container, _ struct{}) {
-			if err := benzene.Register(registry, benzene.NewTopic("orders"), benzene.Handler[order, struct{}](orderReceived)); err != nil {
-				panic(err)
-			}
-		},
-		Configure: func(builder *benzene.ApplicationBuilder, _ struct{}) {
-			builder.UsePipeline(benzene.NewPipeline(benzene.RouterMiddleware(builder.Registry)))
+			benzene.MustRegister(registry, benzene.NewTopic("orders"), orderReceived)
 		},
 	}
 }

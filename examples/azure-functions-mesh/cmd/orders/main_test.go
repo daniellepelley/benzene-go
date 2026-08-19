@@ -122,20 +122,6 @@ func TestOrders_NilSendersStillAnswer(t *testing.T) {
 	}
 }
 
-func TestPortFromEnv_DefaultsWhenUnset(t *testing.T) {
-	t.Setenv("FUNCTIONS_CUSTOMHANDLER_PORT", "")
-	if got := portFromEnv(); got != "8080" {
-		t.Errorf("portFromEnv() = %q, want %q", got, "8080")
-	}
-}
-
-func TestPortFromEnv_UsesEnvWhenSet(t *testing.T) {
-	t.Setenv("FUNCTIONS_CUSTOMHANDLER_PORT", "9090")
-	if got := portFromEnv(); got != "9090" {
-		t.Errorf("portFromEnv() = %q, want %q", got, "9090")
-	}
-}
-
 // TestOrders_DescriptorDeclaresWhatItSends proves this Function actually wires the outbound half of
 // its contract: what domain.RegisterOutbound declares for orders must reach the descriptor it
 // announces, since Descriptor.Consumes - not observed traffic - is what draws this service's

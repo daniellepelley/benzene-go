@@ -15,6 +15,7 @@ package httpbinding
 import (
 	"io"
 	"net/http"
+	"os"
 	"strings"
 
 	benzene "github.com/daniellepelley/benzene-go"
@@ -276,4 +277,38 @@ func writeNativeResponse(w http.ResponseWriter, resp wire.Response) {
 	if resp.Body != "" {
 		w.Write([]byte(resp.Body))
 	}
+}
+
+// The listen-address convention for an HTTP-fronted Benzene service. Cloud Run, Knative, App
+// Runner, Heroku and most container PaaS name the port to bind in the PORT environment
+// variable; a service that binds anything else is unreachable, so the convention belongs here
+// rather than being restated in every main().
+const (
+	// PortEnvVar is the environment variable the platform names the listen port in.
+	PortEnvVar = "PORT"
+	// DefaultPort is the port ListenAddr falls back to when PortEnvVar is unset - local runs
+	// and any host that does not name one.
+	DefaultPort = "8080"
+)
+
+// ListenAddr returns the address an HTTP-fronted service should pass to http.ListenAndServe or
+// http.Server.Addr: ":" + $PORT, falling back to ":" + DefaultPort when PORT is unset or empty.
+//
+// It is a one-line shorthand composed from public API and the standard library, and the
+// explicit form it composes is exactly:
+//
+//	port := os.Getenv(httpbinding.PortEnvVar)
+//	if port == "" {
+//		port = httpbinding.DefaultPort
+//	}
+//	addr := ":" + port
+//
+// Drop to that form to bind a specific interface, to read the port from a flag or config file
+// instead, or to fail loudly when the platform named no port.
+func ListenAddr() string {
+	port := os.Getenv(PortEnvVar)
+	if port == "" {
+		port = DefaultPort
+	}
+	return ":" + port
 }

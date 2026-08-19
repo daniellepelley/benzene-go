@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 
 	benzene "github.com/daniellepelley/benzene-go"
@@ -54,8 +55,8 @@ type httpOutputBinding struct {
 
 // Handler builds the HTTP server the Functions host invokes
 // (host.json's customHandler.description.defaultExecutablePath), listening on the port named
-// by the FUNCTIONS_CUSTOMHANDLER_PORT environment variable (set by the host - read it in
-// main, same as httpbinding's examples read PORT).
+// by the FUNCTIONS_CUSTOMHANDLER_PORT environment variable, which the host sets - pass
+// ListenAddr() as your server's Addr and the binding supplies it.
 //
 // Each Route's Path must match the *local* invocation path Azure uses for that function -
 // by default "/<FunctionName>", the name of that function's folder (see its function.json) -
@@ -128,4 +129,42 @@ func writeInvocationResponse(w http.ResponseWriter, statusCode int, body string,
 	w.Header().Set("content-type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(data)
+}
+
+// The listen-address contract between the Azure Functions host and a custom handler. The host
+// picks a free port, names it in FUNCTIONS_CUSTOMHANDLER_PORT, and starts the handler
+// executable; a handler that binds anything else never receives an invocation. That is the
+// binding's contract with its platform, not the service's business, so it lives here rather
+// than being restated in every main().
+const (
+	// PortEnvVar is the environment variable the Functions host names the handler's listen
+	// port in.
+	PortEnvVar = "FUNCTIONS_CUSTOMHANDLER_PORT"
+	// DefaultPort is the port ListenAddr falls back to when PortEnvVar is unset - running the
+	// handler directly, outside the Functions host, to curl it by hand or in a test.
+	DefaultPort = "8080"
+)
+
+// ListenAddr returns the address a custom handler should pass to http.ListenAndServe or
+// http.Server.Addr: ":" + $FUNCTIONS_CUSTOMHANDLER_PORT, falling back to ":" + DefaultPort when
+// the variable is unset (running outside the Functions host).
+//
+// It is a one-line shorthand composed from public API and the standard library, and the
+// explicit form it composes is exactly:
+//
+//	port := os.Getenv(azurefunctions.PortEnvVar)
+//	if port == "" {
+//		port = azurefunctions.DefaultPort
+//	}
+//	addr := ":" + port
+//
+// Drop to that form to bind a specific interface, or to fail loudly rather than fall back when
+// the host named no port. httpbinding.ListenAddr is the same shorthand for the PORT convention
+// every other HTTP host uses.
+func ListenAddr() string {
+	port := os.Getenv(PortEnvVar)
+	if port == "" {
+		port = DefaultPort
+	}
+	return ":" + port
 }

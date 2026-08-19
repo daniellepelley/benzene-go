@@ -26,6 +26,15 @@ type App[TConfig any] struct {
 // Configure may each be left nil - an application with no configuration yields the zero value
 // of TConfig, and one with no dependencies to register (or nothing further to configure beyond
 // the defaults) simply skips that phase.
+//
+// Pipeline default: if Configure left no pipeline on the builder - it was nil, or it registered
+// services and routes but never called UsePipeline - Run installs the default pipeline before
+// returning. The default is exactly UseDefaultPipeline, i.e.
+// NewPipeline(RouterMiddleware(builder.Registry)): route every message to its registered
+// handler, and do nothing else. Any UsePipeline call in Configure wins, so declining the steer
+// costs one line and never costs the layers below it (design-principles.md §1). Run applies it
+// at start-up, so a service that never states a pipeline routes from its first message rather
+// than discovering the omission on the message path.
 func (a App[TConfig]) Run() *ApplicationBuilder {
 	var config TConfig
 	if a.GetConfiguration != nil {
@@ -41,6 +50,9 @@ func (a App[TConfig]) Run() *ApplicationBuilder {
 	builder := &ApplicationBuilder{Registry: registry, Container: container}
 	if a.Configure != nil {
 		a.Configure(builder, config)
+	}
+	if builder.Pipeline == nil {
+		builder.UseDefaultPipeline()
 	}
 	return builder
 }
@@ -74,6 +86,29 @@ type ApplicationBuilder struct {
 func (b *ApplicationBuilder) UsePipeline(pipeline *Pipeline) *ApplicationBuilder {
 	b.Pipeline = pipeline
 	return b
+}
+
+// UseDefaultPipeline sets the pipeline a service with no cross-cutting concerns of its own
+// wants: the terminal message router alone, so every registered handler is reachable and
+// nothing else runs. It is composed from the public explicit form and is exactly equivalent to
+// writing that form yourself:
+//
+//	builder.UsePipeline(benzene.NewPipeline(benzene.RouterMiddleware(builder.Registry)))
+//
+// Drop to that line the moment the service needs a second middleware - health-check
+// interception, auth, idempotency, resilience - since the router is conventionally registered
+// last (core-concepts.md §4) and everything else goes in front of it:
+//
+//	builder.UsePipeline(benzene.NewPipeline(
+//		healthcheck.Middleware(checks),
+//		benzene.RouterMiddleware(builder.Registry),
+//	))
+//
+// App.Run calls this for you when Configure left the pipeline unset, so the common case needs
+// no Configure phase at all; call it explicitly when you want the default stated in the
+// composition root rather than implied. Returns the builder so calls can be chained.
+func (b *ApplicationBuilder) UseDefaultPipeline() *ApplicationBuilder {
+	return b.UsePipeline(NewPipeline(RouterMiddleware(b.Registry)))
 }
 
 // UseReservedNames overrides the reserved metadata/header names (wire-contracts.md §2) for every

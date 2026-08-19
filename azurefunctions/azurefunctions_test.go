@@ -248,3 +248,25 @@ func TestHandler_BodyReadErrorIsOuterBadRequest(t *testing.T) {
 		t.Errorf("outer status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 }
+
+func TestListenAddr(t *testing.T) {
+	t.Run("uses the port the Functions host named", func(t *testing.T) {
+		t.Setenv(PortEnvVar, "9091")
+		if got := ListenAddr(); got != ":9091" {
+			t.Errorf("ListenAddr() = %q, want %q", got, ":9091")
+		}
+	})
+
+	t.Run("falls back to DefaultPort when run outside the Functions host", func(t *testing.T) {
+		t.Setenv(PortEnvVar, "")
+		if got := ListenAddr(); got != ":"+DefaultPort {
+			t.Errorf("ListenAddr() = %q, want %q", got, ":"+DefaultPort)
+		}
+	})
+
+	t.Run("reads the variable the custom-handler contract actually names", func(t *testing.T) {
+		if PortEnvVar != "FUNCTIONS_CUSTOMHANDLER_PORT" {
+			t.Errorf("PortEnvVar = %q, want the name the Functions host sets", PortEnvVar)
+		}
+	})
+}

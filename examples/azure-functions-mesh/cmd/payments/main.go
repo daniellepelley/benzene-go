@@ -35,9 +35,7 @@ func newApp(shipping, paymentCaptured client.Sender, meshClient *httpclient.Clie
 		MeshClient:  meshClient,
 		Register: func(registry *benzene.Registry, outbound *mesh.OutboundRegistry) []httpbinding.Route {
 			handler := domain.TakePaymentHandler(shipping, paymentCaptured)
-			if err := benzene.Register(registry, benzene.NewTopic(domain.TopicPaymentTake), handler); err != nil {
-				log.Fatalf("register %s: %v", domain.TopicPaymentTake, err)
-			}
+			benzene.MustRegister(registry, benzene.NewTopic(domain.TopicPaymentTake), handler)
 			// What this service SENDS: shipment:book (Service Bus) + payment:captured (Event Grid).
 			if err := domain.RegisterOutbound(outbound, domain.ServicePayments); err != nil {
 				log.Fatalf("register outbound for %s: %v", domain.ServicePayments, err)
@@ -53,13 +51,6 @@ func requiredEnv(name string) string {
 		log.Fatalf("%s environment variable is not set", name)
 	}
 	return v
-}
-
-func portFromEnv() string {
-	if port := os.Getenv("FUNCTIONS_CUSTOMHANDLER_PORT"); port != "" {
-		return port
-	}
-	return "8080"
 }
 
 // mux builds the custom-handler HTTP server (Spec/Health/Invoke) plus the Service Bus
@@ -106,7 +97,7 @@ func main() {
 	defer cancel()
 	go app.RunHeartbeatLoop(heartbeatCtx)
 
-	port := portFromEnv()
-	log.Printf("payments listening on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, mux(app)))
+	addr := azurefunctions.ListenAddr()
+	log.Printf("payments listening on %s", addr)
+	log.Fatal(http.ListenAndServe(addr, mux(app)))
 }

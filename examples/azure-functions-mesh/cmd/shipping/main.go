@@ -33,9 +33,7 @@ func newApp(shipmentDispatched client.Sender, meshClient *httpclient.Client) *me
 		MeshClient:  meshClient,
 		Register: func(registry *benzene.Registry, outbound *mesh.OutboundRegistry) []httpbinding.Route {
 			handler := domain.BookShipmentHandler(shipmentDispatched)
-			if err := benzene.Register(registry, benzene.NewTopic(domain.TopicShipmentBook), handler); err != nil {
-				log.Fatalf("register %s: %v", domain.TopicShipmentBook, err)
-			}
+			benzene.MustRegister(registry, benzene.NewTopic(domain.TopicShipmentBook), handler)
 			// What this service SENDS: shipment:dispatched (Event Grid) - terminal for the
 			// command chain, but still a publisher of its own integration event.
 			if err := domain.RegisterOutbound(outbound, domain.ServiceShipping); err != nil {
@@ -52,13 +50,6 @@ func requiredEnv(name string) string {
 		log.Fatalf("%s environment variable is not set", name)
 	}
 	return v
-}
-
-func portFromEnv() string {
-	if port := os.Getenv("FUNCTIONS_CUSTOMHANDLER_PORT"); port != "" {
-		return port
-	}
-	return "8080"
 }
 
 func mux(app *meshapp.App) http.Handler {
@@ -92,7 +83,7 @@ func main() {
 	defer cancel()
 	go app.RunHeartbeatLoop(heartbeatCtx)
 
-	port := portFromEnv()
-	log.Printf("shipping listening on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, mux(app)))
+	addr := azurefunctions.ListenAddr()
+	log.Printf("shipping listening on %s", addr)
+	log.Fatal(http.ListenAndServe(addr, mux(app)))
 }

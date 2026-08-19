@@ -92,13 +92,6 @@ func TestAnalytics_Spec(t *testing.T) {
 	}
 }
 
-func TestPortFromEnv_DefaultsWhenUnset(t *testing.T) {
-	t.Setenv("FUNCTIONS_CUSTOMHANDLER_PORT", "")
-	if got := portFromEnv(); got != "8080" {
-		t.Errorf("portFromEnv() = %q, want %q", got, "8080")
-	}
-}
-
 // TestAnalytics_DescriptorDeclaresWhatItSends pins analytics as a pure event consumer: it sends
 // nothing, so its descriptor must carry an EMPTY Consumes - and, just as importantly, must not
 // report the outbound feed as degraded. "Sends nothing" and "send side wasn't wired up" are

@@ -33,9 +33,7 @@ func newApp(shipping, paymentCaptured client.Sender, meshClient *awslambdaclient
 		MeshClient:  meshClient,
 		Register: func(registry *benzene.Registry) []httpbinding.Route {
 			handler := domain.CapturePaymentHandler(shipping, paymentCaptured)
-			if err := benzene.Register(registry, benzene.NewTopic(domain.TopicPaymentsCapture), handler); err != nil {
-				log.Fatalf("register %s: %v", domain.TopicPaymentsCapture, err)
-			}
+			benzene.MustRegister(registry, benzene.NewTopic(domain.TopicPaymentsCapture), handler)
 			return nil
 		},
 	})

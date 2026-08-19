@@ -18,7 +18,6 @@ import (
 	"context"
 	"log"
 	"net/http"
-	"os"
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/diagnostics"
@@ -83,12 +82,9 @@ func greetHandler(ctx context.Context, req greetRequest) benzene.Result[greetRes
 // provider, while main() leaves it empty and relies on the global provider it installs.
 func newApp(opts ...diagnostics.Option) benzene.App[struct{}] {
 	return benzene.App[struct{}]{
-		GetConfiguration: func() struct{} { return struct{}{} },
 		ConfigureServices: func(registry *benzene.Registry, container *benzene.Container, _ struct{}) {
 			benzene.AddSingleton(container, greeterKey{}, func(_ *benzene.Scope) Greeter { return tracingGreeter{} })
-			if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
-				log.Fatalf("register greet handler: %v", err)
-			}
+			benzene.MustRegister(registry, benzene.NewTopic("greet"), greetHandler)
 		},
 		Configure: func(builder *benzene.ApplicationBuilder, _ struct{}) {
 			checks := []healthcheck.Check{
@@ -133,13 +129,6 @@ func newTracerProvider() (*sdktrace.TracerProvider, error) {
 	), nil
 }
 
-func portFromEnv() string {
-	if port := os.Getenv("PORT"); port != "" {
-		return port
-	}
-	return "8080"
-}
-
 func main() {
 	tp, err := newTracerProvider()
 	if err != nil {
@@ -154,8 +143,8 @@ func main() {
 
 	builder := newApp().Run()
 	handler := newHandler(builder)
-	port := portFromEnv()
+	addr := httpbinding.ListenAddr()
 
-	log.Printf("opentelemetry-helloworld listening on :%s (spans print to stdout)", port)
-	log.Fatal(http.ListenAndServe(":"+port, handler))
+	log.Printf("opentelemetry-helloworld listening on %s (spans print to stdout)", addr)
+	log.Fatal(http.ListenAndServe(addr, handler))
 }

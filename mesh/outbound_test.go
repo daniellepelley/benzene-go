@@ -1,6 +1,7 @@
 package mesh
 
 import (
+	"strings"
 	"testing"
 
 	benzene "github.com/daniellepelley/benzene-go"
@@ -77,4 +78,42 @@ func must(t *testing.T, err error) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+func TestMustRegisterOutbound(t *testing.T) {
+	t.Run("records the topic, exactly as RegisterOutbound does", func(t *testing.T) {
+		viaMust := NewOutboundRegistry()
+		MustRegisterOutbound[echoRequest, echoResponse](viaMust, benzene.NewTopic("payments:capture"))
+
+		viaExplicit := NewOutboundRegistry()
+		if err := RegisterOutbound[echoRequest, echoResponse](viaExplicit, benzene.NewTopic("payments:capture")); err != nil {
+			t.Fatalf("RegisterOutbound() error = %v", err)
+		}
+
+		mustReq, mustRes, mustOK := viaMust.TopicTypes(benzene.NewTopic("payments:capture"))
+		expReq, expRes, expOK := viaExplicit.TopicTypes(benzene.NewTopic("payments:capture"))
+		if mustOK != expOK || mustReq != expReq || mustRes != expRes {
+			t.Errorf("MustRegisterOutbound recorded (%v, %v, %v), RegisterOutbound recorded (%v, %v, %v) - the shorthand must compose the explicit form",
+				mustReq, mustRes, mustOK, expReq, expRes, expOK)
+		}
+	})
+
+	t.Run("panics with RegisterOutbound's error on a duplicate topic", func(t *testing.T) {
+		r := NewOutboundRegistry()
+		topic := benzene.NewTopic("payments:capture")
+		MustRegisterOutbound[echoRequest, echoResponse](r, topic)
+
+		defer func() {
+			recovered := recover()
+			if recovered == nil {
+				t.Fatal("MustRegisterOutbound() did not panic on a duplicate topic")
+			}
+			err, ok := recovered.(error)
+			if !ok || !strings.Contains(err.Error(), `"payments:capture"`) {
+				t.Errorf("panic value = %v, want the error RegisterOutbound returned, naming the topic", recovered)
+			}
+		}()
+
+		MustRegisterOutbound[echoRequest, echoResponse](r, topic)
+	})
 }

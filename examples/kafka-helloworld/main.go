@@ -79,15 +79,9 @@ func greetHandler(ctx context.Context, req greetRequest) benzene.Result[greetRes
 // newApp is the composition root: the three-phase benzene.App both main() and the test boot from.
 func newApp() benzene.App[struct{}] {
 	return benzene.App[struct{}]{
-		GetConfiguration: func() struct{} { return struct{}{} },
 		ConfigureServices: func(registry *benzene.Registry, container *benzene.Container, _ struct{}) {
 			benzene.AddSingleton(container, greeterKey{}, func(_ *benzene.Scope) Greeter { return &recordingGreeter{} })
-			if err := benzene.Register(registry, benzene.NewTopic(greetTopic), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
-				log.Fatalf("register greet handler: %v", err)
-			}
-		},
-		Configure: func(builder *benzene.ApplicationBuilder, _ struct{}) {
-			builder.UsePipeline(benzene.NewPipeline(benzene.RouterMiddleware(builder.Registry)))
+			benzene.MustRegister(registry, benzene.NewTopic(greetTopic), greetHandler)
 		},
 	}
 }

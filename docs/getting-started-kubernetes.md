@@ -105,10 +105,7 @@ import (
 
 func newApp() *benzene.ApplicationBuilder {
 	registry := benzene.NewRegistry()
-	if err := benzene.Register(registry, benzene.NewTopic("greet"),
-		benzene.Handler[greeting.GreetRequest, greeting.GreetResponse](greeting.Handler)); err != nil {
-		log.Fatalf("register greet handler: %v", err)
-	}
+	benzene.MustRegister(registry, benzene.NewTopic("greet"), greeting.Handler)
 	return &benzene.ApplicationBuilder{
 		Registry:  registry,
 		Container: benzene.NewContainer(),

@@ -42,9 +42,7 @@ func newApp(payments, orderPlaced client.Sender, meshClient *awslambdaclient.Cli
 		MeshClient:  meshClient,
 		Register: func(registry *benzene.Registry) []httpbinding.Route {
 			handler := domain.CreateOrderHandler(payments, orderPlaced)
-			if err := benzene.Register(registry, benzene.NewTopic(domain.TopicOrderCreate), handler); err != nil {
-				log.Fatalf("register %s: %v", domain.TopicOrderCreate, err)
-			}
+			benzene.MustRegister(registry, benzene.NewTopic(domain.TopicOrderCreate), handler)
 			return []httpbinding.Route{{Method: http.MethodPost, Path: "/orders", Topic: benzene.NewTopic(domain.TopicOrderCreate)}}
 		},
 	})

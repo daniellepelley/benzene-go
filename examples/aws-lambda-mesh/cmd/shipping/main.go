@@ -31,9 +31,7 @@ func newApp(shipmentDispatched client.Sender, meshClient *awslambdaclient.Client
 		MeshClient:  meshClient,
 		Register: func(registry *benzene.Registry) []httpbinding.Route {
 			handler := domain.BookShipmentHandler(shipmentDispatched)
-			if err := benzene.Register(registry, benzene.NewTopic(domain.TopicShippingBook), handler); err != nil {
-				log.Fatalf("register %s: %v", domain.TopicShippingBook, err)
-			}
+			benzene.MustRegister(registry, benzene.NewTopic(domain.TopicShippingBook), handler)
 			return nil
 		},
 	})

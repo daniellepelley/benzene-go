@@ -8,7 +8,6 @@ import (
 	"context"
 	"log"
 	"net/http"
-	"os"
 	"sync"
 
 	benzene "github.com/daniellepelley/benzene-go"
@@ -78,14 +77,11 @@ func greetHandler(ctx context.Context, req greetRequest) benzene.Result[greetRes
 // same lifecycle with the WithServices test seam.
 func newApp() benzene.App[struct{}] {
 	return benzene.App[struct{}]{
-		GetConfiguration: func() struct{} { return struct{}{} },
 		ConfigureServices: func(registry *benzene.Registry, container *benzene.Container, _ struct{}) {
 			benzene.AddSingleton(container, greetingCounterKey{}, func(_ *benzene.Scope) GreetingCounter {
 				return &inMemoryGreetingCounter{}
 			})
-			if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
-				log.Fatalf("register greet handler: %v", err)
-			}
+			benzene.MustRegister(registry, benzene.NewTopic("greet"), greetHandler)
 		},
 		Configure: func(builder *benzene.ApplicationBuilder, _ struct{}) {
 			checks := []healthcheck.Check{
@@ -125,18 +121,11 @@ func newHandler(builder *benzene.ApplicationBuilder) http.Handler {
 	return mux
 }
 
-func portFromEnv() string {
-	if port := os.Getenv("PORT"); port != "" {
-		return port
-	}
-	return "8080"
-}
-
 func main() {
 	builder := newApp().Run()
 	handler := newHandler(builder)
-	port := portFromEnv()
+	addr := httpbinding.ListenAddr()
 
-	log.Printf("helloworld listening on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, handler))
+	log.Printf("helloworld listening on %s", addr)
+	log.Fatal(http.ListenAndServe(addr, handler))
 }

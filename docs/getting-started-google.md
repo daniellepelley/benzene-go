@@ -86,9 +86,7 @@ a pipeline, and hand the whole thing to the HTTP binding. This example composes 
 ```go
 func newApp() *benzene.ApplicationBuilder {
 	registry := benzene.NewRegistry()
-	if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
-		log.Fatalf("register greet handler: %v", err)
-	}
+	benzene.MustRegister(registry, benzene.NewTopic("greet"), greetHandler)
 	return &benzene.ApplicationBuilder{
 		Registry:  registry,
 		Container: benzene.NewContainer(),
@@ -109,22 +107,15 @@ func newHandler(builder *benzene.ApplicationBuilder) http.Handler {
 ### The entry point: listen on `$PORT`
 
 Cloud Run's one contract is that your process listens on the port named by the `$PORT` environment
-variable. `main` reads it (defaulting to `8080` for local runs) and starts a standard `net/http`
-server:
+variable. `httpbinding.ListenAddr()` reads it, defaulting to `:8080` for local runs, and `main`
+starts a standard `net/http` server on it:
 
 ```go
-func portFromEnv() string {
-	if port := os.Getenv("PORT"); port != "" {
-		return port
-	}
-	return "8080"
-}
-
 func main() {
 	handler := newHandler(newApp())
-	port := portFromEnv()
-	log.Printf("gcp-cloudrun-helloworld listening on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, handler))
+	addr := httpbinding.ListenAddr()
+	log.Printf("gcp-cloudrun-helloworld listening on %s", addr)
+	log.Fatal(http.ListenAndServe(addr, handler))
 }
 ```
 
@@ -256,14 +247,8 @@ its tests boot from, which is what makes the front-door test below possible:
 ```go
 func newApp() benzene.App[struct{}] {
 	return benzene.App[struct{}]{
-		GetConfiguration: func() struct{} { return struct{}{} },
 		ConfigureServices: func(registry *benzene.Registry, _ *benzene.Container, _ struct{}) {
-			if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
-				log.Fatalf("register greet handler: %v", err)
-			}
-		},
-		Configure: func(builder *benzene.ApplicationBuilder, _ struct{}) {
-			builder.UsePipeline(benzene.NewPipeline(benzene.RouterMiddleware(builder.Registry)))
+			benzene.MustRegister(registry, benzene.NewTopic("greet"), greetHandler)
 		},
 	}
 }
@@ -286,14 +271,14 @@ func newHandler(builder *benzene.ApplicationBuilder) http.Handler {
 
 func main() {
 	handler := newHandler(newApp().Run())
-	port := portFromEnv()
-	log.Printf("gcp-pubsub-helloworld listening on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, handler))
+	addr := httpbinding.ListenAddr()
+	log.Printf("gcp-pubsub-helloworld listening on %s", addr)
+	log.Fatal(http.ListenAndServe(addr, handler))
 }
 ```
 
-`portFromEnv` is the same `$PORT` reader as [part 1](#the-entry-point-listen-on-port) — this is a
-Cloud Run service too.
+`httpbinding.ListenAddr()` is the same `$PORT` reader as [part 1](#the-entry-point-listen-on-port) —
+this is a Cloud Run service too.
 
 ### Test it locally
 

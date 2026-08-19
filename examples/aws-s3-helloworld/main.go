@@ -41,14 +41,8 @@ func objectUploaded(_ context.Context, o objectCreated) benzene.Result[struct{}]
 // "{bucket}:{eventName}" - register the specific bucket+event combinations this service consumes.
 func newApp() benzene.App[struct{}] {
 	return benzene.App[struct{}]{
-		GetConfiguration: func() struct{} { return struct{}{} },
 		ConfigureServices: func(registry *benzene.Registry, _ *benzene.Container, _ struct{}) {
-			if err := benzene.Register(registry, benzene.NewTopic("uploads:ObjectCreated:Put"), benzene.Handler[objectCreated, struct{}](objectUploaded)); err != nil {
-				panic(err)
-			}
-		},
-		Configure: func(builder *benzene.ApplicationBuilder, _ struct{}) {
-			builder.UsePipeline(benzene.NewPipeline(benzene.RouterMiddleware(builder.Registry)))
+			benzene.MustRegister(registry, benzene.NewTopic("uploads:ObjectCreated:Put"), objectUploaded)
 		},
 	}
 }

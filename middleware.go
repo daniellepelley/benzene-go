@@ -1,6 +1,9 @@
 package benzene
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 // Middleware wraps invocation handling in an ordered onion pipeline (core-concepts.md §4).
 // A middleware that does not call next terminates the pipeline; everything after it
@@ -27,7 +30,18 @@ func NewPipeline(middlewares ...Middleware) *Pipeline {
 // one queue message, ...) is exactly one Run call, per core-concepts.md §4 - a batch
 // delivery is one Run per message, each with its own InvocationContext/Scope; arranging
 // that is the transport binding's responsibility, not Pipeline's.
+//
+// A nil *Pipeline is a wiring mistake, not a runtime condition, so Run reports it as an error
+// naming the fix rather than dereferencing nil - a binding handed a builder with no pipeline
+// would otherwise crash the transport on its first message, which the bindings' "never let a
+// panic reach the caller" rule forbids. App.Run cannot produce this (it installs the default
+// pipeline when Configure sets none); a hand-built ApplicationBuilder can.
 func (p *Pipeline) Run(ctx context.Context, ic *InvocationContext) error {
+	if p == nil {
+		return errors.New("benzene: no pipeline configured on this ApplicationBuilder - call " +
+			"builder.UseDefaultPipeline() (router only) or builder.UsePipeline(...) in App.Configure, " +
+			"or build the app with App.Run, which installs the default pipeline when Configure sets none")
+	}
 	return p.runFrom(ctx, ic, 0)
 }
 

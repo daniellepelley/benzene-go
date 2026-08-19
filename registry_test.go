@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -228,6 +229,61 @@ func TestRegistry_TopicTypes(t *testing.T) {
 		request, _, ok := r.TopicTypes(anyTopic)
 		if !ok || request == nil || request.Kind() != reflect.Interface {
 			t.Errorf("request = %v (ok=%v), want the empty interface type", request, ok)
+		}
+	})
+}
+
+func TestMustRegister(t *testing.T) {
+	t.Run("registers the handler, inferring TReq/TRes from the function", func(t *testing.T) {
+		r := NewRegistry()
+		topic := NewTopic("hello")
+
+		// No Handler[helloRequest, helloResponse](...) conversion: the type arguments are
+		// inferred from helloHandler's signature, the same as for Register.
+		MustRegister(r, topic, helloHandler)
+
+		if !r.Has(topic) {
+			t.Fatalf("Has(%v) = false, want true", topic)
+		}
+	})
+
+	t.Run("panics with Register's error on a duplicate topic", func(t *testing.T) {
+		r := NewRegistry()
+		topic := NewTopic("hello")
+		MustRegister(r, topic, helloHandler)
+
+		defer func() {
+			recovered := recover()
+			if recovered == nil {
+				t.Fatal("MustRegister() did not panic on a duplicate topic")
+			}
+			err, ok := recovered.(error)
+			if !ok {
+				t.Fatalf("recover() = %v (%T), want the error Register returned", recovered, recovered)
+			}
+			// The start-up failure must name what collided.
+			if !strings.Contains(err.Error(), `topic "hello"`) {
+				t.Errorf("panic value = %q, want it to name the duplicate topic", err)
+			}
+		}()
+
+		MustRegister(r, topic, helloHandler)
+	})
+
+	t.Run("is exactly Register plus panic-on-error", func(t *testing.T) {
+		viaMust := NewRegistry()
+		MustRegister(viaMust, NewTopic("hello"), helloHandler)
+
+		viaRegister := NewRegistry()
+		if err := Register(viaRegister, NewTopic("hello"), helloHandler); err != nil {
+			t.Fatalf("Register() error = %v", err)
+		}
+
+		mustReq, mustRes, mustOK := viaMust.TopicTypes(NewTopic("hello"))
+		regReq, regRes, regOK := viaRegister.TopicTypes(NewTopic("hello"))
+		if mustOK != regOK || mustReq != regReq || mustRes != regRes {
+			t.Errorf("MustRegister recorded (%v, %v, %v), Register recorded (%v, %v, %v) - the shorthand must compose the explicit form",
+				mustReq, mustRes, mustOK, regReq, regRes, regOK)
 		}
 	})
 }

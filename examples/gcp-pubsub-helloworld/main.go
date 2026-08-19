@@ -11,10 +11,10 @@ import (
 	"context"
 	"log"
 	"net/http"
-	"os"
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/gcppubsub"
+	"github.com/daniellepelley/benzene-go/httpbinding"
 )
 
 type greetRequest struct {
@@ -40,14 +40,8 @@ func greetHandler(_ context.Context, req greetRequest) benzene.Result[greetRespo
 // newApp is the composition root both main() and the tests boot from.
 func newApp() benzene.App[struct{}] {
 	return benzene.App[struct{}]{
-		GetConfiguration: func() struct{} { return struct{}{} },
 		ConfigureServices: func(registry *benzene.Registry, _ *benzene.Container, _ struct{}) {
-			if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
-				log.Fatalf("register greet handler: %v", err)
-			}
-		},
-		Configure: func(builder *benzene.ApplicationBuilder, _ struct{}) {
-			builder.UsePipeline(benzene.NewPipeline(benzene.RouterMiddleware(builder.Registry)))
+			benzene.MustRegister(registry, benzene.NewTopic("greet"), greetHandler)
 		},
 	}
 }
@@ -61,18 +55,9 @@ func newHandler(builder *benzene.ApplicationBuilder) http.Handler {
 	return mux
 }
 
-// portFromEnv reads $PORT, Cloud Run's documented contract for the port a service must listen
-// on - defaulting to 8080 for local runs outside Cloud Run.
-func portFromEnv() string {
-	if port := os.Getenv("PORT"); port != "" {
-		return port
-	}
-	return "8080"
-}
-
 func main() {
 	handler := newHandler(newApp().Run())
-	port := portFromEnv()
-	log.Printf("gcp-pubsub-helloworld listening on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, handler))
+	addr := httpbinding.ListenAddr()
+	log.Printf("gcp-pubsub-helloworld listening on %s", addr)
+	log.Fatal(http.ListenAndServe(addr, handler))
 }

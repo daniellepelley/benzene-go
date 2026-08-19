@@ -22,6 +22,7 @@ import (
 	"github.com/daniellepelley/benzene-go/httpclient"
 	"github.com/daniellepelley/benzene-go/mesh"
 
+	"github.com/daniellepelley/benzene-go/azurefunctions"
 	"github.com/daniellepelley/benzene-go/examples/azure-functions-mesh/domain"
 	"github.com/daniellepelley/benzene-go/examples/azure-functions-mesh/meshapp"
 )
@@ -37,9 +38,7 @@ func newApp(payments, orderPlaced client.Sender, meshClient *httpclient.Client) 
 		MeshClient:  meshClient,
 		Register: func(registry *benzene.Registry, outbound *mesh.OutboundRegistry) []httpbinding.Route {
 			handler := domain.CreateOrderHandler(payments, orderPlaced)
-			if err := benzene.Register(registry, benzene.NewTopic(domain.TopicOrderCreate), handler); err != nil {
-				log.Fatalf("register %s: %v", domain.TopicOrderCreate, err)
-			}
+			benzene.MustRegister(registry, benzene.NewTopic(domain.TopicOrderCreate), handler)
 			// What this service SENDS: payment:take (Service Bus) + order:placed (Event Hub).
 			if err := domain.RegisterOutbound(outbound, domain.ServiceOrders); err != nil {
 				log.Fatalf("register outbound for %s: %v", domain.ServiceOrders, err)
@@ -55,16 +54,6 @@ func requiredEnv(name string) string {
 		log.Fatalf("%s environment variable is not set", name)
 	}
 	return v
-}
-
-// portFromEnv reads FUNCTIONS_CUSTOMHANDLER_PORT, the port the Functions host tells the custom
-// handler to listen on - defaulting to 8080, matching the host's own documented default for when
-// the variable is absent (e.g. running the binary directly, outside `func start`).
-func portFromEnv() string {
-	if port := os.Getenv("FUNCTIONS_CUSTOMHANDLER_PORT"); port != "" {
-		return port
-	}
-	return "8080"
 }
 
 // mux builds the custom-handler HTTP server: one local path per Function folder
@@ -111,7 +100,7 @@ func main() {
 	defer cancel()
 	go app.RunHeartbeatLoop(heartbeatCtx)
 
-	port := portFromEnv()
-	log.Printf("orders listening on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, mux(app)))
+	addr := azurefunctions.ListenAddr()
+	log.Printf("orders listening on %s", addr)
+	log.Fatal(http.ListenAndServe(addr, mux(app)))
 }

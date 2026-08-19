@@ -116,13 +116,6 @@ func TestShipping_Spec(t *testing.T) {
 	}
 }
 
-func TestPortFromEnv_DefaultsWhenUnset(t *testing.T) {
-	t.Setenv("FUNCTIONS_CUSTOMHANDLER_PORT", "")
-	if got := portFromEnv(); got != "8080" {
-		t.Errorf("portFromEnv() = %q, want %q", got, "8080")
-	}
-}
-
 // TestShipping_DescriptorDeclaresWhatItSends proves this Function actually wires the outbound half of
 // its contract: what domain.RegisterOutbound declares for shipping must reach the descriptor it
 // announces, since Descriptor.Consumes - not observed traffic - is what draws this service's

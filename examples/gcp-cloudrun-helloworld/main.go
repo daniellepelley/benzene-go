@@ -9,7 +9,6 @@ import (
 	"context"
 	"log"
 	"net/http"
-	"os"
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/httpbinding"
@@ -32,9 +31,7 @@ func greetHandler(_ context.Context, req greetRequest) benzene.Result[greetRespo
 
 func newApp() *benzene.ApplicationBuilder {
 	registry := benzene.NewRegistry()
-	if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
-		log.Fatalf("register greet handler: %v", err)
-	}
+	benzene.MustRegister(registry, benzene.NewTopic("greet"), greetHandler)
 	return &benzene.ApplicationBuilder{
 		Registry:  registry,
 		Container: benzene.NewContainer(),
@@ -47,18 +44,9 @@ func newHandler(builder *benzene.ApplicationBuilder) http.Handler {
 	return httpbinding.Handler(builder, routes)
 }
 
-// portFromEnv reads $PORT, Cloud Run's documented contract for the port a service must listen
-// on - defaulting to 8080 for local runs outside Cloud Run.
-func portFromEnv() string {
-	if port := os.Getenv("PORT"); port != "" {
-		return port
-	}
-	return "8080"
-}
-
 func main() {
 	handler := newHandler(newApp())
-	port := portFromEnv()
-	log.Printf("gcp-cloudrun-helloworld listening on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, handler))
+	addr := httpbinding.ListenAddr()
+	log.Printf("gcp-cloudrun-helloworld listening on %s", addr)
+	log.Fatal(http.ListenAndServe(addr, handler))
 }

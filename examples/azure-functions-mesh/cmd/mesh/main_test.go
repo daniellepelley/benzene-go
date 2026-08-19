@@ -109,17 +109,3 @@ func TestMesh_Discovered_ZeroBeforeAnyoneRegisters(t *testing.T) {
 		t.Errorf("Discovered = %d, want 0", count.Discovered)
 	}
 }
-
-func TestPortFromEnv_DefaultsWhenUnset(t *testing.T) {
-	t.Setenv("FUNCTIONS_CUSTOMHANDLER_PORT", "")
-	if got := portFromEnv(); got != "8080" {
-		t.Errorf("portFromEnv() = %q, want %q", got, "8080")
-	}
-}
-
-func TestPortFromEnv_UsesEnvWhenSet(t *testing.T) {
-	t.Setenv("FUNCTIONS_CUSTOMHANDLER_PORT", "9090")
-	if got := portFromEnv(); got != "9090" {
-		t.Errorf("portFromEnv() = %q, want %q", got, "9090")
-	}
-}

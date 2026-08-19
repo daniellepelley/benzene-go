@@ -65,9 +65,10 @@ func WithRoutes(routes ...httpbinding.Route) Option {
 // NewHost boots app from its composition root and returns a provider-agnostic Host. It runs the
 // three-phase lifecycle of core-concepts.md §7 with the test seam the reference harness uses:
 // GetConfiguration, then ConfigureServices, then the WithServices overrides (last-wins, before
-// the pipeline exists), then Configure. Because the overrides land before Configure builds the
-// pipeline - and container resolution is lazy - a faked dependency is what every handler
-// resolves, exactly as in a real deployment.
+// the pipeline exists), then Configure, then App.Run's router-only pipeline default if Configure
+// set none. Because the overrides land before Configure builds the pipeline - and container
+// resolution is lazy - a faked dependency is what every handler resolves, exactly as in a real
+// deployment.
 func NewHost[TConfig any](app benzene.App[TConfig], opts ...Option) *Host {
 	var s setup
 	for _, opt := range opts {
@@ -95,6 +96,12 @@ func NewHost[TConfig any](app benzene.App[TConfig], opts ...Option) *Host {
 
 	if app.Configure != nil {
 		app.Configure(builder, config)
+	}
+	// Same default benzene.App.Run applies: an app whose Configure set no pipeline gets the
+	// router-only default. Kept in step with App.Run deliberately - a test must boot the app the
+	// way production does, not a shape that only exists under test.
+	if builder.Pipeline == nil {
+		builder.UseDefaultPipeline()
 	}
 
 	return &Host{builder: builder, routes: s.routes}

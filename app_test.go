@@ -2,6 +2,8 @@ package benzene
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/daniellepelley/benzene-go/wire"
@@ -139,4 +141,125 @@ func TestApplicationBuilder_UseReservedNames_SetsAndChains(t *testing.T) {
 	if fresh.ReservedNames.Topic() != wire.DefaultTopicKey {
 		t.Errorf("fresh builder Topic() = %q, want the default %q", fresh.ReservedNames.Topic(), wire.DefaultTopicKey)
 	}
+}
+
+func TestApp_Run_InstallsTheDefaultPipelineWhenConfigureSetsNone(t *testing.T) {
+	t.Run("with no Configure phase at all", func(t *testing.T) {
+		app := App[testConfig]{
+			ConfigureServices: func(registry *Registry, _ *Container, _ testConfig) {
+				MustRegister(registry, NewTopic("greet"), func(_ context.Context, req appGreetRequest) Result[appGreetResponse] {
+					return Ok(appGreetResponse{Greeting: "Hello, " + req.Name})
+				})
+			},
+		}
+
+		builder := app.Run()
+		if builder.Pipeline == nil {
+			t.Fatal("Run() left Pipeline nil; the default pipeline must be installed at start-up, not discovered on the message path")
+		}
+
+		ic := NewInvocationContext(NewTopic("greet"), nil, json.RawMessage(`{"name":"World"}`), builder.Container.NewScope())
+		if err := builder.Pipeline.Run(context.Background(), ic); err != nil {
+			t.Fatalf("Pipeline.Run() error = %v", err)
+		}
+		payload, ok := ic.Result.ResultPayload().(appGreetResponse)
+		if !ok || payload.Greeting != "Hello, World" {
+			t.Errorf("default pipeline produced %#v, want it to route to the registered handler", ic.Result.ResultPayload())
+		}
+	})
+
+	t.Run("with a Configure phase that does other work but never calls UsePipeline", func(t *testing.T) {
+		app := App[testConfig]{
+			ConfigureServices: func(registry *Registry, _ *Container, _ testConfig) {
+				MustRegister(registry, NewTopic("greet"), func(_ context.Context, req appGreetRequest) Result[appGreetResponse] {
+					return Ok(appGreetResponse{Greeting: req.Name})
+				})
+			},
+			Configure: func(builder *ApplicationBuilder, _ testConfig) {
+				builder.UseReservedNames(wire.ReservedNames{TopicKey: "x-topic"})
+			},
+		}
+
+		builder := app.Run()
+		if builder.Pipeline == nil {
+			t.Fatal("Run() left Pipeline nil after a Configure that set no pipeline")
+		}
+	})
+}
+
+func TestApp_Run_ConfigurePipelineWinsOverTheDefault(t *testing.T) {
+	var ran []string
+	marker := func(name string) Middleware {
+		return func(ctx context.Context, ic *InvocationContext, next func(context.Context) error) error {
+			ran = append(ran, name)
+			return next(ctx)
+		}
+	}
+
+	app := App[testConfig]{
+		Configure: func(builder *ApplicationBuilder, _ testConfig) {
+			builder.UsePipeline(NewPipeline(marker("mine")))
+		},
+	}
+
+	builder := app.Run()
+	if err := builder.Pipeline.Run(context.Background(), NewInvocationContext(NewTopic("x"), nil, nil, builder.Container.NewScope())); err != nil {
+		t.Fatalf("Pipeline.Run() error = %v", err)
+	}
+	if len(ran) != 1 || ran[0] != "mine" {
+		t.Errorf("ran = %v, want only the pipeline Configure set - the default must never replace an explicit UsePipeline", ran)
+	}
+	if ic := builder.Pipeline; ic == nil {
+		t.Fatal("Pipeline was replaced with nil")
+	}
+}
+
+func TestApplicationBuilder_UseDefaultPipeline_ComposesTheExplicitForm(t *testing.T) {
+	// The shorthand must be indistinguishable from the explicit form a user would write by
+	// hand, so the same message routes identically through both.
+	registry := NewRegistry()
+	MustRegister(registry, NewTopic("greet"), func(_ context.Context, req appGreetRequest) Result[appGreetResponse] {
+		return Ok(appGreetResponse{Greeting: "Hello, " + req.Name})
+	})
+	container := NewContainer()
+
+	shorthand := (&ApplicationBuilder{Registry: registry, Container: container}).UseDefaultPipeline()
+	explicit := (&ApplicationBuilder{Registry: registry, Container: container}).
+		UsePipeline(NewPipeline(RouterMiddleware(registry)))
+
+	for name, builder := range map[string]*ApplicationBuilder{"shorthand": shorthand, "explicit": explicit} {
+		ic := NewInvocationContext(NewTopic("greet"), nil, json.RawMessage(`{"name":"World"}`), builder.Container.NewScope())
+		if err := builder.Pipeline.Run(context.Background(), ic); err != nil {
+			t.Fatalf("%s: Pipeline.Run() error = %v", name, err)
+		}
+		payload, ok := ic.Result.ResultPayload().(appGreetResponse)
+		if !ok || payload.Greeting != "Hello, World" {
+			t.Errorf("%s: payload = %#v, want the routed handler's response", name, ic.Result.ResultPayload())
+		}
+	}
+}
+
+func TestPipeline_Run_NilPipelineReportsTheFixInsteadOfPanicking(t *testing.T) {
+	// A hand-built ApplicationBuilder (not one from App.Run) can still carry no pipeline. A
+	// binding must get an error naming the fix, not a nil dereference that crashes the
+	// transport on its first message.
+	var pipeline *Pipeline
+
+	err := pipeline.Run(context.Background(), NewInvocationContext(NewTopic("greet"), nil, nil, NewContainer().NewScope()))
+	if err == nil {
+		t.Fatal("nil Pipeline.Run() returned no error")
+	}
+	for _, want := range []string{"no pipeline configured", "UseDefaultPipeline", "UsePipeline", "App.Run"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name %q", err, want)
+		}
+	}
+}
+
+type appGreetRequest struct {
+	Name string `json:"name"`
+}
+
+type appGreetResponse struct {
+	Greeting string `json:"greeting"`
 }

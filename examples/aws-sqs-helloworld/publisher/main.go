@@ -52,15 +52,9 @@ func forwardHandler() benzene.Handler[greeting.GreetRequest, struct{}] {
 // a test wires a fake.
 func newApp(sender client.Sender) benzene.App[struct{}] {
 	return benzene.App[struct{}]{
-		GetConfiguration: func() struct{} { return struct{}{} },
 		ConfigureServices: func(registry *benzene.Registry, container *benzene.Container, _ struct{}) {
 			client.RegisterSender(container, sender)
-			if err := benzene.Register(registry, benzene.NewTopic("greet"), forwardHandler()); err != nil {
-				log.Fatalf("register greet handler: %v", err)
-			}
-		},
-		Configure: func(builder *benzene.ApplicationBuilder, _ struct{}) {
-			builder.UsePipeline(benzene.NewPipeline(benzene.RouterMiddleware(builder.Registry)))
+			benzene.MustRegister(registry, benzene.NewTopic("greet"), forwardHandler())
 		},
 	}
 }

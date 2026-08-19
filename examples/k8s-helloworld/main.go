@@ -35,23 +35,11 @@ import (
 // newApp is the composition root every leg below shares - the same registered handler, reached
 // three ways.
 func newApp() *benzene.ApplicationBuilder {
-	registry := benzene.NewRegistry()
-	if err := benzene.Register(registry, benzene.NewTopic("greet"),
-		benzene.Handler[greeting.GreetRequest, greeting.GreetResponse](greeting.Handler)); err != nil {
-		log.Fatalf("register greet handler: %v", err)
-	}
-	return &benzene.ApplicationBuilder{
-		Registry:  registry,
-		Container: benzene.NewContainer(),
-		Pipeline:  benzene.NewPipeline(benzene.RouterMiddleware(registry)),
-	}
-}
-
-func portFromEnv() string {
-	if port := os.Getenv("PORT"); port != "" {
-		return port
-	}
-	return "8080"
+	return benzene.App[struct{}]{
+		ConfigureServices: func(registry *benzene.Registry, _ *benzene.Container, _ struct{}) {
+			benzene.MustRegister(registry, benzene.NewTopic("greet"), greeting.Handler)
+		},
+	}.Run()
 }
 
 func brokersFromEnv() []string {
@@ -138,7 +126,7 @@ func main() {
 
 	routes := []httpbinding.Route{{Method: http.MethodPost, Path: "/greet", Topic: benzene.NewTopic("greet")}}
 	server := &http.Server{
-		Addr:              ":" + portFromEnv(),
+		Addr:              httpbinding.ListenAddr(),
 		Handler:           httpbinding.Handler(newApp(), routes),
 		ReadHeaderTimeout: 5 * time.Second,
 	}

@@ -77,17 +77,6 @@ func TestMiddleware_WrapsTheBindingAndCounts(t *testing.T) {
 	}
 }
 
-func TestPortFromEnv(t *testing.T) {
-	t.Setenv("PORT", "")
-	if got := portFromEnv(); got != "8080" {
-		t.Errorf("portFromEnv() = %q, want 8080", got)
-	}
-	t.Setenv("PORT", "9090")
-	if got := portFromEnv(); got != "9090" {
-		t.Errorf("portFromEnv() = %q, want 9090", got)
-	}
-}
-
 // fixedGreeter is a test spy adapter proving the port is swappable.
 type fixedGreeter struct{}
 

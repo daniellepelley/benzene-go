@@ -35,7 +35,16 @@ alongside the shared spec.
 
 - Root package (`benzene`) - Topic, Status, Result[T], Registry, Middleware/Pipeline, the
   DI-lite Container/Scope, the three-phase App lifecycle. No sub-package may import this in a
-  cycle; everything else imports it.
+  cycle; everything else imports it. Each capability here carries both rungs of
+  design-principles.md §4.1's ladder, and the shorthand is always literally composed from the
+  explicit form - keep it that way when adding to it: `Register` returns the error /
+  `MustRegister` panics with it (`mesh.RegisterOutbound`/`MustRegisterOutbound` mirror the pair);
+  `UsePipeline` takes any pipeline / `UseDefaultPipeline` is one line of `UsePipeline(NewPipeline(
+  RouterMiddleware(b.Registry)))`, which `App.Run` also installs when `Configure` set no pipeline,
+  so the common case needs no `Configure` phase at all. That default exists as a **start-up**
+  check as much as an ergonomic one: a builder with a nil `Pipeline` used to nil-deref on the
+  first message inside a binding. `benzenetest.NewHost` re-implements the lifecycle to get its
+  `WithServices` seam and must keep the same default - if you change one, change both.
 - `wire/` - the transport-neutral message envelope. Deliberately has **no dependency on the
   rest of this module** - keep it that way (see the package doc comment).
 - `httpstatus/` - the Benzene<->HTTP status mapping tables, cross-checked against
@@ -53,7 +62,10 @@ alongside the shared spec.
   topic's version directly (winning over a `benzene-version` header on the same request), and a
   route with no such segment falls back to the header. `awslambda.HTTPHandler` and
   `azurefunctions.Handler` share this `Route`/`RouteTable` matching, so the same behavior applies
-  there too.
+  there too. `ListenAddr()` (+ `PortEnvVar`/`DefaultPort`) is the `$PORT` listen-address convention
+  every container PaaS uses, owned here rather than hand-rolled in each `main()`;
+  `azurefunctions.ListenAddr()` is the same shorthand for the Functions custom-handler's
+  `FUNCTIONS_CUSTOMHANDLER_PORT`.
 - `httpclient/` - the HTTP outbound client.
 - `client/` - the outbound-client seam: `Sender` (the single interface every outbound transport -
   `httpclient`, `awssqs.Client`, the in-process sender, ... - satisfies) plus the `With*` decorators

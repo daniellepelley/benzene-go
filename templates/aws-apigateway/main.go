@@ -10,7 +10,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"net/http"
 
 	benzene "github.com/daniellepelley/benzene-go"
@@ -51,17 +50,11 @@ func greetHandler(ctx context.Context, req greetRequest) benzene.Result[greetRes
 // and the tests boot from, so a test exercises exactly the wiring that ships.
 func newApp() benzene.App[struct{}] {
 	return benzene.App[struct{}]{
-		GetConfiguration: func() struct{} { return struct{}{} },
 		ConfigureServices: func(registry *benzene.Registry, container *benzene.Container, _ struct{}) {
 			benzene.AddSingleton(container, greeterKey, func(_ *benzene.Scope) Greeter {
 				return helloGreeter{}
 			})
-			if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
-				log.Fatalf("register greet handler: %v", err)
-			}
-		},
-		Configure: func(builder *benzene.ApplicationBuilder, _ struct{}) {
-			builder.UsePipeline(benzene.NewPipeline(benzene.RouterMiddleware(builder.Registry)))
+			benzene.MustRegister(registry, benzene.NewTopic("greet"), greetHandler)
 		},
 	}
 }

@@ -58,9 +58,7 @@ func newMultiShapeApp(meshClient *awslambdaclient.Client) *App {
 }
 
 func mustRegister(registry *benzene.Registry, topic string) {
-	if err := benzene.Register(registry, benzene.NewTopic(topic), echoHandler()); err != nil {
-		panic(err)
-	}
+	benzene.MustRegister(registry, benzene.NewTopic(topic), echoHandler())
 }
 
 // -- classify --------------------------------------------------------------------------------

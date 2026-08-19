@@ -59,6 +59,31 @@ func RegisterOutbound[TReq, TRes any](r *OutboundRegistry, topic benzene.Topic) 
 	return nil
 }
 
+// MustRegisterOutbound is RegisterOutbound with the error handling a composition root would
+// otherwise write by hand: it calls RegisterOutbound and panics if registration fails. The
+// explicit form is RegisterOutbound - reach for it when the caller has somewhere better to send
+// the error than a panic (a registration loop that collects failures, a test).
+//
+// The panic is a start-up check: the only failure is a duplicate topic, which is a wiring
+// mistake, and outbound registration happens once at boot before any message is sent - so the
+// panic names the offending topic at start-up, never on the message path. It is the mesh
+// counterpart of benzene.MustRegister, and makes the same trade regexp.MustCompile does.
+//
+// Explicit:
+//
+//	if err := mesh.RegisterOutbound[greetRequest, greetResponse](outbound, benzene.NewTopic("greet")); err != nil {
+//		return err
+//	}
+//
+// Shorthand:
+//
+//	mesh.MustRegisterOutbound[greetRequest, greetResponse](outbound, benzene.NewTopic("greet"))
+func MustRegisterOutbound[TReq, TRes any](r *OutboundRegistry, topic benzene.Topic) {
+	if err := RegisterOutbound[TReq, TRes](r, topic); err != nil {
+		panic(err)
+	}
+}
+
 // TopicTypes returns the request and response types captured when topic was registered, or
 // ok = false when topic isn't registered. Mirrors Registry.TopicTypes.
 func (r *OutboundRegistry) TopicTypes(topic benzene.Topic) (request, response reflect.Type, ok bool) {

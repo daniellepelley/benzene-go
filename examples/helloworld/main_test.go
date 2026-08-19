@@ -107,20 +107,6 @@ func TestUnknownRouteIsNotFound(t *testing.T) {
 	}
 }
 
-func TestPortFromEnv_DefaultsWhenUnset(t *testing.T) {
-	t.Setenv("PORT", "")
-	if got := portFromEnv(); got != "8080" {
-		t.Errorf("portFromEnv() = %q, want %q", got, "8080")
-	}
-}
-
-func TestPortFromEnv_UsesEnvWhenSet(t *testing.T) {
-	t.Setenv("PORT", "9090")
-	if got := portFromEnv(); got != "9090" {
-		t.Errorf("portFromEnv() = %q, want %q", got, "9090")
-	}
-}
-
 // postGreet pushes a greet request through the native-HTTP front door and decodes the native
 // response body, so the increment assertions read against the real mapped HTTP response.
 func postGreet(t *testing.T, host *benzenetest.Host, name string) greetResponse {

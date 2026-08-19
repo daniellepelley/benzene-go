@@ -26,17 +26,11 @@ func newApp(meshClient *awslambdaclient.Client) *meshapp.App {
 		ServiceName: "analytics",
 		MeshClient:  meshClient,
 		Register: func(registry *benzene.Registry) []httpbinding.Route {
-			mustRegister(registry, domain.TopicPaymentCaptured, domain.AckHandler[domain.PaymentCaptured]())
-			mustRegister(registry, domain.TopicShipmentDispatched, domain.AckHandler[domain.ShipmentDispatched]())
+			benzene.MustRegister(registry, benzene.NewTopic(domain.TopicPaymentCaptured), domain.AckHandler[domain.PaymentCaptured]())
+			benzene.MustRegister(registry, benzene.NewTopic(domain.TopicShipmentDispatched), domain.AckHandler[domain.ShipmentDispatched]())
 			return nil
 		},
 	})
-}
-
-func mustRegister[TReq, TRes any](registry *benzene.Registry, topic string, handler benzene.Handler[TReq, TRes]) {
-	if err := benzene.Register(registry, benzene.NewTopic(topic), handler); err != nil {
-		log.Fatalf("register %s: %v", topic, err)
-	}
 }
 
 func main() {

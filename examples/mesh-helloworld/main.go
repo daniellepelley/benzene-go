@@ -217,9 +217,7 @@ func main() {
 	meshdEndpoint := "http://localhost:" + meshdPort + httpbinding.EnvelopePath
 
 	greeter := newService("greeter", meshdEndpoint, true, func(registry *benzene.Registry) {
-		if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
-			log.Fatalf("register greet: %v", err)
-		}
+		benzene.MustRegister(registry, benzene.NewTopic("greet"), greetHandler)
 	}, nil, []httpbinding.Route{
 		{Method: http.MethodPost, Path: "/greet", Topic: benzene.NewTopic("greet")},
 		{Method: http.MethodGet, Path: httpbinding.HealthPath, Topic: benzene.NewTopic(healthcheck.ReservedTopic)},
@@ -230,16 +228,12 @@ func main() {
 
 	frontdoor := newService("frontdoor", meshdEndpoint, true, func(registry *benzene.Registry) {
 		greeterClient := mesh.WithTraceContext(httpclient.NewClient("http://localhost:" + greeterPort + httpbinding.EnvelopePath))
-		if err := benzene.Register(registry, benzene.NewTopic("welcome"), welcomeHandler(greeterClient)); err != nil {
-			log.Fatalf("register welcome: %v", err)
-		}
+		benzene.MustRegister(registry, benzene.NewTopic("welcome"), welcomeHandler(greeterClient))
 	}, func(outbound *mesh.OutboundRegistry) {
 		// frontdoor's declared contract: it calls greeter's "greet" (mesh.md §2.3). This -
 		// not the trace propagation above - is what makes "greet" show frontdoor as a
 		// consumer on the topic catalog (mesh.md §4).
-		if err := mesh.RegisterOutbound[greetRequest, greetResponse](outbound, benzene.NewTopic("greet")); err != nil {
-			log.Fatalf("register outbound greet: %v", err)
-		}
+		mesh.MustRegisterOutbound[greetRequest, greetResponse](outbound, benzene.NewTopic("greet"))
 	}, []httpbinding.Route{
 		{Method: http.MethodPost, Path: "/welcome", Topic: benzene.NewTopic("welcome")},
 		{Method: http.MethodGet, Path: httpbinding.HealthPath, Topic: benzene.NewTopic(healthcheck.ReservedTopic)},
@@ -256,9 +250,7 @@ func main() {
 	// invocation stats. This is the degradation rule, live.
 	legacy := newService("legacy-portal", meshdEndpoint, false, func(registry *benzene.Registry) {
 		greeterClient := mesh.WithTraceContext(httpclient.NewClient("http://localhost:" + greeterPort + httpbinding.EnvelopePath))
-		if err := benzene.Register(registry, benzene.NewTopic("legacy:relay"), welcomeHandler(greeterClient)); err != nil {
-			log.Fatalf("register legacy:relay: %v", err)
-		}
+		benzene.MustRegister(registry, benzene.NewTopic("legacy:relay"), welcomeHandler(greeterClient))
 	}, nil, []httpbinding.Route{
 		{Method: http.MethodPost, Path: "/relay", Topic: benzene.NewTopic("legacy:relay")},
 	})
