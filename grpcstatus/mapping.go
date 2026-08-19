@@ -35,7 +35,7 @@ const (
 // ToGRPC maps a Benzene status to its gRPC status code (wire-contracts.md §4.2, forward).
 // An unrecognized or empty status maps to Internal (13), matching the table's own
 // "UnexpectedError, unknown, missing -> Internal" row.
-func ToGRPC(status benzene.Status) int {
+func ToGRPC(status benzene.Status, isSuccessful ...bool) int {
 	switch status {
 	case benzene.StatusOk, benzene.StatusIgnored, benzene.StatusCreated, benzene.StatusAccepted,
 		benzene.StatusUpdated, benzene.StatusDeleted:
@@ -58,7 +58,15 @@ func ToGRPC(status benzene.Status) int {
 		return codeResourceExhausted
 	case benzene.StatusTimeout:
 		return codeDeadlineExceeded
-	default: // StatusUnexpectedError, an application-defined status, or empty
+	case benzene.StatusUnexpectedError:
+		return codeInternal
+	default: // an application-defined status, or empty
+		// Same rule as httpstatus.ToHTTP, kept symmetrical on purpose: only an
+		// application-defined status consults isSuccessful, and only to avoid reporting a
+		// deliberately-successful custom status as a server error.
+		if len(isSuccessful) > 0 && isSuccessful[0] {
+			return codeOK
+		}
 		return codeInternal
 	}
 }

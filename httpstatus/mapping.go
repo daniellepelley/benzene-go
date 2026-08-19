@@ -5,9 +5,14 @@ package httpstatus
 import benzene "github.com/daniellepelley/benzene-go"
 
 // ToHTTP maps a Benzene status to its HTTP status code (wire-contracts.md §4.1, forward).
-// An unrecognized or empty status maps to 500, matching the table's own
-// "UnexpectedError, unknown, missing -> 500" row.
-func ToHTTP(status benzene.Status) int {
+//
+// A status in the §3 vocabulary maps by its own row regardless of anything else. The optional
+// isSuccessful decides only for an APPLICATION-DEFINED status, which has no row: a failed one
+// maps to 500, and one carried on a result explicitly marked successful (the
+// Set(status, payload, isSuccessful) escape hatch) maps to 200 rather than being reported as a
+// server error. Omitted, an unknown status is treated as a failure - the safe default for a
+// caller that cannot tell. Variadic so every existing single-argument call still compiles.
+func ToHTTP(status benzene.Status, isSuccessful ...bool) int {
 	switch status {
 	case benzene.StatusOk, benzene.StatusIgnored:
 		return 200
@@ -37,7 +42,12 @@ func ToHTTP(status benzene.Status) int {
 		return 503
 	case benzene.StatusTimeout:
 		return 504
-	default: // StatusUnexpectedError, an application-defined status, or empty
+	case benzene.StatusUnexpectedError:
+		return 500
+	default: // an application-defined status, or empty
+		if len(isSuccessful) > 0 && isSuccessful[0] {
+			return 200
+		}
 		return 500
 	}
 }

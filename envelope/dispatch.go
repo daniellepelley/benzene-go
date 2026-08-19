@@ -10,7 +10,6 @@ package envelope
 import (
 	"context"
 	"encoding/json"
-	"strings"
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/wire"
@@ -104,7 +103,12 @@ func toResponse(result benzene.ResultInfo) wire.Response {
 
 	payload := result.ResultPayload()
 	if payload == nil {
-		return wire.Response{StatusCode: string(status), Headers: map[string]string{}, Body: ""}
+		return wire.Response{
+			StatusCode:   string(status),
+			Headers:      map[string]string{},
+			Body:         "",
+			IsSuccessful: boolPtr(true),
+		}
 	}
 
 	body, err := json.Marshal(payload)
@@ -115,23 +119,29 @@ func toResponse(result benzene.ResultInfo) wire.Response {
 		StatusCode: string(status),
 		Headers:    map[string]string{"content-type": "application/json"},
 		Body:       string(body),
+		// Stated outright (§1.2) rather than left for a peer to infer from the status. It is what
+		// lets an application-defined status ride on a SUCCESSFUL result - the escape hatch a few
+		// health-check-shaped results use - without a reader classifying it as a failure.
+		IsSuccessful: boolPtr(true),
 	}
 }
 
+func boolPtr(v bool) *bool { return &v }
+
 func errorResponse(result benzene.ResultInfo) wire.Response {
-	payload := wire.ErrorPayload{
-		Status: string(result.ResultStatus()),
-		Detail: strings.Join(result.ResultErrors(), ", "),
-	}
+	payload := wire.NewErrorPayload(string(result.ResultStatus()), result.ResultErrors())
 	body, err := json.Marshal(payload)
 	if err != nil {
-		// ErrorPayload is a plain struct of strings - Marshal cannot fail on it in practice,
-		// but degrade to an empty body rather than panic if it somehow ever does.
+		// ErrorPayload is a plain struct of strings and slices - Marshal cannot fail on it in
+		// practice, but degrade to an empty body rather than panic if it somehow ever does.
 		body = []byte("{}")
 	}
 	return wire.Response{
 		StatusCode: string(result.ResultStatus()),
-		Headers:    map[string]string{"content-type": "application/json"},
-		Body:       string(body),
+		// application/problem+json: the body IS an RFC 9457 problem document (§1.3). Readers must
+		// accept application/json too, so this is safe for an existing peer.
+		Headers:      map[string]string{"content-type": "application/problem+json"},
+		Body:         string(body),
+		IsSuccessful: boolPtr(false),
 	}
 }

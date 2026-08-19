@@ -6,7 +6,10 @@
 // serialization, reusable by every transport binding and outbound client.
 package wire
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // Request is the inbound message envelope (wire-contracts.md §1.1), used whenever a
 // Benzene client sends to a Benzene service over a transport with no richer native
@@ -32,21 +35,96 @@ type Response struct {
 	// Body is the pre-serialized response payload: on success, the handler's response
 	// payload; on failure, the serialized ErrorPayload (§1.3).
 	Body string `json:"body"`
+	// IsSuccessful, when set, states outright whether the result succeeded (§1.2), rather than
+	// leaving a reader to classify StatusCode against a vocabulary it may not fully share. It is
+	// what lets an application-defined status be carried on a SUCCESSFUL result - the
+	// Set(status, payload, isSuccessful) escape hatch - without a peer mistaking it for a failure.
+	// A pointer so it is omitted rather than emitted as false when a writer does not set it, and
+	// so a reader can tell "absent" (fall back to classifying the status) from "explicitly false".
+	IsSuccessful *bool `json:"isSuccessful,omitempty"`
 }
 
-// ErrorPayload is the problem-details-shaped error payload written as a Response's Body
-// when the result is unsuccessful (wire-contracts.md §1.3).
+// ErrorPayload is the RFC 9457 problem document written as a Response's Body when the result is
+// unsuccessful (wire-contracts.md §1.3). A genuine problem document, not a problem-shaped struct.
+//
+// The member that used to be named Status carried the Benzene status STRING, colliding with RFC
+// 9457's own status, which is the integer HTTP response code. The 2026-08 revision resolved that
+// by rename rather than by dropping the RFC alignment: the Benzene status now travels as
+// BenzeneStatus, and Status is the integer HTTP code - present only on an HTTP binding, omitted
+// entirely (not zero, not null) wherever no HTTP response exists.
 type ErrorPayload struct {
-	// Status is the Benzene status, repeated from the envelope.
-	Status string `json:"status"`
-	// Detail is the result's error messages, joined with ", ". A missing/empty Detail
-	// yields an error-free failed result on the reading side.
-	Detail string `json:"detail"`
-	// Type, Title, and Instance are reserved for RFC 7807 alignment. Writers MAY emit them
-	// as null or omit them; this package omits them (omitempty).
-	Type     string `json:"type,omitempty"`
-	Title    string `json:"title,omitempty"`
+	// Type is the §3.1 registry URI for the status, or an application's own URI. An opaque
+	// identifier: readers compare by string equality and never dereference it.
+	Type string `json:"type,omitempty"`
+	// Title is a short human summary of the type, fixed per type. Never asserted by conformance.
+	Title string `json:"title,omitempty"`
+	// Status is the integer HTTP response code, on HTTP bindings only (§4.1), where it MUST equal
+	// the code actually sent. Omitted everywhere else - a pointer so that zero is never mistaken
+	// for "HTTP 0". Benzene clients MUST NOT classify a result from this member: classification is
+	// envelope-first (§1.2).
+	Status *int `json:"status,omitempty"`
+	// Detail is the result's error messages, joined with ", " - the compatibility member every
+	// existing reader can keep using on its own. A missing/empty Detail with no Errors yields an
+	// error-free failed result on the reading side.
+	Detail string `json:"detail,omitempty"`
+	// Instance is optional and application-owned. The framework never fabricates it.
 	Instance string `json:"instance,omitempty"`
+	// BenzeneStatus is the §3 status string, mirroring the envelope's StatusCode. Required: it is
+	// the transport-neutral discriminator, present regardless of whether Status is.
+	BenzeneStatus string `json:"benzeneStatus,omitempty"`
+	// Errors, when present, is authoritative and ordered - it supersedes the withdrawn "recover
+	// errors by splitting detail on ', '" rule, which was never safe because messages contain
+	// commas. A reader with no Errors treats Detail as a single opaque message.
+	Errors []ProblemError `json:"errors,omitempty"`
+}
+
+// ProblemError is one entry of ErrorPayload.Errors (wire-contracts.md §1.3).
+type ProblemError struct {
+	// Message is the human-readable error message. Required.
+	Message string `json:"message"`
+	// Field is the producer's property path, when it has one (JSON Pointer for schema-based
+	// validators, the host language's property path otherwise). Optional.
+	Field string `json:"field,omitempty"`
+	// Code is a machine-readable, producer-owned rule identifier, emitted verbatim - never
+	// normalized or reworded by the framework. Optional.
+	Code string `json:"code,omitempty"`
+}
+
+// NewErrorPayload builds the transport-neutral problem document for a status and its error
+// messages: type and title from the §3.1 registry (both omitted for an application-defined
+// status), detail joined with ", ", benzeneStatus always, and errors listed individually.
+//
+// Status is deliberately left nil. An HTTP binding sets it to the code it is actually sending
+// (§4.1); every other transport omits it, because there is no HTTP response for it to equal.
+func NewErrorPayload(status string, errors []string) ErrorPayload {
+	payload := ErrorPayload{
+		Type:          ProblemType(status),
+		Title:         ProblemTitle(status),
+		Detail:        strings.Join(errors, ", "),
+		BenzeneStatus: status,
+	}
+	for _, message := range errors {
+		payload.Errors = append(payload.Errors, ProblemError{Message: message})
+	}
+	return payload
+}
+
+// Messages returns the problem's error messages: Errors when present (authoritative and ordered),
+// otherwise Detail as a single opaque message, otherwise none.
+func (e ErrorPayload) Messages() []string {
+	if len(e.Errors) > 0 {
+		messages := make([]string, 0, len(e.Errors))
+		for _, item := range e.Errors {
+			if item.Message != "" {
+				messages = append(messages, item.Message)
+			}
+		}
+		return messages
+	}
+	if e.Detail != "" {
+		return []string{e.Detail}
+	}
+	return nil
 }
 
 // MarshalRequest serializes r to JSON.

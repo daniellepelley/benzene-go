@@ -2,6 +2,7 @@ package wire
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 )
 
@@ -85,7 +86,7 @@ func TestResponse_WireFieldNamesAreCamelCase(t *testing.T) {
 }
 
 func TestErrorPayload_RoundTrip(t *testing.T) {
-	original := ErrorPayload{Status: "not-found", Detail: "no handler found for topic order:create"}
+	original := NewErrorPayload("not-found", []string{"no handler found for topic order:create"})
 
 	data, err := MarshalErrorPayload(original)
 	if err != nil {
@@ -96,13 +97,40 @@ func TestErrorPayload_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UnmarshalErrorPayload() error = %v", err)
 	}
-	if got != original {
+	// reflect.DeepEqual rather than ==: the struct now holds a slice, so it is not comparable.
+	if !reflect.DeepEqual(got, original) {
 		t.Errorf("got = %+v, want %+v", got, original)
 	}
 }
 
-func TestErrorPayload_ReservedFieldsOmittedWhenEmpty(t *testing.T) {
-	data, err := MarshalErrorPayload(ErrorPayload{Status: "not-found", Detail: "missing"})
+// TestNewErrorPayload_IsARealProblemDocument pins the §1.3 shape: the registry type and title for
+// the status, benzeneStatus as the transport-neutral discriminator, detail as the joined
+// compatibility member, and errors listing each message individually and in order.
+func TestNewErrorPayload_IsARealProblemDocument(t *testing.T) {
+	payload := NewErrorPayload("validation-error", []string{"first error", "second error"})
+
+	if payload.Type != ProblemBase+"validation-error" {
+		t.Errorf("Type = %q, want the §3.1 registry URI", payload.Type)
+	}
+	if payload.Title != "Validation failed" {
+		t.Errorf("Title = %q, want the registry title", payload.Title)
+	}
+	if payload.BenzeneStatus != "validation-error" {
+		t.Errorf("BenzeneStatus = %q, want the Benzene status string", payload.BenzeneStatus)
+	}
+	if payload.Detail != "first error, second error" {
+		t.Errorf("Detail = %q, want the messages joined with \", \"", payload.Detail)
+	}
+	if len(payload.Errors) != 2 || payload.Errors[0].Message != "first error" || payload.Errors[1].Message != "second error" {
+		t.Errorf("Errors = %+v, want both messages in order", payload.Errors)
+	}
+}
+
+// TestNewErrorPayload_OmitsStatusWhereThereIsNoHTTPResponse pins the member that used to collide:
+// RFC 9457's status is the integer HTTP code, so it must be absent - not zero, not null - on every
+// transport that has no HTTP response (§1.3). An HTTP binding sets it (§4.1).
+func TestNewErrorPayload_OmitsStatusWhereThereIsNoHTTPResponse(t *testing.T) {
+	data, err := MarshalErrorPayload(NewErrorPayload("not-found", []string{"missing"}))
 	if err != nil {
 		t.Fatalf("MarshalErrorPayload() error = %v", err)
 	}
@@ -111,16 +139,74 @@ func TestErrorPayload_ReservedFieldsOmittedWhenEmpty(t *testing.T) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
-	for _, field := range []string{"type", "title", "instance"} {
+	if _, present := raw["status"]; present {
+		t.Errorf("status should be omitted where there is no HTTP response, got: %s", data)
+	}
+	if raw["benzeneStatus"] != "not-found" {
+		t.Errorf("benzeneStatus = %v, want not-found: %s", raw["benzeneStatus"], data)
+	}
+}
+
+// TestNewErrorPayload_ApplicationDefinedStatusGetsNoFabricatedType: §3.1 says an application's
+// failure carries its own URI or none - the framework never invents one under benzene.app.
+func TestNewErrorPayload_ApplicationDefinedStatusGetsNoFabricatedType(t *testing.T) {
+	payload := NewErrorPayload("quota-exhausted", []string{"over limit"})
+
+	if payload.Type != "" {
+		t.Errorf("Type = %q, want empty for an application-defined status", payload.Type)
+	}
+	if payload.Title != "" {
+		t.Errorf("Title = %q, want empty for an application-defined status", payload.Title)
+	}
+	if payload.BenzeneStatus != "quota-exhausted" {
+		t.Errorf("BenzeneStatus = %q, want the application's status verbatim", payload.BenzeneStatus)
+	}
+}
+
+// TestErrorPayload_Messages_PrefersErrorsOverDetail pins the withdrawal of the old "split detail on
+// ', '" rule: errors is authoritative and ordered when present, and detail is ONE opaque message
+// when it is not - never split, because messages contain commas.
+func TestErrorPayload_Messages_PrefersErrorsOverDetail(t *testing.T) {
+	withErrors := ErrorPayload{
+		Detail: "ignored, because errors wins",
+		Errors: []ProblemError{{Message: "first, with a comma"}, {Message: "second"}},
+	}
+	if got := withErrors.Messages(); !reflect.DeepEqual(got, []string{"first, with a comma", "second"}) {
+		t.Errorf("Messages() = %q, want the errors array verbatim", got)
+	}
+
+	detailOnly := ErrorPayload{Detail: "one message, containing a comma"}
+	if got := detailOnly.Messages(); !reflect.DeepEqual(got, []string{"one message, containing a comma"}) {
+		t.Errorf("Messages() = %q, want detail as ONE opaque message", got)
+	}
+
+	if got := (ErrorPayload{}).Messages(); len(got) != 0 {
+		t.Errorf("Messages() = %q, want none for an empty payload", got)
+	}
+}
+
+func TestErrorPayload_OptionalMembersOmittedWhenEmpty(t *testing.T) {
+	data, err := MarshalErrorPayload(ErrorPayload{BenzeneStatus: "not-found", Detail: "missing"})
+	if err != nil {
+		t.Fatalf("MarshalErrorPayload() error = %v", err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	for _, field := range []string{"type", "title", "instance", "status", "errors"} {
 		if _, ok := raw[field]; ok {
-			t.Errorf("reserved field %q should be omitted when empty, got: %s", field, data)
+			t.Errorf("optional field %q should be omitted when empty, got: %s", field, data)
 		}
 	}
 }
 
-func TestErrorPayload_ReservedFieldsPresentWhenSet(t *testing.T) {
+func TestErrorPayload_OptionalMembersPresentWhenSet(t *testing.T) {
+	httpStatus := 404
 	data, err := MarshalErrorPayload(ErrorPayload{
-		Status: "not-found", Detail: "missing", Type: "about:blank", Title: "Not Found", Instance: "/orders/123",
+		BenzeneStatus: "not-found", Detail: "missing", Type: "about:blank", Title: "Not Found",
+		Instance: "/orders/123", Status: &httpStatus,
 	})
 	if err != nil {
 		t.Fatalf("MarshalErrorPayload() error = %v", err)
@@ -134,6 +220,9 @@ func TestErrorPayload_ReservedFieldsPresentWhenSet(t *testing.T) {
 		if got := raw[field]; got != want {
 			t.Errorf("field %q = %v, want %q", field, got, want)
 		}
+	}
+	if raw["status"] != float64(404) {
+		t.Errorf("status = %v, want 404 as a number", raw["status"])
 	}
 }
 

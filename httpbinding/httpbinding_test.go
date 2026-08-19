@@ -367,3 +367,57 @@ func TestListenAddr(t *testing.T) {
 		}
 	})
 }
+
+// TestWriteNativeResponse_HTTPFailureCarriesTheHTTPStatusAndProblemContentType pins
+// wire-contracts.md §4.1's two HTTP-only obligations on a problem body: the `status` member equal
+// to the code actually sent (the transport-neutral document omits it, §1.3), and
+// content-type: application/problem+json.
+func TestWriteNativeResponse_HTTPFailureCarriesTheHTTPStatusAndProblemContentType(t *testing.T) {
+	rec := httptest.NewRecorder()
+	failed := false
+	writeNativeResponse(rec, wire.Response{
+		StatusCode:   "not-found",
+		Headers:      map[string]string{"content-type": "application/json"},
+		Body:         `{"type":"https://benzene.app/problems/not-found","benzeneStatus":"not-found","detail":"missing"}`,
+		IsSuccessful: &failed,
+	})
+
+	if rec.Code != 404 {
+		t.Errorf("HTTP code = %d, want 404", rec.Code)
+	}
+	if got := rec.Header().Get("content-type"); got != "application/problem+json" {
+		t.Errorf("content-type = %q, want application/problem+json", got)
+	}
+	var problem map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &problem); err != nil {
+		t.Fatalf("body is not JSON: %v; body = %s", err, rec.Body.String())
+	}
+	if problem["status"] != float64(404) {
+		t.Errorf("problem status = %v, want 404 equal to the code sent", problem["status"])
+	}
+	if problem["benzeneStatus"] != "not-found" {
+		t.Errorf("benzeneStatus = %v, want not-found (unchanged)", problem["benzeneStatus"])
+	}
+}
+
+// A success response is untouched: no status member injected, content-type left alone.
+func TestWriteNativeResponse_SuccessIsUntouched(t *testing.T) {
+	rec := httptest.NewRecorder()
+	ok := true
+	writeNativeResponse(rec, wire.Response{
+		StatusCode:   "ok",
+		Headers:      map[string]string{"content-type": "application/json"},
+		Body:         `{"greeting":"hello"}`,
+		IsSuccessful: &ok,
+	})
+
+	if rec.Code != 200 {
+		t.Errorf("HTTP code = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("content-type"); got != "application/json" {
+		t.Errorf("content-type = %q, want application/json for a success", got)
+	}
+	if rec.Body.String() != `{"greeting":"hello"}` {
+		t.Errorf("body = %s, want it passed through unchanged", rec.Body.String())
+	}
+}

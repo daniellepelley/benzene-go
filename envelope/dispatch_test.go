@@ -195,11 +195,22 @@ func TestDispatch_MissingHandlerIsNotFound(t *testing.T) {
 	if err := json.Unmarshal([]byte(resp.Body), &errPayload); err != nil {
 		t.Fatalf("json.Unmarshal(resp.Body) error = %v; body = %s", err, resp.Body)
 	}
-	if errPayload.Status != string(benzene.StatusNotFound) {
-		t.Errorf("errPayload.Status = %q, want %q", errPayload.Status, benzene.StatusNotFound)
+	// The Benzene status travels as benzeneStatus; Status is RFC 9457's integer HTTP code and is
+	// absent on a non-HTTP transport like this one (wire-contracts.md §1.3).
+	if errPayload.BenzeneStatus != string(benzene.StatusNotFound) {
+		t.Errorf("errPayload.BenzeneStatus = %q, want %q", errPayload.BenzeneStatus, benzene.StatusNotFound)
+	}
+	if errPayload.Status != nil {
+		t.Errorf("errPayload.Status = %v, want it omitted where there is no HTTP response", *errPayload.Status)
+	}
+	if errPayload.Type != wire.ProblemBase+"not-found" {
+		t.Errorf("errPayload.Type = %q, want the §3.1 registry URI", errPayload.Type)
 	}
 	if errPayload.Detail == "" {
 		t.Error("errPayload.Detail should describe the missing topic")
+	}
+	if len(errPayload.Errors) == 0 {
+		t.Error("errPayload.Errors should list the message individually (§1.3: authoritative and ordered)")
 	}
 }
 

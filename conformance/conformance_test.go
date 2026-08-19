@@ -48,6 +48,10 @@ func TestConformance_StatusVocabulary(t *testing.T) {
 type mappingRow struct {
 	From string `json:"from"`
 	To   string `json:"to"`
+	// IsSuccessful distinguishes the two "<unknown>" forward rows: an application-defined status
+	// on a failed result vs one on a result explicitly marked successful. Absent (nil) on every
+	// known-status row, where it has no effect.
+	IsSuccessful *bool `json:"isSuccessful"`
 }
 
 type mappingFixture struct {
@@ -70,7 +74,7 @@ func TestConformance_HTTPStatusMapping(t *testing.T) {
 				if err != nil {
 					t.Fatalf("fixture row %q has non-numeric \"to\" %q", row.From, row.To)
 				}
-				if got := httpstatus.ToHTTP(status); got != want {
+				if got := httpstatus.ToHTTP(status, successFlags(row)...); got != want {
 					t.Errorf("ToHTTP(%q) = %d, want %d", row.From, got, want)
 				}
 			})
@@ -120,7 +124,7 @@ func TestConformance_GRPCStatusMapping(t *testing.T) {
 				if !ok {
 					t.Fatalf("fixture row %q has unrecognized gRPC code name %q", row.From, row.To)
 				}
-				if got := grpcstatus.ToGRPC(status); got != want {
+				if got := grpcstatus.ToGRPC(status, successFlags(row)...); got != want {
 					t.Errorf("ToGRPC(%q) = %d, want %d (%s)", row.From, got, want, row.To)
 				}
 			})
@@ -188,6 +192,14 @@ type envelopeCaseFixture struct {
 			StatusCode string            `json:"statusCode"`
 			Body       map[string]any    `json:"body,omitempty"`
 			Headers    map[string]string `json:"headers,omitempty"`
+			// IsSuccessful, when the fixture states it, is checked exactly against the response
+			// envelope's own member (§1.2) - not inferred from the status.
+			IsSuccessful *bool `json:"isSuccessful,omitempty"`
+			// BodyExclude names members that MUST NOT appear in the parsed body. It is how the
+			// fixtures pin the withdrawal of the old `status`-as-a-string member (§1.3): asserting
+			// the new members are present would otherwise pass even for a writer that also still
+			// emits the old one.
+			BodyExclude []string `json:"bodyExclude,omitempty"`
 		} `json:"expected"`
 	} `json:"cases"`
 }
@@ -223,6 +235,19 @@ func TestConformance_EnvelopeCases(t *testing.T) {
 				}
 				for _, msg := range subsetMismatches(c.Expected.Body, actualBody) {
 					t.Errorf("body %s", msg)
+				}
+				for _, member := range c.Expected.BodyExclude {
+					if _, present := actualBody[member]; present {
+						t.Errorf("body must not contain %q: %s", member, resp.Body)
+					}
+				}
+			}
+
+			if c.Expected.IsSuccessful != nil {
+				if resp.IsSuccessful == nil {
+					t.Errorf("isSuccessful is absent, want %v stated outright (§1.2)", *c.Expected.IsSuccessful)
+				} else if *resp.IsSuccessful != *c.Expected.IsSuccessful {
+					t.Errorf("isSuccessful = %v, want %v", *resp.IsSuccessful, *c.Expected.IsSuccessful)
 				}
 			}
 
@@ -294,4 +319,13 @@ func must(t *testing.T, err error) {
 	if err != nil {
 		t.Fatalf("setup error = %v", err)
 	}
+}
+
+// successFlags turns a fixture row's optional isSuccessful into the variadic argument the forward
+// mappers take: nothing when the row does not carry one.
+func successFlags(row mappingRow) []bool {
+	if row.IsSuccessful == nil {
+		return nil
+	}
+	return []bool{*row.IsSuccessful}
 }

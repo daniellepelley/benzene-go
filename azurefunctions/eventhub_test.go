@@ -118,8 +118,8 @@ func TestEventHubHandler_StopsAtFirstFailureAndSkipsLaterEvents(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("json.Unmarshal(error payload) error = %v; body = %s", err, rec.Body.String())
 	}
-	if payload.Status == "" {
-		t.Errorf("error payload Status is empty; body = %s", rec.Body.String())
+	if payload.BenzeneStatus == "" {
+		t.Errorf("error payload benzeneStatus is empty; body = %s", rec.Body.String())
 	}
 	if len(seen) != 1 {
 		t.Fatalf("pipeline ran %d times, want exactly 1 (stopped before the second event)", len(seen))

@@ -98,10 +98,13 @@ func toResult(resp wire.Response) benzene.Result[json.RawMessage] {
 	// the server-side envelope rendering and .NET's IsSuccessful (= !IsFailure).
 	if status.IsFailure() {
 		errPayload, parseErr := wire.UnmarshalErrorPayload([]byte(resp.Body))
-		if parseErr != nil || errPayload.Detail == "" {
+		// Messages() prefers the problem document's errors array, which is authoritative and
+		// ordered, and falls back to detail as ONE opaque message - never splitting it on ", ",
+		// a rule the RFC 9457 revision withdrew because error messages contain commas.
+		if parseErr != nil {
 			return benzene.Fail[json.RawMessage](status)
 		}
-		return benzene.Fail[json.RawMessage](status, errPayload.Detail)
+		return benzene.Fail[json.RawMessage](status, errPayload.Messages()...)
 	}
 
 	if resp.Body == "" {

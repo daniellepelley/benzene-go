@@ -13,6 +13,7 @@
 package httpbinding
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"os"
@@ -273,10 +274,44 @@ func writeNativeResponse(w http.ResponseWriter, resp wire.Response) {
 	for key, value := range resp.Headers {
 		w.Header().Set(key, value)
 	}
-	w.WriteHeader(httpstatus.ToHTTP(benzene.Status(resp.StatusCode)))
-	if resp.Body != "" {
-		w.Write([]byte(resp.Body))
+
+	successful := !benzene.Status(resp.StatusCode).IsFailure()
+	if resp.IsSuccessful != nil {
+		successful = *resp.IsSuccessful
 	}
+	code := httpstatus.ToHTTP(benzene.Status(resp.StatusCode), successful)
+	body := resp.Body
+	if !successful && body != "" {
+		// wire-contracts.md §4.1: an HTTP failure whose body is a problem document MUST carry the
+		// `status` member equal to the code actually being sent. The transport-neutral document
+		// omits it (§1.3) precisely because most transports have no HTTP response for it to equal,
+		// so the HTTP binding is where it gets filled in.
+		if withStatus, ok := problemWithHTTPStatus(body, code); ok {
+			body = withStatus
+			w.Header().Set("content-type", "application/problem+json")
+		}
+	}
+
+	w.WriteHeader(code)
+	if body != "" {
+		w.Write([]byte(body))
+	}
+}
+
+// problemWithHTTPStatus re-serializes a problem document with its `status` member set to code.
+// Reports false, leaving the body untouched, when it is not a JSON object - an empty body, or a
+// peer sending something this binding should pass through rather than guess at.
+func problemWithHTTPStatus(body string, code int) (string, bool) {
+	var problem map[string]any
+	if err := json.Unmarshal([]byte(body), &problem); err != nil || problem == nil {
+		return body, false
+	}
+	problem["status"] = code
+	encoded, err := json.Marshal(problem)
+	if err != nil {
+		return body, false
+	}
+	return string(encoded), true
 }
 
 // The listen-address convention for an HTTP-fronted Benzene service. Cloud Run, Knative, App
