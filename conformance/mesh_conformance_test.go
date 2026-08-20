@@ -64,13 +64,31 @@ type meshDescriptorFixture struct {
 	} `json:"serviceInfo"`
 	ExpectedDescriptor map[string]any `json:"expectedDescriptor"`
 	Hash               struct {
-		Prefix                    string `json:"prefix"`
-		HexLength                 int    `json:"hexLength"`
-		InvariantToInstanceID     bool   `json:"invariantToInstanceId"`
-		SensitiveToServiceVersion bool   `json:"sensitiveToServiceVersion"`
-		SensitiveToTopics         bool   `json:"sensitiveToTopics"`
-		SensitiveToConsumes       bool   `json:"sensitiveToConsumes"`
+		Prefix    string `json:"prefix"`
+		HexLength int    `json:"hexLength"`
+		// Pointers, not bools. A missing key must be distinguishable from a key set to false:
+		// see asserted() below for why that distinction is load-bearing.
+		InvariantToInstanceID     *bool `json:"invariantToInstanceId"`
+		SensitiveToServiceVersion *bool `json:"sensitiveToServiceVersion"`
+		SensitiveToTopics         *bool `json:"sensitiveToTopics"`
+		SensitiveToProduces       *bool `json:"sensitiveToProduces"`
 	} `json:"hash"`
+}
+
+// asserted reports whether the fixture asks for a hash property, and fails the test outright if the
+// fixture does not mention it at all.
+//
+// The distinction matters more than it looks. This runner spent the whole producer/consumer role
+// inversion reading "sensitiveToConsumes" after the fixture had renamed the key to
+// "sensitiveToProduces". Decoded into a plain bool that was simply false, the subtest skipped
+// itself, and a green run meant nothing. A key the fixture does not carry is drift between runner
+// and fixture - never permission to stop checking.
+func asserted(t *testing.T, flag *bool, key string) bool {
+	t.Helper()
+	if flag == nil {
+		t.Fatalf("fixture hash section has no %q - the runner and the fixture have drifted", key)
+	}
+	return *flag
 }
 
 func TestConformance_MeshDescriptorCases(t *testing.T) {
@@ -109,7 +127,7 @@ func TestConformance_MeshDescriptorCases(t *testing.T) {
 	})
 
 	t.Run("hash-invariant-to-instance-id", func(t *testing.T) {
-		if !fixture.Hash.InvariantToInstanceID {
+		if !asserted(t, fixture.Hash.InvariantToInstanceID, "invariantToInstanceId") {
 			t.Skip("not asserted by the fixture")
 		}
 		other := info
@@ -120,7 +138,7 @@ func TestConformance_MeshDescriptorCases(t *testing.T) {
 	})
 
 	t.Run("hash-sensitive-to-service-version", func(t *testing.T) {
-		if !fixture.Hash.SensitiveToServiceVersion {
+		if !asserted(t, fixture.Hash.SensitiveToServiceVersion, "sensitiveToServiceVersion") {
 			t.Skip("not asserted by the fixture")
 		}
 		bumped := info
@@ -131,7 +149,7 @@ func TestConformance_MeshDescriptorCases(t *testing.T) {
 	})
 
 	t.Run("hash-sensitive-to-topics", func(t *testing.T) {
-		if !fixture.Hash.SensitiveToTopics {
+		if !asserted(t, fixture.Hash.SensitiveToTopics, "sensitiveToTopics") {
 			t.Skip("not asserted by the fixture")
 		}
 		grown := canonicalRegistry(t)
@@ -141,14 +159,14 @@ func TestConformance_MeshDescriptorCases(t *testing.T) {
 		}
 	})
 
-	t.Run("hash-sensitive-to-consumes", func(t *testing.T) {
-		if !fixture.Hash.SensitiveToConsumes {
+	t.Run("hash-sensitive-to-produces", func(t *testing.T) {
+		if !asserted(t, fixture.Hash.SensitiveToProduces, "sensitiveToProduces") {
 			t.Skip("not asserted by the fixture")
 		}
 		grown := canonicalOutboundRegistry(t)
-		must(t, mesh.RegisterOutbound[conformanceLogRequest, any](grown, benzene.NewTopic("conformance:extra-consumed")))
+		must(t, mesh.RegisterOutbound[conformanceLogRequest, any](grown, benzene.NewTopic("conformance:extra-produced")))
 		if got := mesh.Describe(canonicalRegistry(t), grown, info).DescriptorHash; got == descriptor.DescriptorHash {
-			t.Errorf("hash did not change with the consumed-topic set: %q", got)
+			t.Errorf("hash did not change with the produced-topic set: %q", got)
 		}
 	})
 }
