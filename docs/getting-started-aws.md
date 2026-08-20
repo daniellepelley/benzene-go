@@ -2,8 +2,9 @@
 
 Benzene runs on AWS Lambda as a single custom-runtime binary that answers several event sources
 through one middleware pipeline. The same handler you write is reached over HTTP (a Lambda Function
-URL or API Gateway), a direct envelope invoke, SQS, SNS, DynamoDB Streams, and EventBridge — adding
-a transport is one line of wiring in `main`, never a change to your handler.
+URL or API Gateway), a direct envelope invoke, SQS, SNS, EventBridge, DynamoDB Streams, Kinesis,
+S3, and MSK/self-managed Kafka — adding a transport is one line of wiring in `main`, never a change
+to your handler.
 
 This guide starts from the runnable
 [`examples/aws-lambda-helloworld`](../examples/aws-lambda-helloworld) and ends with a Lambda deployed
@@ -39,8 +40,9 @@ go get github.com/daniellepelley/benzene-go
 ```
 
 The root module (`benzene-go`) carries the pipeline, the HTTP binding, the `awslambda` runtime, and
-the zero-dependency event sources (`awsdynamodb`). The transports that need the AWS SDK — `awssqs`,
-`awssns`, `awseventbridge` — are separate modules; `go get` them only when you wire one up (see
+the zero-dependency event sources (`awsdynamodb`, `awskinesis`, `awskafka`, `awss3`). The transports
+that need the AWS SDK for their outbound client — `awssqs`, `awssns`, `awseventbridge` — are
+separate modules; `go get` them only when you wire one up (see
 [Supported event sources](#supported-event-sources)).
 
 ## 2. Define a message handler
@@ -200,7 +202,8 @@ native event and returns its native response:
   for a fake before `Configure` builds the pipeline, the standard way to isolate a handler in a test
 
 The event-source `Send*` helpers (`awssqs.SendSQS`, `awssns.SendSNS`,
-`benzenetest.SendDynamoDBStream`) follow the same shape — see each section below.
+`benzenetest.SendDynamoDBStream`, `benzenetest.SendKinesisStream`, `benzenetest.SendKafkaEvent`,
+`benzenetest.SendS3Event`) follow the same shape — see each section below.
 
 ```bash
 go test ./...
@@ -288,7 +291,7 @@ curl -X POST "$FUNCTION_URL/greet" -d '{"name":""}'
 
 A Benzene Lambda routes any of these to the same handlers by topic. Each is a different `Handler`
 constructor you hand to `awslambda.Start` (or dispatch to from a combined `newHandler` like the one
-above). Go currently supports the four below.
+above).
 
 | Source | Package | Entry point | Module |
 |---|---|---|---|
@@ -297,7 +300,13 @@ above). Go currently supports the four below.
 | SQS | `awssqs` | `awssqs.Handler(builder)` | own module (AWS SDK) |
 | SNS | `awssns` | `awssns.Handler(builder)` | own module (AWS SDK) |
 | DynamoDB Streams | `awsdynamodb` | `awsdynamodb.Handler(builder)` | root (zero deps) |
+| Kinesis Data Streams | `awskinesis` | `awskinesis.Handler(builder)` | root (zero deps) |
+| MSK / self-managed Kafka | `awskafka` | `awskafka.Handler(builder)` | root (zero deps) |
+| S3 event notifications | `awss3` | `awss3.Handler(builder)` | root (zero deps) |
 | EventBridge | `awseventbridge` | `awseventbridge.Handler(builder)` | own module (AWS SDK) |
+
+The SQS/SNS/EventBridge modules need the AWS SDK only for their **outbound** publish clients; their
+inbound Lambda handlers are as dependency-free as the rest.
 
 The topic-resolution and failure semantics of each source follow the language-neutral
 [transport bindings](https://benzene.app/docs/specification/transport-bindings) spec.
@@ -380,6 +389,72 @@ failures := benzenetest.SendDynamoDBStream(t, host, "INSERT", "orders", "seq-1",
 // failures is empty on success, or holds the sequence number on failure
 ```
 
+### Kinesis Data Streams
+
+A Lambda triggered by a Kinesis stream event source mapping. Zero-dependency (records arrive as
+plain JSON with base64 data), so it lives in the root module. `awskinesis.Handler(builder)`:
+
+```go
+func main() {
+	awslambda.Start(awskinesis.Handler(newApp().Run()))
+}
+```
+
+The topic is the **stream name**, parsed from the record's stream ARN — a Kinesis record has no
+per-record event type, so the stream itself is the routing key (unlike DynamoDB's
+`{tableName}:{eventName}`). The body is the record's `data` base64-decoded back into the bytes the
+producer wrote (typically JSON); metadata (partition key, sequence number, …) is exposed as
+`kinesis-`-prefixed headers. Like DynamoDB Streams, records are ordered: the batch is processed
+sequentially, stops at the first failure, and reports that record's `SequenceNumber` as the partial
+batch failure (requires `ReportBatchItemFailures` on the mapping). See
+[`examples/aws-kinesis-helloworld`](../examples/aws-kinesis-helloworld). Test with
+`benzenetest.SendKinesisStream(t, host, streamName, sequenceNumber, payload)` — it returns the
+failing sequence numbers as a `[]string`.
+
+### MSK / self-managed Kafka
+
+A Lambda triggered by an Amazon MSK or self-managed-Kafka event source mapping — distinct from the
+self-hosted [`kafka` module](getting-started-kafka.md), which runs its own consumer loop against a
+broker. AWS's *managed* mapping delivers records as plain JSON, so this binding is zero-dependency
+and lives in the root module. `awskafka.Handler(builder)`:
+
+```go
+func main() {
+	awslambda.Start(awskafka.Handler(newApp().Run()))
+}
+```
+
+The topic is the **Kafka topic verbatim** (one Kafka topic = one Benzene topic, matching the
+self-hosted module); the body is the record's `value` base64-decoded; Kafka headers pass through
+verbatim. Records are grouped by topic-partition and each partition is processed sequentially,
+stopping at its first failure and reporting `{partition, offset}` for that partition's resume — an
+object-shaped `batchItemFailures` identifier, so the mapping needs
+`FunctionResponseTypes: [ReportBatchItemFailures]`. See
+[`examples/aws-kafka-helloworld`](../examples/aws-kafka-helloworld). Test with
+`benzenetest.SendKafkaEvent(t, host, topic, partition, offset, payload)` — it returns failing
+`{partition}@{offset}` identifiers as a `[]string`.
+
+### S3 event notifications
+
+A Lambda invoked by S3 when an object is created or removed. Zero-dependency (S3 delivers the
+notification as plain JSON; the object's contents are never included), so it lives in the root
+module. `awss3.Handler(builder)`:
+
+```go
+func main() {
+	awslambda.Start(awss3.Handler(newApp().Run()))
+}
+```
+
+The topic is `"{bucketName}:{eventName}"` (e.g. `"my-bucket:ObjectCreated:Put"`), so a handler
+registers `benzene.NewTopic("my-bucket:ObjectCreated:Put")`. The body is the object **metadata**
+(bucket, key, size, etag) — the object key URL-decoded, since S3 delivers it URL-encoded — and
+`s3-`-prefixed headers carry the same fields. An S3-to-Lambda notification is an **async**
+invocation with no partial-batch mechanism, so a failed record returns a Go error, triggering AWS's
+async-invoke retry (like SNS and EventBridge); S3 delivery is at-least-once, so handlers must be
+idempotent. See [`examples/aws-s3-helloworld`](../examples/aws-s3-helloworld). Test with
+`benzenetest.SendS3Event(t, host, bucket, eventName, key)` — it returns an `error`, nil on success.
+
 ### EventBridge
 
 A Lambda invoked by an EventBridge rule. Its own module (the outbound client needs the AWS SDK).
@@ -399,14 +474,6 @@ client are lifted from the reserved `_benzeneHeaders` key inside `detail`. Like 
 fire-and-forget and one event per invocation; a non-success result returns a Go error, triggering
 AWS's async-invoke retry. The `awseventbridge` module also has an outbound `Client` (via `PutEvents`).
 
-### Not yet in the Go port
-
-The .NET guide additionally lists **S3**, **Kinesis Data Streams**, and **Kafka-on-Lambda** (MSK /
-self-managed) as event sources. The Go port does **not** have these Lambda bindings yet — there is no
-`awss3`, `awskinesis`, or Kafka-on-Lambda package. (A standalone `kafka` module exists for the
-consumer-group/broker path, but not the Lambda event-source-mapping shape.) See
-[`ROADMAP.md`](../ROADMAP.md) for what's planned.
-
 ## IAM
 
 The IAM requirements differ per source, and the example templates encode the minimum for each:
@@ -423,6 +490,13 @@ The IAM requirements differ per source, and the example templates encode the min
 - **DynamoDB Streams** — the execution role needs the stream-read permissions
   (`dynamodb:GetRecords`, `GetShardIterator`, `DescribeStream`, `ListStreams`); SAM's `Type: DynamoDB`
   event wires the mapping and role.
+- **Kinesis** — the equivalent stream-read permissions; SAM's `Type: Kinesis` event wires the
+  mapping and role (see [`examples/aws-kinesis-helloworld/template.yaml`](../examples/aws-kinesis-helloworld/template.yaml)).
+- **MSK / Kafka** — SAM's `Type: MSK` (or `Type: SelfManagedKafka`) event wires the mapping and the
+  cluster-access permissions the poller needs (see
+  [`examples/aws-kafka-helloworld/template.yaml`](../examples/aws-kafka-helloworld/template.yaml)).
+- **S3** — S3 invokes the function via a resource-based Lambda permission (SAM's `Type: S3` event
+  wires it), so no extra execution-role IAM is needed to receive.
 - **EventBridge** — invokes via a resource-based Lambda permission (the rule's target), so no extra
   execution-role IAM to receive.
 
@@ -483,7 +557,10 @@ lazy initialization inside your services over eager work (e.g. opening a DB conn
   version of this guide
 - [`examples/aws-sqs-helloworld`](../examples/aws-sqs-helloworld),
   [`examples/aws-sns-helloworld`](../examples/aws-sns-helloworld),
-  [`examples/aws-dynamodb-helloworld`](../examples/aws-dynamodb-helloworld) — the event-source
+  [`examples/aws-dynamodb-helloworld`](../examples/aws-dynamodb-helloworld),
+  [`examples/aws-kinesis-helloworld`](../examples/aws-kinesis-helloworld),
+  [`examples/aws-kafka-helloworld`](../examples/aws-kafka-helloworld),
+  [`examples/aws-s3-helloworld`](../examples/aws-s3-helloworld) — the event-source
   transports end to end
 - [Transport bindings](https://benzene.app/docs/specification/transport-bindings) and
   [wire contracts](https://benzene.app/docs/specification/wire-contracts) — the language-neutral
