@@ -42,6 +42,10 @@ jobs:
           mkdir -p /tmp/canonical
           cp /tmp/benzene/docs/specification/conformance/*.json /tmp/canonical/
           git -C /tmp/benzene rev-parse HEAD > /tmp/canonical-head
+          # The pinned commit is usually older than HEAD and the clone above is shallow, so fetch it
+          # explicitly - the SPEC_VERSION check needs both trees to compare.
+          git -C /tmp/benzene fetch --depth 1 origin "$(tr -d '[:space:]' < conformance/SPEC_VERSION)" \
+            2>/dev/null || true
 
       - name: Diff vendored snapshot against canonical
         run: |
@@ -76,22 +80,43 @@ jobs:
           fi
           echo "vendored fixtures match canonical ($(ls conformance/testdata/*.json | wc -l) files)"
 
-      - name: Verify SPEC_VERSION pins the canonical commit
+      - name: Verify SPEC_VERSION names a real canonical commit with these fixtures
+        # Deliberately NOT "pinned == canonical HEAD". Canonical main moves for reasons that have
+        # nothing to do with this directory - work notes, the website, the mesh UI - and a pin
+        # required to equal HEAD would turn every such commit into a red build here, training
+        # everyone to ignore the check. The pin's job is provenance: it must name a real commit
+        # whose conformance directory is the one we vendored. Being behind HEAD is fine and normal;
+        # being behind HEAD *across a change to the fixtures* is what this catches, and the byte
+        # diff above catches the rest.
         run: |
           set -euo pipefail
           canonical=$(cat /tmp/canonical-head)
           pinned=$(tr -d '[:space:]' < conformance/SPEC_VERSION)
-          if [ "$pinned" != "$canonical" ]; then
-            echo "::error file=conformance/SPEC_VERSION::SPEC_VERSION pins $pinned, canonical HEAD is $canonical"
-            echo ""
-            echo "The step above already proved the vendored fixtures are byte-identical to canonical"
-            echo "HEAD, so the snapshot IS from $canonical - the pin just does not say so. Write the"
-            echo "canonical commit into conformance/SPEC_VERSION:"
-            echo ""
+
+          if [ "$pinned" = "$canonical" ]; then
+            echo "SPEC_VERSION pins canonical HEAD ($canonical)"
+            exit 0
+          fi
+
+          if ! git -C /tmp/benzene cat-file -e "$pinned^{commit}" 2>/dev/null; then
+            echo "::error file=conformance/SPEC_VERSION::SPEC_VERSION pins $pinned, which is not a commit in benzene"
+            echo "The pin must name a real canonical commit. Re-vendor and write the commit you took:"
             echo "  echo $canonical > conformance/SPEC_VERSION"
-            echo ""
-            echo "This is what stops a re-vendor that forgot the pin from passing: without it the pin"
-            echo "is a comment, and it drifted thirteen commits behind before anything noticed."
             exit 1
           fi
-          echo "SPEC_VERSION pins canonical HEAD ($canonical)"
+
+          pinned_tree=$(git -C /tmp/benzene rev-parse "$pinned:docs/specification/conformance")
+          head_tree=$(git -C /tmp/benzene rev-parse "$canonical:docs/specification/conformance")
+          if [ "$pinned_tree" != "$head_tree" ]; then
+            echo "::error file=conformance/SPEC_VERSION::The fixtures changed between $pinned and canonical HEAD $canonical"
+            echo ""
+            echo "The byte diff above passed, so the working snapshot matches HEAD - but the pin names"
+            echo "an older commit whose fixtures differ, so it no longer records where this snapshot"
+            echo "came from. Move the pin forward:"
+            echo ""
+            echo "  echo $canonical > conformance/SPEC_VERSION"
+            exit 1
+          fi
+
+          echo "SPEC_VERSION pins $pinned; its conformance tree is identical to canonical HEAD ($canonical)."
+          echo "Behind HEAD by $(git -C /tmp/benzene rev-list --count "$pinned..$canonical" 2>/dev/null || echo '?') commit(s), none touching the fixtures - fine."
