@@ -38,7 +38,7 @@ and status vocabulary.
 
 ## Prerequisites
 
-- **Go 1.24 or newer** (this module targets `go 1.24`).
+- **Go 1.24.7 or newer** (the root module's `go` directive).
 
 ## 1. Set up a project
 
