@@ -46,7 +46,7 @@ from what the running services actually do (spec §4, §4.2 - the main repo's 20
   `newService` call registers an outbound record for `greet` (`mesh.RegisterOutbound` in
   `main.go`) - that, and only that, is why `greet`'s topic row shows *consumers: frontdoor*,
   and it would show it even with zero traffic. frontdoor's outbound client is separately
-  wrapped in `mesh.TraceContextDecorator`, forwarding the current invocation's span as a
+  wrapped in `mesh.WithTraceContext`, forwarding the current invocation's span as a
   `traceparent` header - but that propagation only lets the collector show the *already-declared*
   edge as observed (spec §4.2); it plays no part in putting the edge on the graph. legacy-portal
   calls greeter exactly as much, but never registers, so it never appears as a consumer no

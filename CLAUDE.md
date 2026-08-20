@@ -268,7 +268,7 @@ alongside the shared spec.
   (`Requirement{ID,Name,Satisfied,Detail}`, `Satisfied()`/`Unsatisfied()`). Crucially it is **honest**:
   `New` deliberately does not wire R6's outbound feeds (register/heartbeat/traces need a collector +
   push-exporter lifecycle the app owns) or R8 (trace propagation - `mesh.TraceMiddleware` inbound +
-  the client `TraceContextDecorator` outbound), so `Satisfied()` is **false** for a `New`-only build
+  the client `WithTraceContext` outbound), so `Satisfied()` is **false** for a `New`-only build
   and `Unsatisfied()` is the exact to-do list to reach full conformance (mirroring .NET's
   `CloudServiceProfileReport` evaluating all of R1-R8, not just the HTTP surface). `WithoutDescriptor()`
   additionally drops R5/R6 per §4 exposure control. It composes the existing pieces - a thin assembler;

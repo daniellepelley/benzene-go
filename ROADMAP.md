@@ -15,7 +15,7 @@ delivery order - just the current honest picture, kept up to date as things land
   `x-version` payload-version fallback list `ResolveVersion` reads and `RouterMiddleware`/
   `WithVersionKeys` route on). A service sets it once on the
   `ApplicationBuilder` (`UseReservedNames`) for its inbound bindings and on its outbound clients'
-  `ReservedNames` field / `CorrelationDecoratorWithKey`, so a colliding key is renamed in one
+  `ReservedNames` field / `WithCorrelationIDKey`, so a colliding key is renamed in one
   place for both directions; the defaults carry the interop baseline.
 - `httpstatus` - the Benzene<->HTTP status mapping tables (conformance-verified).
 - `grpcstatus` - the Benzene<->gRPC status mapping tables (conformance-verified), in raw
@@ -178,7 +178,7 @@ delivery order - just the current honest picture, kept up to date as things land
   with `cloudserviceprobe`'s outside audit (`CloudServiceProfileReport` vs `.Probe` in .NET). It is
   honest about scope: `New` deliberately does NOT wire R6's outbound feeds (register/heartbeat/traces
   - they need a collector + push-exporter lifecycle the app owns) or R8 (trace propagation -
-  `mesh.TraceMiddleware` inbound + the client `TraceContextDecorator` outbound), so `Satisfied()` is
+  `mesh.TraceMiddleware` inbound + the client `WithTraceContext` outbound), so `Satisfied()` is
   false for a `New`-only build and `Unsatisfied()` is the exact to-do list to reach full conformance -
   the report never reports the HTTP surface as if it were the whole profile. `WithoutDescriptor()`
   additionally drops R5/R6 per §4 exposure control. A thin assembler over existing pieces; nothing
@@ -234,10 +234,10 @@ delivery order - just the current honest picture, kept up to date as things land
   that event's `PropertiesArray` entry with `QueueHandler`'s precedence, stopping at the first
   failure since the host checkpoints per invocation and redelivers the whole batch anyway. Only the
   SDK-typed BlobStorage function trigger stays deferred.
-- `client` - outbound-client decorators (`CorrelationDecorator`, `RetryDecorator`) over a
+- `client` - outbound-client decorators (`WithCorrelationID`, `WithRetry`) over a
   transport-agnostic `Sender` interface; `httpclient.Client` satisfies it structurally. The
   spec's third cross-cutting client behavior, trace-context propagation, is
-  `mesh.TraceContextDecorator` - it lives in `mesh` (which owns the `Span` it forwards) so
+  `mesh.WithTraceContext` - it lives in `mesh` (which owns the `Span` it forwards) so
   `client` stays free of a mesh dependency.
 - `cors` - portable CORS middleware for HTTP-fronted services (origin/scheme/port matching,
   header wildcard, preflight handling), a Go port of the main repo's own portable CORS
@@ -258,7 +258,7 @@ delivery order - just the current honest picture, kept up to date as things land
 - `mesh` - Phases 1-2 of `docs/design/mesh.md`: the service `Descriptor` derived from the live
   `Registry` (topics + startup-derived JSON Schemas + `descriptorHash`),
   reserved-`benzene:mesh`-topic descriptor middleware, `TraceMiddleware` with W3C `traceparent`
-  propagation (plus `TraceContextDecorator`, its outbound counterpart - the client decorator that
+  propagation (plus `WithTraceContext`, its outbound counterpart - the client decorator that
   forwards the current span's `traceparent` onto outbound calls, so a collector derives
   who-calls-whom without a declared edge), the `LogExporter`/`PushExporter` trace feeds, and the
   issue feed's emitter
@@ -333,9 +333,9 @@ delivery order - just the current honest picture, kept up to date as things land
 - `diagnostics` - OpenTelemetry-based diagnostics middleware, in its **own Go module** (see
   `RELEASING.md`) - the Go equivalent of the main repo's `Benzene.Diagnostics`: one server
   span per invocation (topic-named, W3C traceparent join, `benzene.topic`/`benzene.status`
-  attributes) plus invocation count/duration metrics, and `TraceContextDecorator` - the OTel-path
+  attributes) plus invocation count/duration metrics, and `WithTraceContext` - the OTel-path
   outbound client decorator that injects the active span context as a W3C `traceparent`, the
-  sibling of `mesh.TraceContextDecorator` for services observed with OpenTelemetry. Depends on the
+  sibling of `mesh.WithTraceContext` for services observed with OpenTelemetry. Depends on the
   OpenTelemetry *API* only (`go.opentelemetry.io/otel`); the application owns the SDK and exporter,
   and standard OTLP export covers Datadog/Zipkin/etc. without vendor-specific packages (as promised
   below).
