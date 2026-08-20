@@ -1,6 +1,6 @@
 // Package mesh implements the Benzene Mesh design (the main repo's
 // docs/specification/mesh.md, originally extracted from this package's earlier
-// docs/design/mesh.md): a service's self-description (Descriptor) derived from its live
+// work/archive/mesh.md): a service's self-description (Descriptor) derived from its live
 // Registry (what it provides, §2) and its live OutboundRegistry (what it consumes, §2.3) -
 // including per-topic request/response JSON Schemas derived at startup from the registered
 // types, and the contract hash that makes drift detectable (schema.go) - a reserved-topic

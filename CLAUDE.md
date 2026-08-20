@@ -273,7 +273,7 @@ alongside the shared spec.
   `CloudServiceProfileReport` evaluating all of R1-R8, not just the HTTP surface). `WithoutDescriptor()`
   additionally drops R5/R6 per §4 exposure control. It composes the existing pieces - a thin assembler;
   don't reimplement descriptor/health/spec logic here, and don't let the report over-claim conformance.
-- `mesh/` - originally Phases 1-2 of this repo's own `docs/design/mesh.md`, now the main
+- `mesh/` - originally Phases 1-2 of this repo's own `work/archive/mesh.md`, now the main
   repo's `docs/specification/mesh.md` §§1-3: service `Descriptor` derived from the `Registry`
   (`topics` - what the service provides - + JSON Schemas derived at startup from the
   `TReq`/`TRes` types `Register` captures) AND from the `OutboundRegistry`
@@ -291,7 +291,7 @@ alongside the shared spec.
   the mesh, never break the service. The `benzene:mesh:*` wire topics and shapes (wire.go) are
   shared with the
   collector and promoted to the main repo's spec (`docs/specification/mesh.md` there, now
-  the normative text; `docs/design/mesh-spec-draft.md` is the historical draft), pinned by
+  the normative text; `work/archive/mesh-spec-draft.md` is the historical draft), pinned by
   the vendored `mesh-*.json` fixtures in `conformance/`. `SpecHandler(descriptor)` serves the same
   registry-derived descriptor as the Cloud Service Profile's R5 derived-spec document over a plain
   GET (mounted at `httpbinding.SpecPath`, `/benzene/spec`) - the profile permits Benzene's own
@@ -323,7 +323,7 @@ alongside the shared spec.
   already valid - unlike OpenAPI 3.0), deep-copied so `Generate` never mutates the descriptor.
   `Handler` serves it over a plain GET, the AsyncAPI sibling of `openapi.Handler`/`mesh.SpecHandler`.
 - `meshd/` - the collector (main repo's `docs/specification/mesh.md` §4-§6, originally
-  Phases 3-4 of this repo's own `docs/design/mesh.md`): an ordinary Benzene service
+  Phases 3-4 of this repo's own `work/archive/mesh.md`): an ordinary Benzene service
   (register/heartbeat/traces/issues ingest + `benzene:mesh:query:*` read models over an
   in-memory store with a bounded trace ring; the `benzene:mesh:issues` feed of mesh.md §4.1
   merges failure signatures by fingerprint and surfaces them on the fleet view) and the Mesh

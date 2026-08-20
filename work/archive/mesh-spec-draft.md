@@ -1,3 +1,5 @@
+> ARCHIVED 2026-08-20: superseded — promoted and merged as the main repo's `docs/specification/mesh.md` (the normative text); this repo vendors its `mesh-*-cases.json` fixtures in `conformance/testdata/` (passing). Kept as the historical draft the promotion was authored from.
+
 # Mesh wire contracts — DRAFT for promotion to the main repo's specification
 
 **Status: SUPERSEDED — promotion merged.** This draft has been promoted and merged to

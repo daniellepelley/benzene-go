@@ -1,6 +1,6 @@
 # mesh-helloworld
 
-The whole Benzene Mesh story ([`docs/design/mesh.md`](../../docs/design/mesh.md), all
+The whole Benzene Mesh story ([`work/archive/mesh.md`](../../work/archive/mesh.md), all
 phases - including the wire contracts promoted to the main repo's spec as
 `docs/specification/mesh.md`) running in one process: a `meshd` collector and three
 services, one of them deliberately reduced.

@@ -1,5 +1,5 @@
 // Package meshd implements the Benzene Mesh collector (originally Phases 3-4 of this repo's own
-// docs/design/mesh.md, now the main repo's docs/specification/mesh.md §§4-6). It is itself an
+// work/archive/mesh.md, now the main repo's docs/specification/mesh.md §§4-6). It is itself an
 // ordinary Benzene service - its benzene:mesh:* topics live in a Registry, are served through a
 // Pipeline, and it serves its own descriptor on the reserved mesh topic - so deploying it
 // anywhere this module's bindings reach (Lambda, Functions, Cloud Run, plain HTTP) is the same

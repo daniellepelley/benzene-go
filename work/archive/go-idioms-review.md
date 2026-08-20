@@ -1,3 +1,5 @@
+> ARCHIVED 2026-08-20: actioned bar two named remainders (#1 the `ExampleSend*`/`Consumer` examples, #9 the builder `Use*` duplication), extracted to `ROADMAP.md` § "Next". Done items verified against the code 2026-08-20: `struct + Validate()` on all six self-hosted consumers/workers, no `*Decorator` identifiers, `benzene.Created`, typed DI keys taught in the examples.
+
 # Go-idiom & DX review of benzene-go
 
 A snapshot assessment of how well this port fits Go idioms and Go-developer expectations, and

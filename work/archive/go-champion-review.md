@@ -1,3 +1,5 @@
+> ARCHIVED 2026-08-20: actioned bar A2 (the transport `ExampleSend*` set) and A4 (opportunistic doc-comment lead-sentence polish), extracted to `ROADMAP.md` § "Next". A1/A3/C1/C2 verified in code 2026-08-20: `healthcheck.NamedCheck`, zero-value `TConfig` fallback in `App.Run`, unexported struct DI keys in all four flagship examples, the README Quickstart signpost.
+
 # Go-champion review of benzene-go
 
 A whole-implementation idiom + developer-experience assessment of the benzene-go port as it

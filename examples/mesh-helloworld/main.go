@@ -1,4 +1,4 @@
-// Command mesh-helloworld runs the whole Benzene Mesh story (docs/design/mesh.md and the
+// Command mesh-helloworld runs the whole Benzene Mesh story (work/archive/mesh.md and the
 // promoted spec, docs/specification/mesh.md in the main repo) in one process: a meshd
 // collector and three services demonstrating every mesh feature.
 //

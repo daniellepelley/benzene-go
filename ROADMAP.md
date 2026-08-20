@@ -255,7 +255,7 @@ delivery order - just the current honest picture, kept up to date as things land
   just this module). Unlike SQS's event source mapping, a direct SNS-to-Lambda subscription has
   no batch/partial-failure mechanism - `Handler` instead returns a Go error for a failed
   notification, triggering AWS's own async-invoke retry.
-- `mesh` - Phases 1-2 of `docs/design/mesh.md`: the service `Descriptor` derived from the live
+- `mesh` - Phases 1-2 of `work/archive/mesh.md`: the service `Descriptor` derived from the live
   `Registry` (topics + startup-derived JSON Schemas + `descriptorHash`),
   reserved-`benzene:mesh`-topic descriptor middleware, `TraceMiddleware` with W3C `traceparent`
   propagation (plus `WithTraceContext`, its outbound counterpart - the client decorator that
@@ -264,7 +264,7 @@ delivery order - just the current honest picture, kept up to date as things land
   issue feed's emitter
   (`IssueMiddleware` + `PushIssueExporter`: source-side classification, SHA-256 fingerprint, delta
   aggregation, liveness flush - mesh.md §4.1) - every feed independent and optional.
-- `meshd` - Phases 3-4 of `docs/design/mesh.md`: the collector (register/heartbeat/traces/issues
+- `meshd` - Phases 3-4 of `work/archive/mesh.md`: the collector (register/heartbeat/traces/issues
   ingest + `benzene:mesh:query:*` read models over an in-memory store with a bounded trace ring;
   the `benzene:mesh:issues` feed merges failure signatures by fingerprint and flags the feed's
   absence only when a failure needs explaining, per mesh.md §4.1) and
@@ -399,6 +399,21 @@ a single shared `ic` through `next`, so a faithful hedging middleware needs per-
 isolation - a core-concepts change (the `Middleware`/`next` contract), not a package-local one. It is
 flagged for a deliberate design decision rather than forced.
 
+Three DX remainders extracted from the archived reviews (`work/archive/go-idioms-review.md` #1/#9,
+`work/archive/go-champion-review.md` A2/A4) are also still open, all zero-dependency:
+
+- **The transport `Example` storefront.** 18 `Example*` functions now cover the core flow and the
+  building blocks, but there is no `ExampleSend*` for any transport shape family (queue / HTTP /
+  stream / fan-in - the families documented in `benzenetest/README.md`) and no `Example` on a
+  self-hosted `Consumer`, so `awssqs`/`kafka`/etc. render no runnable code on pkg.go.dev.
+- **`ApplicationBuilder` `Use*` duplication.** `UsePipeline` and `UseReservedNames` (`app.go`)
+  still duplicate the exported fields, leaving two ways to say the same thing.
+  `UseDefaultPipeline` earns its place as a shorthand and stays.
+- **Doc-comment lead sentences (opportunistic).** A few exported symbols still lead with a .NET
+  identifier rather than a caller-facing sentence (e.g. `codegen/gengo`'s `FormatGoName`). Fix
+  when touching the package for another reason; keep the cross-language interop notes, just not
+  as the lead sentence.
+
 ## Later - needs a dependency decision first
 
 Per `CLAUDE.md`: no third-party dependency without asking first. These are real, valuable
@@ -456,7 +471,7 @@ equivalent to port, not gaps in this port:
   `Benzene.CodeGen.Client` specifically so every port - including this one - could converge on one
   generation-semantics contract. See `docs/codegen-client.md`.
 - ~~**`Benzene.Mesh.*`** - doesn't need a per-language port~~ - **superseded.** This entry
-  predates `docs/design/mesh.md`. The mesh as actually designed is not just an HTTP
+  predates `work/archive/mesh.md`. The mesh as actually designed is not just an HTTP
   health-check aggregator: the service-side feeds (descriptor derivation from the live
   `Registry`, trace emission) are necessarily per-language, and this port ships them (`mesh`,
   `meshd` - see Done above). What stays true is that the *collector* is language-neutral: any

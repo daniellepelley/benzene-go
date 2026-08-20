@@ -59,7 +59,7 @@ func convertRequest[TReq any](raw any) (TReq, error) {
 // concrete request/response types captured at the Register call site (where TReq/TRes are
 // statically known and free to record - they are unrecoverable from the erased closure
 // afterwards). The types exist for startup-time introspection only - the mesh package
-// derives JSON Schemas from them (docs/design/mesh.md Phase 2); dispatch never touches
+// derives JSON Schemas from them (work/archive/mesh.md Phase 2); dispatch never touches
 // them and still recovers concrete results via ResultInfo, not reflection.
 type handlerRegistration struct {
 	handler  erasedHandler

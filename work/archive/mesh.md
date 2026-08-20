@@ -1,3 +1,5 @@
+> ARCHIVED 2026-08-20: actioned — all phases shipped in this repo as the `mesh/` and `meshd/` packages and `examples/mesh-helloworld`; the wire contracts are normative as the main repo's `docs/specification/mesh.md`, pinned by the vendored, passing `mesh-*-cases.json` fixtures in `conformance/testdata/`.
+
 # Benzene Mesh — design
 
 **Status: ALL PHASES COMPLETE (this repo's side).** The in-process `mesh/` package

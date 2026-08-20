@@ -131,7 +131,7 @@ Grade the implementation against these; each is a common finding:
 1. **Ground in the contract first.** Skim the language-neutral spec
    (`docs/specification/**` in the `Benzene` repo — concepts, wire contracts, status
    vocabulary, mesh, Cloud Service Profile, and especially `port-quality-standards.md`
-   and any `design-principles.md`) and the existing `docs/go-idioms-review.md` in this
+   and any `design-principles.md`) and the existing `work/archive/go-idioms-review.md` in this
    repo, so you know what is a real contract before you call something un-idiomatic.
    Read the .NET reference (`benzene-dotnet`) when you need to see what a shape is
    *for*.

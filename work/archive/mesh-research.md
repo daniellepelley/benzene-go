@@ -1,3 +1,5 @@
+> ARCHIVED 2026-08-20: actioned — the design this research argued for (`mesh.md`, alongside in this archive) shipped in full (`mesh/`, `meshd/`, the promoted spec). Kept as historical source material for future writing; re-verify any figure before quoting (collected July 2026).
+
 # Why Benzene Mesh — research findings and positioning
 
 **Purpose of this document.** Source material for future writing (blog posts, talks,
