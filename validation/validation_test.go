@@ -12,14 +12,28 @@ type createOrder struct {
 	Amount float64
 }
 
-// orderValidator is an ordinary Go validation function - the shape a service writes.
-func orderValidator(o createOrder) []string {
+// orderMessages is an ordinary Go validation function that only has messages - the shape a service
+// writes when there is nothing to add beyond the sentence. Messages() adapts it.
+func orderMessages(o createOrder) []string {
 	var errs []string
 	if o.ID == "" {
 		errs = append(errs, "id is required")
 	}
 	if o.Amount <= 0 {
 		errs = append(errs, "amount must be positive")
+	}
+	return errs
+}
+
+// orderValidator is the same rules stated structurally: each error names the field it came from and
+// the rule that rejected it, which is what reaches the caller's problem document.
+func orderValidator(o createOrder) []benzene.Error {
+	var errs []benzene.Error
+	if o.ID == "" {
+		errs = append(errs, benzene.Error{Message: "id is required", Field: "ID", Code: "required"})
+	}
+	if o.Amount <= 0 {
+		errs = append(errs, benzene.Error{Message: "amount must be positive", Field: "Amount", Code: "positive"})
 	}
 	return errs
 }
@@ -88,18 +102,59 @@ func TestValidatorFunc_Validate(t *testing.T) {
 		t.Errorf("Validate(valid) = %v, want nil", got)
 	}
 	if got := v.Validate(createOrder{}); len(got) != 2 {
-		t.Errorf("Validate(invalid) = %v, want 2 messages", got)
+		t.Errorf("Validate(invalid) = %v, want 2 errors", got)
+	}
+}
+
+func TestValidated_StructuredErrorsReachTheResult(t *testing.T) {
+	handler := Validated(ValidatorFunc[createOrder](orderValidator),
+		func(context.Context, createOrder) benzene.Result[string] { return benzene.Ok("created") })
+
+	result := handler(context.Background(), createOrder{})
+
+	if len(result.Errors) != 2 {
+		t.Fatalf("len(Errors) = %d, want 2", len(result.Errors))
+	}
+	if result.Errors[0].Field != "ID" || result.Errors[0].Code != "required" {
+		t.Errorf("Errors[0] = %+v, want the field and code the validator stated", result.Errors[0])
+	}
+	if result.Errors[1].Field != "Amount" || result.Errors[1].Code != "positive" {
+		t.Errorf("Errors[1] = %+v, want the field and code the validator stated", result.Errors[1])
+	}
+}
+
+func TestMessages_WrapsPlainMessagesAsMessageOnlyErrors(t *testing.T) {
+	v := Messages(orderMessages)
+
+	if got := v.Validate(createOrder{ID: "x", Amount: 1}); got != nil {
+		t.Errorf("Validate(valid) = %v, want nil", got)
+	}
+
+	got := v.Validate(createOrder{})
+	if len(got) != 2 {
+		t.Fatalf("Validate(invalid) = %v, want 2 errors", got)
+	}
+	if got[0].Message != "id is required" || got[0].Field != "" || got[0].Code != "" {
+		t.Errorf("got[0] = %+v, want the message alone - Messages must not invent a field or code", got[0])
+	}
+}
+
+func TestMessages_NilFunctionIsNilValidator(t *testing.T) {
+	// So Validated's nil-tolerance still applies to a validator built from a nil function, rather
+	// than producing a non-nil Validator that panics on the first request.
+	if v := Messages[createOrder](nil); v != nil {
+		t.Errorf("Messages(nil) = %v, want nil", v)
 	}
 }
 
 func TestCombine_ConcatenatesAndSkipsNil(t *testing.T) {
-	idRequired := ValidatorFunc[createOrder](func(o createOrder) []string {
+	idRequired := Messages(func(o createOrder) []string {
 		if o.ID == "" {
 			return []string{"id is required"}
 		}
 		return nil
 	})
-	amountPositive := ValidatorFunc[createOrder](func(o createOrder) []string {
+	amountPositive := Messages(func(o createOrder) []string {
 		if o.Amount <= 0 {
 			return []string{"amount must be positive"}
 		}
@@ -112,7 +167,7 @@ func TestCombine_ConcatenatesAndSkipsNil(t *testing.T) {
 		t.Errorf("Validate(valid) = %v, want nil", got)
 	}
 	got := combined.Validate(createOrder{})
-	if len(got) != 2 || got[0] != "id is required" || got[1] != "amount must be positive" {
+	if len(got) != 2 || got[0].Message != "id is required" || got[1].Message != "amount must be positive" {
 		t.Errorf("Validate(invalid) = %v, want both messages in order", got)
 	}
 }

@@ -14,10 +14,17 @@
 //	benzene.Register(registry, benzene.NewTopic("order:create"),
 //	    validation.Validated(orderValidator, createOrderHandler))
 //
-// On failure the result is benzene.ValidationError carrying the messages (wire-contracts.md §3's
+// On failure the result is a benzene.ValidationError carrying the problems (wire-contracts.md §3's
 // "validation-error" status), exactly as Benzene.DataAnnotations.ValidationMiddleware returns
 // BenzeneResult.ValidationError - so every transport binding maps it to that transport's native
 // validation-failure code without the handler running.
+//
+// A validator reports benzene.Error values, so it can say WHICH field failed and WHICH rule
+// rejected it, and both reach the caller's problem document (wire-contracts.md §1.3) rather than
+// being flattened into prose the caller has to parse. A validator with nothing to add beyond the
+// message wraps a plain messages function with Messages:
+//
+//	validation.Validated(validation.Messages(orderMessages), createOrderHandler)
 package validation
 
 import (
@@ -26,18 +33,44 @@ import (
 	benzene "github.com/daniellepelley/benzene-go"
 )
 
-// Validator reports zero or more human-readable validation errors for a request of type T. An
-// empty (or nil) result means the request is valid.
+// Validator reports zero or more validation errors for a request of type T. An empty (or nil)
+// result means the request is valid.
+//
+// The errors are structured (benzene.Error): Message is the only required member, and a validator
+// that knows the Field the value came from and the Code of the rule that rejected it should say so -
+// both travel to the caller intact. Messages adapts a validator that only has messages.
 type Validator[T any] interface {
-	Validate(request T) []string
+	Validate(request T) []benzene.Error
 }
 
 // ValidatorFunc adapts a plain function to a Validator, so a service can pass a function literal
 // wherever a Validator is expected.
-type ValidatorFunc[T any] func(request T) []string
+type ValidatorFunc[T any] func(request T) []benzene.Error
 
 // Validate calls f.
-func (f ValidatorFunc[T]) Validate(request T) []string { return f(request) }
+func (f ValidatorFunc[T]) Validate(request T) []benzene.Error { return f(request) }
+
+// Messages adapts a validator that reports plain message strings, wrapping each as a Message-only
+// benzene.Error. It is the short path for a validator with nothing to add beyond the message, and
+// keeps that case a single call rather than making every validator build structs:
+//
+//	validation.Messages(func(o createOrder) []string { ... })
+func Messages[T any](validate func(request T) []string) Validator[T] {
+	if validate == nil {
+		return nil
+	}
+	return ValidatorFunc[T](func(request T) []benzene.Error {
+		messages := validate(request)
+		if len(messages) == 0 {
+			return nil
+		}
+		errors := make([]benzene.Error, 0, len(messages))
+		for _, message := range messages {
+			errors = append(errors, benzene.Error{Message: message})
+		}
+		return errors
+	})
+}
 
 // Validated wraps handler so request is validated before it runs. When validator returns any
 // messages, handler is NOT called and a benzene.ValidationError result carrying those messages is
@@ -51,7 +84,7 @@ func Validated[TReq, TRes any](validator Validator[TReq], handler benzene.Handle
 	}
 	return func(ctx context.Context, request TReq) benzene.Result[TRes] {
 		if errors := validator.Validate(request); len(errors) > 0 {
-			return benzene.ValidationError[TRes](errors...)
+			return benzene.ValidationErrorWith[TRes](errors...)
 		}
 		return handler(ctx, request)
 	}
@@ -61,8 +94,8 @@ func Validated[TReq, TRes any](validator Validator[TReq], handler benzene.Handle
 // messages, so several focused validators compose into one without the caller writing the plumbing.
 // A nil entry is skipped. With no validators (or all nil) the combined validator always passes.
 func Combine[T any](validators ...Validator[T]) Validator[T] {
-	return ValidatorFunc[T](func(request T) []string {
-		var errors []string
+	return ValidatorFunc[T](func(request T) []benzene.Error {
+		var errors []benzene.Error
 		for _, validator := range validators {
 			if validator == nil {
 				continue
