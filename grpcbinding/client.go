@@ -85,7 +85,7 @@ func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[stri
 		if detail == "" {
 			detail = grpcResult.Code().String()
 		}
-		return benzene.Result[json.RawMessage]{Status: benzeneStatus, Errors: []string{detail}}
+		return benzene.Result[json.RawMessage]{Status: benzeneStatus, Errors: []benzene.Error{{Message: detail}}}
 	}
 
 	body, err := protojson.Marshal(resp)

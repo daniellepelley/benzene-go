@@ -202,7 +202,7 @@ func dispatch(ctx context.Context, builder *benzene.ApplicationBuilder, topic be
 func toRawResult(result benzene.ResultInfo) benzene.Result[json.RawMessage] {
 	payload := result.ResultPayload()
 	if payload == nil {
-		return benzene.Result[json.RawMessage]{Status: result.ResultStatus(), Errors: result.ResultErrors()}
+		return benzene.Result[json.RawMessage]{Status: result.ResultStatus(), Errors: benzene.ProblemsOf(result)}
 	}
 
 	raw, err := json.Marshal(payload)
@@ -210,5 +210,5 @@ func toRawResult(result benzene.ResultInfo) benzene.Result[json.RawMessage] {
 		return benzene.UnexpectedError[json.RawMessage]("inprocess: failed to serialize handler payload: " + err.Error())
 	}
 	rawMessage := json.RawMessage(raw)
-	return benzene.Result[json.RawMessage]{Status: result.ResultStatus(), Errors: result.ResultErrors(), Payload: &rawMessage}
+	return benzene.Result[json.RawMessage]{Status: result.ResultStatus(), Errors: benzene.ProblemsOf(result), Payload: &rawMessage}
 }

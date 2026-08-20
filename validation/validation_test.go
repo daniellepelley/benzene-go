@@ -58,7 +58,7 @@ func TestValidated_InvalidRequestShortCircuits(t *testing.T) {
 	if result.Status != benzene.StatusValidationError {
 		t.Errorf("status = %q, want %q", result.Status, benzene.StatusValidationError)
 	}
-	if len(result.Errors) != 2 || result.Errors[0] != "id is required" || result.Errors[1] != "amount must be positive" {
+	if len(result.Errors) != 2 || result.Errors[0].Message != "id is required" || result.Errors[1].Message != "amount must be positive" {
 		t.Errorf("errors = %v, want both validation messages", result.Errors)
 	}
 	if result.IsSuccessful() {

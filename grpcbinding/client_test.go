@@ -101,7 +101,7 @@ func TestClient_Send_FailureRecoversStatusFromTrailer(t *testing.T) {
 	if result.Status != benzene.StatusBadRequest {
 		t.Errorf("Status = %q, want %q", result.Status, benzene.StatusBadRequest)
 	}
-	if len(result.Errors) != 1 || result.Errors[0] != "name is required" {
+	if len(result.Errors) != 1 || result.Errors[0].Message != "name is required" {
 		t.Errorf("Errors = %v, want [\"name is required\"]", result.Errors)
 	}
 	if result.Payload != nil {
@@ -198,7 +198,7 @@ func TestClient_Send_EmptyErrorMessageFallsBackToCodeString(t *testing.T) {
 	if result.Status != benzene.StatusServiceUnavailable {
 		t.Fatalf("Status = %q, want %q", result.Status, benzene.StatusServiceUnavailable)
 	}
-	if len(result.Errors) != 1 || result.Errors[0] != codes.Unavailable.String() {
+	if len(result.Errors) != 1 || result.Errors[0].Message != codes.Unavailable.String() {
 		t.Errorf("Errors = %v, want [%q] (the code's own string when the status carries no message)", result.Errors, codes.Unavailable.String())
 	}
 }

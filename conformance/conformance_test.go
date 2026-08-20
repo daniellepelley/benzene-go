@@ -185,6 +185,46 @@ func conformanceStatusHandler(_ context.Context, req conformanceStatusRequest) b
 	return benzene.Fail[conformanceStatusResponse](status, req.Errors...)
 }
 
+// conformanceProblemRequest / conformanceProblemHandler are the canonical `conformance:problem`
+// handler (conformance/README.md "Canonical handlers"): always a validation-error carrying exactly
+// one structured error built from the request's message/field/code.
+//
+// When appType is given, the emitted problem document's `type` is that value verbatim instead of the
+// registry URI - the application-authored-problem case (wire-contracts.md §1.3). benzeneStatus is
+// still validation-error and errors still carries the one structured error either way.
+type conformanceProblemRequest struct {
+	Message string `json:"message"`
+	Field   string `json:"field,omitempty"`
+	Code    string `json:"code,omitempty"`
+	AppType string `json:"appType,omitempty"`
+}
+
+func conformanceProblemHandler(_ context.Context, req conformanceProblemRequest) benzene.Result[struct{}] {
+	problemError := benzene.Error{Message: req.Message, Field: req.Field, Code: req.Code}
+
+	if req.AppType != "" {
+		return benzene.ProblemResult[struct{}](benzene.Problem{
+			Type:          req.AppType,
+			BenzeneStatus: string(benzene.StatusValidationError),
+			Errors:        []benzene.Error{problemError},
+		})
+	}
+
+	return benzene.ValidationErrorWith[struct{}](problemError)
+}
+
+// canonicalHandlerRegistry registers exactly the handlers conformance/README.md's "Canonical
+// handlers" table names, and nothing else - cases targeting any other topic are asserting the
+// router's not-found behavior, so an extra registration here would quietly weaken them.
+func canonicalHandlerRegistry(t *testing.T) *benzene.Registry {
+	t.Helper()
+	registry := benzene.NewRegistry()
+	must(t, benzene.Register(registry, benzene.NewTopic("conformance:greet"), benzene.Handler[conformanceGreetRequest, conformanceGreetResponse](conformanceGreetHandler)))
+	must(t, benzene.Register(registry, benzene.NewTopic("conformance:status"), benzene.Handler[conformanceStatusRequest, conformanceStatusResponse](conformanceStatusHandler)))
+	must(t, benzene.Register(registry, benzene.NewTopic("conformance:problem"), benzene.Handler[conformanceProblemRequest, struct{}](conformanceProblemHandler)))
+	return registry
+}
+
 type envelopeCaseFixture struct {
 	Cases []struct {
 		Name    string `json:"name"`
@@ -213,10 +253,16 @@ func TestConformance_EnvelopeCases(t *testing.T) {
 	var fixture envelopeCaseFixture
 	loadFixture(t, "envelope-cases.json", &fixture)
 	requireCases(t, len(fixture.Cases), "envelope-cases", "cases")
+	runEnvelopeCases(t, fixture)
+}
 
-	registry := benzene.NewRegistry()
-	must(t, benzene.Register(registry, benzene.NewTopic("conformance:greet"), benzene.Handler[conformanceGreetRequest, conformanceGreetResponse](conformanceGreetHandler)))
-	must(t, benzene.Register(registry, benzene.NewTopic("conformance:status"), benzene.Handler[conformanceStatusRequest, conformanceStatusResponse](conformanceStatusHandler)))
+// runEnvelopeCases is the envelope case format (conformance/README.md) - shared, because
+// problem-details-cases.json's envelopeCases group is defined as being in "exactly the envelope case
+// format above". Running it through a second, similar-looking loop is how the two drift.
+func runEnvelopeCases(t *testing.T, fixture envelopeCaseFixture) {
+	t.Helper()
+
+	registry := canonicalHandlerRegistry(t)
 	container := benzene.NewContainer()
 	pipeline := benzene.NewPipeline(benzene.RouterMiddleware(registry))
 

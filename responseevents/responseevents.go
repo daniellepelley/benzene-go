@@ -58,8 +58,8 @@ func NewSenderPublisher(sender client.Sender) Publisher {
 		if result.IsSuccessful() {
 			return nil
 		}
-		if errs := result.Errors; len(errs) > 0 {
-			return fmt.Errorf("publish to %s returned status %q: %s", eventTopic, result.Status, strings.Join(errs, "; "))
+		if messages := result.ResultErrors(); len(messages) > 0 {
+			return fmt.Errorf("publish to %s returned status %q: %s", eventTopic, result.Status, strings.Join(messages, "; "))
 		}
 		return fmt.Errorf("publish to %s returned status %q", eventTopic, result.Status)
 	})

@@ -44,7 +44,7 @@ func Invoke[TReq, TRes any](ctx context.Context, builder *benzene.ApplicationBui
 // compile time) is left as a nil Payload rather than panicking, so a test sees a clear
 // zero-value payload to fail its own assertion on instead of a crash.
 func convertResult[TRes any](result benzene.ResultInfo) benzene.Result[TRes] {
-	out := benzene.Result[TRes]{Status: result.ResultStatus(), Errors: result.ResultErrors()}
+	out := benzene.Result[TRes]{Status: result.ResultStatus(), Errors: benzene.ProblemsOf(result)}
 	if payload := result.ResultPayload(); payload != nil {
 		if typed, ok := payload.(TRes); ok {
 			out.Payload = &typed

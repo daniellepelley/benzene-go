@@ -110,7 +110,7 @@ func TestClient_FailureStatusCarriesErrorDetail(t *testing.T) {
 	if result.Status != benzene.StatusNotFound {
 		t.Errorf("Status = %q, want %q", result.Status, benzene.StatusNotFound)
 	}
-	if len(result.Errors) == 0 || result.Errors[0] != "no such thing" {
+	if len(result.Errors) == 0 || result.Errors[0].Message != "no such thing" {
 		t.Errorf("Errors = %v, want the error detail", result.Errors)
 	}
 }

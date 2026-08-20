@@ -60,7 +60,7 @@ func TestInvoke_FailureReturnsErrorsAndNilPayload(t *testing.T) {
 	if result.Payload != nil {
 		t.Errorf("Payload = %+v, want nil", result.Payload)
 	}
-	if len(result.Errors) == 0 || result.Errors[0] != "name is required" {
+	if len(result.Errors) == 0 || result.Errors[0].Message != "name is required" {
 		t.Errorf("Errors = %v, want [%q]", result.Errors, "name is required")
 	}
 }
@@ -88,7 +88,7 @@ func TestInvoke_PipelineErrorIsServiceUnavailable(t *testing.T) {
 	if result.Status != benzene.StatusServiceUnavailable {
 		t.Errorf("Status = %q, want %q", result.Status, benzene.StatusServiceUnavailable)
 	}
-	if len(result.Errors) == 0 || result.Errors[0] != "boom" {
+	if len(result.Errors) == 0 || result.Errors[0].Message != "boom" {
 		t.Errorf("Errors = %v, want [%q]", result.Errors, "boom")
 	}
 }

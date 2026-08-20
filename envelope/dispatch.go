@@ -128,8 +128,24 @@ func toResponse(result benzene.ResultInfo) wire.Response {
 
 func boolPtr(v bool) *bool { return &v }
 
+// problemDocument builds the problem document for a failed result (wire-contracts.md §1.3).
+//
+// An application-authored document (benzene.ProblemResult) is emitted verbatim - deriving one from
+// the status instead would overwrite the application's own `type` URI with the registry URI, which
+// is the whole point of authoring it. Otherwise the document is derived from the status and the
+// result's structured errors, so a field and a code survive to the caller rather than being
+// flattened into prose.
+func problemDocument(result benzene.ResultInfo) wire.ErrorPayload {
+	if authored, ok := result.(benzene.ProblemDocumentInfo); ok {
+		if document := authored.ResultProblemDocument(); document != nil {
+			return *document
+		}
+	}
+	return wire.NewProblem(string(result.ResultStatus()), benzene.ProblemsOf(result))
+}
+
 func errorResponse(result benzene.ResultInfo) wire.Response {
-	payload := wire.NewErrorPayload(string(result.ResultStatus()), result.ResultErrors())
+	payload := problemDocument(result)
 	body, err := json.Marshal(payload)
 	if err != nil {
 		// ErrorPayload is a plain struct of strings and slices - Marshal cannot fail on it in

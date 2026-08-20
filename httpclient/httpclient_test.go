@@ -79,7 +79,7 @@ func TestSend_FailureCarriesDetail(t *testing.T) {
 	if result.Status != benzene.StatusBadRequest {
 		t.Fatalf("Status = %q, want %q", result.Status, benzene.StatusBadRequest)
 	}
-	if len(result.Errors) == 0 || result.Errors[0] != "name is required" {
+	if len(result.Errors) == 0 || result.Errors[0].Message != "name is required" {
 		t.Errorf("Errors = %v, want [%q]", result.Errors, "name is required")
 	}
 }

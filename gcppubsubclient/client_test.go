@@ -111,7 +111,7 @@ func TestSend(t *testing.T) {
 				t.Errorf("attributes = %v, want %v", fake.gotAttributes, tc.wantAttrs)
 			}
 			if tc.wantErrSubstr != "" {
-				if len(result.Errors) != 1 || result.Errors[0] != tc.wantErrSubstr {
+				if len(result.Errors) != 1 || result.Errors[0].Message != tc.wantErrSubstr {
 					t.Errorf("errors = %v, want [%q]", result.Errors, tc.wantErrSubstr)
 				}
 			}

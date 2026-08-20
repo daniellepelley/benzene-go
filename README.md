@@ -134,6 +134,31 @@ Go `error` is still used everywhere it belongs — *infrastructure* speaks `erro
 To map a Go `error` from a dependency at the handler edge, translate it to the status you want:
 `if err != nil { return benzene.UnexpectedError[Res](err.Error()) }`.
 
+#### Errors that carry a field and a code
+
+Every constructor above takes plain strings, and that stays the short path. When the producer knows
+more than a sentence — a validator knows *which* field failed and *which* rule rejected it — say so,
+and it travels all the way to the caller's RFC 9457 problem document instead of being flattened into
+prose the caller has to parse:
+
+```go
+return benzene.ValidationErrorWith[orderResponse](
+    benzene.Error{Message: "id is required", Field: "ID", Code: "NotEmpty"},
+)
+// → {"type":"https://benzene.app/problems/validation-error", "title":"Validation failed",
+//    "detail":"id is required", "benzeneStatus":"validation-error",
+//    "errors":[{"message":"id is required","field":"ID","code":"NotEmpty"}]}
+```
+
+`benzene.Error` is an alias of `wire.ProblemError`, so the value you build is the value that reaches
+the wire — there is no second shape to keep in step. `FailWith` is the same thing for any other
+status. `Result.Errors` is `[]benzene.Error`; `ResultErrors()` still returns `[]string` for the
+bindings that only ever wanted messages.
+
+A service that owns its own problem vocabulary can author the whole document and have Benzene emit
+it verbatim, `type` URI and all, with `benzene.ProblemResult[T](benzene.Problem{...})` — the escape
+hatch, for when the registry URI Benzene would derive from the status is not the one you want.
+
 ### `Container`/`Scope` is DI-lite — prefer closures; use a typed key when you need the container
 
 The `Container`/`Scope` is a small first-party DI helper (a named cross-language concept), **not** a

@@ -97,15 +97,29 @@ type ProblemError struct {
 // Status is deliberately left nil. An HTTP binding sets it to the code it is actually sending
 // (§4.1); every other transport omits it, because there is no HTTP response for it to equal.
 func NewErrorPayload(status string, errors []string) ErrorPayload {
+	problems := make([]ProblemError, 0, len(errors))
+	for _, message := range errors {
+		problems = append(problems, ProblemError{Message: message})
+	}
+	return NewProblem(status, problems)
+}
+
+// NewProblem is NewErrorPayload for errors that already carry a field and a code: same document,
+// same registry lookup, same joined detail, but each error reaches the wire whole rather than
+// flattened to its message. This is the constructor the dispatch path uses; NewErrorPayload is the
+// message-only convenience on top of it.
+func NewProblem(status string, errors []ProblemError) ErrorPayload {
+	messages := make([]string, 0, len(errors))
+	for _, item := range errors {
+		messages = append(messages, item.Message)
+	}
 	payload := ErrorPayload{
 		Type:          ProblemType(status),
 		Title:         ProblemTitle(status),
-		Detail:        strings.Join(errors, ", "),
+		Detail:        strings.Join(messages, ", "),
 		BenzeneStatus: status,
 	}
-	for _, message := range errors {
-		payload.Errors = append(payload.Errors, ProblemError{Message: message})
-	}
+	payload.Errors = append(payload.Errors, errors...)
 	return payload
 }
 
