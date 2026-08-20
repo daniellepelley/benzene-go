@@ -216,6 +216,9 @@ func UnmarshalErrorPayload(data []byte) (ErrorPayload, error) {
 	}
 	delete(loose, "status")
 
+	// Unreachable in practice, and deliberately left uncovered: `loose` is a map of RawMessages that
+	// json.Unmarshal just produced from `data`, so re-marshalling them cannot fail. Kept rather than
+	// ignored because swallowing a Marshal error would be worse than the branch being untested.
 	rest, err := json.Marshal(loose)
 	if err != nil {
 		return ErrorPayload{}, err
