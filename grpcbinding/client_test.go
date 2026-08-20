@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -245,4 +246,111 @@ func TestRecoverStatus(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestClient_Send_RecoversFieldsFromStatusDetails is the round trip this whole change exists for:
+// a server-side failure carrying two field-scoped errors goes out over a real gRPC connection and
+// arrives with both fields intact, rather than as one blob of joined prose (wire-contracts.md
+// §4.2). It runs against a live server rather than calling the mapper directly, because the
+// binding - not the mapping function - is where this was broken.
+func TestClient_Send_RecoversFieldsFromStatusDetails(t *testing.T) {
+	conn := newTestServer(t, UnaryServerInterceptor(newBuilderFor(t, validatedGreetHandler), greetRoutes()))
+	client := NewClient(conn, clientRoutes())
+
+	result := client.Send(withTimeout(t), benzene.NewTopic("greet"), nil, []byte(`{"name":"World"}`))
+
+	if result.Status != benzene.StatusValidationError {
+		t.Errorf("Status = %q, want %q", result.Status, benzene.StatusValidationError)
+	}
+	if len(result.Errors) != 2 {
+		t.Fatalf("Errors = %v, want both of the handler's errors", result.Errors)
+	}
+	want := []benzene.Error{
+		{Message: "name is required", Field: "/name"},
+		{Message: "greeting is too long", Field: "/greeting"},
+	}
+	for i, got := range result.Errors {
+		if got.Message != want[i].Message {
+			t.Errorf("Errors[%d].Message = %q, want %q", i, got.Message, want[i].Message)
+		}
+		if got.Field != want[i].Field {
+			t.Errorf("Errors[%d].Field = %q, want %q", i, got.Field, want[i].Field)
+		}
+		// google.rpc.BadRequest has no agreed home for an error's `code` yet, so the ports
+		// deliberately do not carry it - asserted so that inventing one is a test change, not a
+		// silent divergence between this port and the others.
+		if got.Code != "" {
+			t.Errorf("Errors[%d].Code = %q, want empty until the spec says where a code travels", i, got.Code)
+		}
+	}
+	if result.Payload != nil {
+		t.Error("Payload should be nil for a failure")
+	}
+}
+
+// TestClient_Send_FailureWithoutDetailsKeepsMessageOnlyError pins the fallback: a peer that sends
+// no BadRequest details still yields exactly what this client always produced - one error carrying
+// the status message.
+func TestClient_Send_FailureWithoutDetailsKeepsMessageOnlyError(t *testing.T) {
+	handler := func(_ context.Context, _ greetRequest) benzene.Result[greetResponse] {
+		return benzene.NotFound[greetResponse]()
+	}
+	conn := newTestServer(t, UnaryServerInterceptor(newBuilderFor(t, handler), greetRoutes()))
+	client := NewClient(conn, clientRoutes())
+
+	result := client.Send(withTimeout(t), benzene.NewTopic("greet"), nil, []byte(`{"name":"World"}`))
+
+	if result.Status != benzene.StatusNotFound {
+		t.Errorf("Status = %q, want %q", result.Status, benzene.StatusNotFound)
+	}
+	if len(result.Errors) != 1 || result.Errors[0].Message != "not-found" || result.Errors[0].Field != "" {
+		t.Errorf("Errors = %v, want a single message-only error", result.Errors)
+	}
+}
+
+// TestClient_Send_ForeignPeerWithoutDetailsIsUnaffected is the same fallback for a peer that isn't
+// Benzene at all - an ordinary gRPC server returning a plain status, with no details and no
+// benzene-status trailer.
+func TestClient_Send_ForeignPeerWithoutDetailsIsUnaffected(t *testing.T) {
+	conn := &fakeConn{err: grpcstatuspkg.Error(codes.NotFound, "no such greeting")}
+	client := NewClient(conn, clientRoutes())
+
+	result := client.Send(context.Background(), benzene.NewTopic("greet"), nil, []byte(`{"name":"World"}`))
+
+	if len(result.Errors) != 1 || result.Errors[0].Message != "no such greeting" {
+		t.Errorf("Errors = %v, want the status message as a single error", result.Errors)
+	}
+}
+
+func TestRecoverErrors(t *testing.T) {
+	t.Run("field violations become structured errors", func(t *testing.T) {
+		status, err := grpcstatuspkg.New(codes.InvalidArgument, "name is required").WithDetails(&errdetails.BadRequest{
+			FieldViolations: []*errdetails.BadRequest_FieldViolation{{Field: "/name", Description: "name is required"}},
+		})
+		if err != nil {
+			t.Fatalf("WithDetails() error = %v", err)
+		}
+		got := recoverErrors(status, "name is required")
+		if len(got) != 1 || got[0].Message != "name is required" || got[0].Field != "/name" {
+			t.Errorf("recoverErrors() = %v, want one error carrying the field", got)
+		}
+	})
+
+	t.Run("a detail that isn't a BadRequest falls back to the message", func(t *testing.T) {
+		status, err := grpcstatuspkg.New(codes.InvalidArgument, "boom").WithDetails(&errdetails.RetryInfo{})
+		if err != nil {
+			t.Fatalf("WithDetails() error = %v", err)
+		}
+		got := recoverErrors(status, "boom")
+		if len(got) != 1 || got[0].Message != "boom" || got[0].Field != "" {
+			t.Errorf("recoverErrors() = %v, want the message-only fallback", got)
+		}
+	})
+
+	t.Run("no details at all falls back to the message", func(t *testing.T) {
+		got := recoverErrors(grpcstatuspkg.New(codes.NotFound, "missing"), "missing")
+		if len(got) != 1 || got[0].Message != "missing" {
+			t.Errorf("recoverErrors() = %v, want the message-only fallback", got)
+		}
+	})
 }

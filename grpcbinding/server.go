@@ -32,7 +32,10 @@
 //   - Status: wire-contracts.md §4.2 via the grpcstatus package. The "benzene-status"
 //     trailer is set unconditionally, success and failure alike, since several Benzene
 //     statuses collapse onto one gRPC code; a non-OK result becomes a status.Error carrying
-//     the joined error messages (or the bare status string if there are none) as its detail
+//     the joined error messages (or the bare status string if there are none) as its detail,
+//     and - when the result carries structured errors - a google.rpc.BadRequest in the
+//     "grpc-status-details-bin" trailer, one FieldViolation per error, since there is no JSON
+//     problem document over gRPC to carry them
 //   - matching GrpcMethodHandler.RunPipelineAsync exactly, including throwing before any
 //     response is returned (ordinary unary gRPC has no room for both a response and an
 //     error).
@@ -56,6 +59,7 @@ import (
 	"github.com/daniellepelley/benzene-go/envelope"
 	"github.com/daniellepelley/benzene-go/grpcstatus"
 	"github.com/daniellepelley/benzene-go/wire"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -122,7 +126,7 @@ func UnaryServerInterceptor(builder *benzene.ApplicationBuilder, routes []Route)
 
 		code := codes.Code(grpcstatus.ToGRPC(benzene.Status(resp.StatusCode)))
 		if code != codes.OK {
-			return nil, grpcstatuspkg.Error(code, errorDetail(resp))
+			return nil, resultError(code, resp)
 		}
 
 		if len(resp.Headers) > 0 {
@@ -161,6 +165,59 @@ func errorDetail(resp wire.Response) string {
 		return resp.StatusCode
 	}
 	return "Error"
+}
+
+// resultError is the gRPC error a non-OK result becomes: a status carrying errorDetail(resp) as
+// its message, plus - whenever the result carries structured errors - a google.rpc.BadRequest
+// packed into the "grpc-status-details-bin" trailer, one FieldViolation per error
+// (wire-contracts.md §4.2: "there is no JSON problem document over gRPC; the problem's
+// information (§1.3) maps onto gRPC's own error model instead"). That is how a field survives a
+// gRPC hop, rather than being flattened into the prose of the status message. grpc-go writes the
+// trailer itself from the status's own details, so it is never set by hand - hand-setting a
+// "grpc-"-prefixed trailer would be overwritten by the transport anyway.
+//
+// The google.rpc.Status's code and message are the numeric mapped gRPC code and the same detail
+// the flat status carries, matching GrpcMethodHandler.AddRichErrorDetails.
+func resultError(code codes.Code, resp wire.Response) error {
+	status := grpcstatuspkg.New(code, errorDetail(resp))
+
+	violations := fieldViolations(resp)
+	if len(violations) == 0 {
+		return status.Err()
+	}
+
+	detailed, err := status.WithDetails(&errdetails.BadRequest{FieldViolations: violations})
+	if err != nil {
+		// The details could not be packed - the flat status still stands, which is exactly
+		// the pre-details behaviour, so a client is no worse off than before.
+		return status.Err()
+	}
+	return detailed.Err()
+}
+
+// fieldViolations maps a failed result's structured errors (§1.3, carried in the problem document
+// this dispatch produced) onto google.rpc.BadRequest field violations: message ->
+// FieldViolation.Description, field -> FieldViolation.Field, left unset rather than empty when the
+// error is not scoped to a field. Nothing else crosses: the spec does not say where an error's
+// `code` goes, and a port inventing a home for it is how three ports end up with three shapes.
+//
+// A body that is not a problem document at all (or one with no errors member) yields no
+// violations, so no details trailer is attached - a failure carrying only a detail string keeps
+// the flat, message-only shape it has always had.
+func fieldViolations(resp wire.Response) []*errdetails.BadRequest_FieldViolation {
+	payload, err := wire.UnmarshalErrorPayload([]byte(resp.Body))
+	if err != nil || len(payload.Errors) == 0 {
+		return nil
+	}
+
+	violations := make([]*errdetails.BadRequest_FieldViolation, 0, len(payload.Errors))
+	for _, item := range payload.Errors {
+		violations = append(violations, &errdetails.BadRequest_FieldViolation{
+			Field:       item.Field,
+			Description: item.Message,
+		})
+	}
+	return violations
 }
 
 // cancellationError reports the gRPC status a cancelled or deadline-exceeded context maps

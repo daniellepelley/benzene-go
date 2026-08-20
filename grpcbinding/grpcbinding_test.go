@@ -120,6 +120,32 @@ func newTestBuilder(t *testing.T) *benzene.ApplicationBuilder {
 	}
 }
 
+// validatedGreetHandler always fails with STRUCTURED errors - two of them, each scoped to a
+// different field, and each naming the rule that rejected it - which is the shape a schema
+// validator (validation.Validated) produces and the shape wire-contracts.md §4.2 requires a gRPC
+// hop to preserve.
+func validatedGreetHandler(_ context.Context, _ greetRequest) benzene.Result[greetResponse] {
+	return benzene.ValidationErrorWith[greetResponse](
+		benzene.Error{Message: "name is required", Field: "/name", Code: "required"},
+		benzene.Error{Message: "greeting is too long", Field: "/greeting", Code: "max-length"},
+	)
+}
+
+// newBuilderFor is newTestBuilder for a handler other than greetHandler, registered on the same
+// "greet" topic so greetRoutes()/clientRoutes() reach it unchanged.
+func newBuilderFor(t *testing.T, handler benzene.Handler[greetRequest, greetResponse]) *benzene.ApplicationBuilder {
+	t.Helper()
+	registry := benzene.NewRegistry()
+	if err := benzene.Register(registry, benzene.NewTopic("greet"), handler); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	return &benzene.ApplicationBuilder{
+		Registry:  registry,
+		Container: benzene.NewContainer(),
+		Pipeline:  benzene.NewPipeline(benzene.RouterMiddleware(registry)),
+	}
+}
+
 func greetRoutes() []Route {
 	return []Route{{Method: greetMethod, Topic: benzene.NewTopic("greet"), NewResponse: func() proto.Message { return &structpb.Struct{} }}}
 }

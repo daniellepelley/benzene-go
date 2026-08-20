@@ -155,6 +155,12 @@ some — it's an ordinary interceptor.
   success and failure alike — several Benzene statuses collapse onto one gRPC code, so the trailer
   is how a client recovers the precise one. A non-OK result becomes a `status.Error` carrying the
   joined error messages as its detail.
+- **Structured errors:** there is no JSON problem document over gRPC (wire-contracts.md §4.2), so a
+  failed result's `errors` travel as a `google.rpc.BadRequest` in the `grpc-status-details-bin`
+  trailer — one `FieldViolation` per error, the message as its `description` and the field as its
+  `field` — and `grpcbinding.Client` reads them straight back into `result.Errors`. A failure with
+  no structured errors attaches no details, and a client reading such a peer still gets the single
+  message-only error it always did.
 - **Cancellation:** a context already cancelled or past its deadline maps to `Canceled` /
   `DeadlineExceeded` directly.
 
@@ -202,7 +208,9 @@ sender := grpcbinding.NewClient(conn, []grpcbinding.ClientRoute{
 
 result := sender.Send(ctx, benzene.NewTopic("greet"), nil, []byte(`{"name":"World"}`))
 // result.Status is recovered from the benzene-status trailer verbatim when present, else from the
-// coarse gRPC code via grpcstatus.FromGRPC. A missing route -> not-implemented; a marshalling or
+// coarse gRPC code via grpcstatus.FromGRPC; result.Errors from the google.rpc.BadRequest field
+// violations in the grpc-status-details-bin trailer when the server sent them, else the status
+// message as a single error. A missing route -> not-implemented; a marshalling or
 // transport failure -> service-unavailable.
 ```
 

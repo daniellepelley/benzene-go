@@ -7,6 +7,7 @@ import (
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/wire"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -411,4 +412,143 @@ func TestErrorDetail(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestUnaryServerInterceptor_StructuredErrorsBecomeBadRequestDetails pins wire-contracts.md §4.2:
+// there is no JSON problem document over gRPC, so a failed result's structured errors travel as a
+// google.rpc.BadRequest in the "grpc-status-details-bin" trailer, one FieldViolation per error.
+// Before this, everything but the joined prose was destroyed by the hop.
+func TestUnaryServerInterceptor_StructuredErrorsBecomeBadRequestDetails(t *testing.T) {
+	conn := newTestServer(t, UnaryServerInterceptor(newBuilderFor(t, validatedGreetHandler), greetRoutes()))
+
+	var trailer metadata.MD
+	_, err := invokeGreet(t, conn, "World", grpc.Trailer(&trailer))
+	if err == nil {
+		t.Fatal("Invoke() error = nil, want an RPC error for a failed dispatch")
+	}
+	st, ok := grpcstatus.FromError(err)
+	if !ok {
+		t.Fatalf("error is not a gRPC status error: %v", err)
+	}
+
+	// The flat status is unchanged: the details are additive, not a replacement.
+	if st.Code() != codes.InvalidArgument {
+		t.Errorf("Code() = %v, want InvalidArgument (ValidationError's forward mapping)", st.Code())
+	}
+	const wantDetail = "name is required, greeting is too long"
+	if st.Message() != wantDetail {
+		t.Errorf("Message() = %q, want %q", st.Message(), wantDetail)
+	}
+	if got := trailer.Get(BenzeneStatusTrailer); len(got) != 1 || got[0] != "validation-error" {
+		t.Errorf("%s trailer = %v, want [validation-error]", BenzeneStatusTrailer, got)
+	}
+
+	// The google.rpc.Status carries the numeric mapped code and the same detail as the flat
+	// status, matching GrpcMethodHandler.AddRichErrorDetails.
+	if got := st.Proto().GetCode(); got != int32(codes.InvalidArgument) {
+		t.Errorf("google.rpc.Status.code = %d, want %d", got, int32(codes.InvalidArgument))
+	}
+	if got := st.Proto().GetMessage(); got != wantDetail {
+		t.Errorf("google.rpc.Status.message = %q, want %q", got, wantDetail)
+	}
+
+	details := st.Details()
+	if len(details) != 1 {
+		t.Fatalf("Details() = %v, want exactly one detail", details)
+	}
+	badRequest, ok := details[0].(*errdetails.BadRequest)
+	if !ok {
+		t.Fatalf("Details()[0] = %T, want *errdetails.BadRequest", details[0])
+	}
+	violations := badRequest.GetFieldViolations()
+	if len(violations) != 2 {
+		t.Fatalf("FieldViolations = %v, want one per error", violations)
+	}
+	wantFields := []string{"/name", "/greeting"}
+	wantDescriptions := []string{"name is required", "greeting is too long"}
+	for i, violation := range violations {
+		if violation.GetField() != wantFields[i] {
+			t.Errorf("FieldViolations[%d].Field = %q, want %q", i, violation.GetField(), wantFields[i])
+		}
+		if violation.GetDescription() != wantDescriptions[i] {
+			t.Errorf("FieldViolations[%d].Description = %q, want %q", i, violation.GetDescription(), wantDescriptions[i])
+		}
+	}
+}
+
+// TestUnaryServerInterceptor_FailureWithoutStructuredErrorsAttachesNoDetails pins the other half:
+// a failure with nothing structured to say attaches no details at all, so the message-only shape
+// this binding has always produced is untouched (and a peer that reads only the status message is
+// unaffected by the addition).
+func TestUnaryServerInterceptor_FailureWithoutStructuredErrorsAttachesNoDetails(t *testing.T) {
+	handler := func(_ context.Context, _ greetRequest) benzene.Result[greetResponse] {
+		return benzene.NotFound[greetResponse]()
+	}
+	conn := newTestServer(t, UnaryServerInterceptor(newBuilderFor(t, handler), greetRoutes()))
+
+	var trailer metadata.MD
+	_, err := invokeGreet(t, conn, "World", grpc.Trailer(&trailer))
+	if err == nil {
+		t.Fatal("Invoke() error = nil, want an RPC error for a failed dispatch")
+	}
+	st, _ := grpcstatus.FromError(err)
+	if got := st.Details(); len(got) != 0 {
+		t.Errorf("Details() = %v, want none for a failure carrying no structured errors", got)
+	}
+	if got := trailer.Get("grpc-status-details-bin"); len(got) != 0 {
+		t.Errorf("grpc-status-details-bin trailer = %v, want none", got)
+	}
+	if got := st.Message(); got != "not-found" {
+		t.Errorf("Message() = %q, want the bare status string", got)
+	}
+	if got := trailer.Get(BenzeneStatusTrailer); len(got) != 1 || got[0] != "not-found" {
+		t.Errorf("%s trailer = %v, want [not-found]", BenzeneStatusTrailer, got)
+	}
+}
+
+// TestUnaryServerInterceptor_SuccessAttachesNoErrorDetails proves the details trailer is a
+// failure-only affair: a successful call carries no "grpc-status-details-bin" at all, and
+// "benzene-status" still carries the raw status verbatim.
+func TestUnaryServerInterceptor_SuccessAttachesNoErrorDetails(t *testing.T) {
+	conn := newTestServer(t, UnaryServerInterceptor(newTestBuilder(t), greetRoutes()))
+
+	var trailer metadata.MD
+	if _, err := invokeGreet(t, conn, "World", grpc.Trailer(&trailer)); err != nil {
+		t.Fatalf("Invoke() error = %v", err)
+	}
+	if got := trailer.Get("grpc-status-details-bin"); len(got) != 0 {
+		t.Errorf("grpc-status-details-bin trailer = %v, want none on a successful call", got)
+	}
+	if got := trailer.Get(BenzeneStatusTrailer); len(got) != 1 || got[0] != "ok" {
+		t.Errorf("%s trailer = %v, want [ok]", BenzeneStatusTrailer, got)
+	}
+}
+
+func TestFieldViolations(t *testing.T) {
+	t.Run("one violation per structured error", func(t *testing.T) {
+		resp := wire.Response{StatusCode: "validation-error", Body: `{"benzeneStatus":"validation-error","detail":"name is required","errors":[{"message":"name is required","field":"/name","code":"required"}]}`}
+		got := fieldViolations(resp)
+		if len(got) != 1 {
+			t.Fatalf("fieldViolations() = %v, want one", got)
+		}
+		if got[0].GetField() != "/name" || got[0].GetDescription() != "name is required" {
+			t.Errorf("fieldViolations()[0] = %v, want field /name and the message as description", got[0])
+		}
+	})
+
+	t.Run("an unfielded error leaves Field unset rather than empty-string", func(t *testing.T) {
+		resp := wire.Response{StatusCode: "bad-request", Body: `{"benzeneStatus":"bad-request","detail":"boom","errors":[{"message":"boom"}]}`}
+		got := fieldViolations(resp)
+		if len(got) != 1 || got[0].GetField() != "" {
+			t.Fatalf("fieldViolations() = %v, want a single violation with no field", got)
+		}
+	})
+
+	t.Run("no errors, no violations", func(t *testing.T) {
+		for _, body := range []string{"", "not json", `{"benzeneStatus":"not-found","detail":"missing"}`} {
+			if got := fieldViolations(wire.Response{StatusCode: "not-found", Body: body}); got != nil {
+				t.Errorf("fieldViolations(%q) = %v, want nil", body, got)
+			}
+		}
+	})
 }

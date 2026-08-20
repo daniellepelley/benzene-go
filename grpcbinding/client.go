@@ -7,6 +7,7 @@ import (
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/client"
 	"github.com/daniellepelley/benzene-go/grpcstatus"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -51,7 +52,10 @@ func NewClient(conn grpc.ClientConnInterface, routes []ClientRoute) *Client {
 // (wire-contracts.md §4.2 - several Benzene statuses collapse onto one gRPC code, so the
 // trailer is how a client recovers the exact one - a trailer, when present, wins verbatim),
 // else grpcstatus.FromGRPC(code) as the coarse fallback - matching
-// DefaultGrpcStatusReverseMapper exactly. A missing route maps to StatusNotImplemented
+// DefaultGrpcStatusReverseMapper exactly. A failed call's errors are recovered the same way: from
+// the google.rpc.BadRequest field violations in the "grpc-status-details-bin" trailer when the
+// server sent them (see recoverErrors), else the status message as a single error. A missing
+// route maps to StatusNotImplemented
 // (matching GrpcClientMiddleware's "No gRPC route has been registered for topic ..." ->
 // StatusCode.Unimplemented, itself reverse-mapped to NotImplemented); a request that fails
 // to marshal into the route's proto type, or a response that fails to marshal back to JSON,
@@ -85,7 +89,7 @@ func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[stri
 		if detail == "" {
 			detail = grpcResult.Code().String()
 		}
-		return benzene.Result[json.RawMessage]{Status: benzeneStatus, Errors: []benzene.Error{{Message: detail}}}
+		return benzene.Result[json.RawMessage]{Status: benzeneStatus, Errors: recoverErrors(grpcResult, detail)}
 	}
 
 	body, err := protojson.Marshal(resp)
@@ -94,6 +98,36 @@ func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[stri
 	}
 	raw := json.RawMessage(body)
 	return benzene.Result[json.RawMessage]{Status: benzeneStatus, Payload: &raw}
+}
+
+// recoverErrors rebuilds the failed result's structured errors from the gRPC error model
+// (wire-contracts.md §4.2): one benzene.Error per google.rpc.BadRequest FieldViolation carried in
+// the "grpc-status-details-bin" trailer, Description -> Message and Field -> Field, so the field a
+// message belongs to survives the hop instead of being flattened into prose.
+//
+// A peer that attaches no such details - any non-Benzene gRPC server, or a Benzene one predating
+// this - falls back to the single message-only error built from the status message, which is
+// exactly what this client always did, so nothing regresses for a peer that doesn't send them.
+func recoverErrors(status *grpcstatuspkg.Status, detail string) []benzene.Error {
+	for _, item := range status.Details() {
+		// Details() yields an error value for a detail it cannot unmarshal; anything that
+		// isn't a BadRequest is simply not ours to read.
+		badRequest, ok := item.(*errdetails.BadRequest)
+		if !ok || len(badRequest.GetFieldViolations()) == 0 {
+			continue
+		}
+
+		errors := make([]benzene.Error, 0, len(badRequest.GetFieldViolations()))
+		for _, violation := range badRequest.GetFieldViolations() {
+			errors = append(errors, benzene.Error{
+				Message: violation.GetDescription(),
+				Field:   violation.GetField(),
+			})
+		}
+		return errors
+	}
+
+	return []benzene.Error{{Message: detail}}
 }
 
 // recoverStatus implements the trailer-wins-verbatim rule described on Send.
