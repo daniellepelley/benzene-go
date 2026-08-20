@@ -1,4 +1,4 @@
-# gRPC Setup
+# Getting started: gRPC
 
 The `grpcbinding` package lets an ordinary gRPC server's **unary** methods be served by Benzene
 message handlers instead of hand-written service method bodies. It is a

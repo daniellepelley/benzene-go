@@ -9,9 +9,9 @@ idiomatically in Go and interoperates on the wire with the .NET, TypeScript, and
 
 - **Getting started**
   - [Getting started](getting-started.md) — from an empty module to a running HTTP service in a few minutes
-    - [AWS Lambda](getting-started-aws.md) — one function over API Gateway, SQS, SNS, DynamoDB, and EventBridge
-    - [Azure Functions](getting-started-azure.md) — HTTP, Queue Storage / Service Bus, and Cosmos DB change feed
-    - [Google Cloud](getting-started-google.md) — Cloud Run (HTTP) and Pub/Sub
+    - [AWS Lambda](getting-started-aws.md) — one function over API Gateway, SQS, SNS, EventBridge, DynamoDB, Kinesis, S3, and MSK Kafka
+    - [Azure Functions](getting-started-azure.md) — HTTP, Queue Storage / Service Bus, Cosmos DB change feed, Timer, Event Grid, and Event Hubs
+    - [Google Cloud](getting-started-google.md) — Cloud Run (HTTP), Pub/Sub, and Cloud Functions
     - [gRPC](getting-started-grpc.md) — the unary gRPC server and client binding
     - [Kafka](getting-started-kafka.md) — the consumer-group worker and producer client
     - [Kubernetes](getting-started-kubernetes.md) — one handler hosted over HTTP, SQS, and Kafka from a single binary and Deployment

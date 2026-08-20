@@ -1,4 +1,4 @@
-# Kafka Setup
+# Getting started: Kafka
 
 The `kafka` package is the self-hosted Kafka binding: a `Consumer` loop that dispatches each
 record through a Benzene pipeline (one invocation, one DI scope per record), and an outbound

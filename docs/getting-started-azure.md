@@ -1,4 +1,4 @@
-# Getting Started on Azure Functions
+# Getting started: Azure Functions
 
 This guide takes the `greet` handler from [Getting Started](getting-started.md) and deploys it to
 [Azure Functions](https://learn.microsoft.com/azure/azure-functions/) as a **custom handler**. Read

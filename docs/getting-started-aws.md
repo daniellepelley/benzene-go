@@ -1,4 +1,4 @@
-# Getting Started: Benzene on AWS Lambda
+# Getting started: AWS Lambda
 
 Benzene runs on AWS Lambda as a single custom-runtime binary that answers several event sources
 through one middleware pipeline. The same handler you write is reached over HTTP (a Lambda Function

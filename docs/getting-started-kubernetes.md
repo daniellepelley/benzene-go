@@ -1,4 +1,4 @@
-# Getting Started: Benzene on Kubernetes
+# Getting started: Kubernetes
 
 This guide takes you from an empty folder to **one handler, reached over HTTP, SQS, and Kafka, hosted
 in a single binary** — one `main.go`, one Docker image, one Kubernetes Deployment, dispatching every
@@ -293,9 +293,9 @@ The payoff shows up the moment this same handler needs a **second** entry point 
 team publishes to, a Kafka topic, a batch job that used to call this endpoint but really just wants
 to drop a message. A bare `http.HandlerFunc` has no answer for that; you'd write a second, separate
 handler and keep both in sync by hand. With Benzene the handler above doesn't change at all: a
-`kafka.Consumer` or `awssqs.Consumer` goroutine points at the *same* `greetHandler`, because it was
-never written against `http.ResponseWriter` in the first place — see section 2 above for that running
-as three goroutines in one binary. If HTTP genuinely is and always will be the only way in, reach for
+`kafka.Consumer` or `awssqs.Consumer` goroutine points at the *same* `greeting.Handler`, because it
+was never written against `http.ResponseWriter` in the first place — see section 2 above for that
+running as three goroutines in one binary. If HTTP genuinely is and always will be the only way in, reach for
 `net/http` (or chi/gorilla) directly instead — you'll write less code, not more.
 
 ## One binary, or one per transport?

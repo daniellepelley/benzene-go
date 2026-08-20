@@ -1,4 +1,4 @@
-# Getting Started: Benzene on Google Cloud
+# Getting started: Google Cloud
 
 This guide takes you from a message handler to a Benzene service running on **Google Cloud**, in
 idiomatic Go. The handler you write is the same transport-agnostic function every host runs — only
