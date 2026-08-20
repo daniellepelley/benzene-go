@@ -8,6 +8,12 @@ name: conformance-drift-check
 # The check runs both ways on purpose. A vendored fixture that has drifted is the obvious half; a
 # canonical fixture MISSING from the snapshot is the half that actually bites, because a runner
 # cannot notice a fixture it was never given.
+#
+# It also verifies conformance/SPEC_VERSION, which used to be no more than a printed reminder. The
+# pin is this repo's claim about WHICH canonical commit the snapshot was taken from, and a claim
+# nothing checks is a claim that goes stale silently - it had, by thirteen commits. The other half
+# of the blind spot, "a fixture nothing runs", is guarded from the test suite by
+# conformance/fixture_coverage_test.go.
 
 on:
   push:
@@ -35,6 +41,7 @@ jobs:
           git -C /tmp/benzene sparse-checkout set docs/specification/conformance
           mkdir -p /tmp/canonical
           cp /tmp/benzene/docs/specification/conformance/*.json /tmp/canonical/
+          git -C /tmp/benzene rev-parse HEAD > /tmp/canonical-head
 
       - name: Diff vendored snapshot against canonical
         run: |
@@ -68,3 +75,23 @@ jobs:
             exit 1
           fi
           echo "vendored fixtures match canonical ($(ls conformance/testdata/*.json | wc -l) files)"
+
+      - name: Verify SPEC_VERSION pins the canonical commit
+        run: |
+          set -euo pipefail
+          canonical=$(cat /tmp/canonical-head)
+          pinned=$(tr -d '[:space:]' < conformance/SPEC_VERSION)
+          if [ "$pinned" != "$canonical" ]; then
+            echo "::error file=conformance/SPEC_VERSION::SPEC_VERSION pins $pinned, canonical HEAD is $canonical"
+            echo ""
+            echo "The step above already proved the vendored fixtures are byte-identical to canonical"
+            echo "HEAD, so the snapshot IS from $canonical - the pin just does not say so. Write the"
+            echo "canonical commit into conformance/SPEC_VERSION:"
+            echo ""
+            echo "  echo $canonical > conformance/SPEC_VERSION"
+            echo ""
+            echo "This is what stops a re-vendor that forgot the pin from passing: without it the pin"
+            echo "is a comment, and it drifted thirteen commits behind before anything noticed."
+            exit 1
+          fi
+          echo "SPEC_VERSION pins canonical HEAD ($canonical)"
