@@ -17,7 +17,7 @@ resource-abstraction library (Go CDK), or a deployment platform (Encore).
 | What it abstracts | The *application*: handlers, middleware, status vocabulary, discovery | Cloud building blocks behind runtime APIs | Individual cloud *resources* | Message transport | Infrastructure provisioning |
 | Runs inside FaaS (Lambda / Functions) | Yes - first-class bindings | Awkward - the sidecar model assumes long-lived compute, usually Kubernetes | Yes (it's a library) | Yes (it's a library) | No - it provisions its own compute |
 | Extra infrastructure to operate | None | Sidecar per app + control plane | None | None | Platform relationship (or self-managed via its CLI) |
-| Cross-language wire contract | Yes - C# + Go, pinned by shared conformance fixtures | Yes - via the runtime's APIs, many SDKs | No | No | No |
+| Cross-language wire contract | Yes - four ports (.NET, Go, TypeScript, Python), pinned by shared conformance fixtures | Yes - via the runtime's APIs, many SDKs | No | No | No |
 | Service topology / observability built in | Yes - the mesh (`mesh`/`meshd`), no extra infra | Yes - needs the Dapr control plane | No | No | Yes - via the Encore platform |
 | Dependency footprint | Zero in the core module | Heavy (runtime + control plane) | Moderate | Moderate | Framework + platform coupling |
 
@@ -48,21 +48,21 @@ exchange has no platform coupling and covers Azure.
 
 **Pick Benzene** when you want the same handler code, wire contract, status vocabulary, and
 observability to run on AWS Lambda, Azure Functions, Cloud Run, containers, or bare
-`net/http` - including alongside services written in C# on the same wire contract - with
-nothing added to your dependency graph and nothing new to operate.
+`net/http` - including alongside services written in C#, TypeScript, or Python on the same wire
+contract - with nothing added to your dependency graph and nothing new to operate.
 
 ## What makes the position defensible
 
 - **The wire envelope, not the platform, is the abstraction.** Every binding
-  (`awslambda`, `azurefunctions`, `awssqs`, `awssns`, `httpbinding`) is a thin adapter to and
-  from `wire.Request`/`wire.Response`. No cloud SDK type appears outside the two isolated
-  outbound-client modules. Swapping clouds changes the adapter, never the application.
+  (`awslambda`, `azurefunctions`, `awssqs`, `awssns`, `httpbinding`, …) is a thin adapter to and
+  from `wire.Request`/`wire.Response`. No cloud SDK type appears outside the isolated
+  per-platform modules. Swapping clouds changes the adapter, never the application.
 - **Cross-language conformance is tested, not claimed.** The vendored fixtures in
-  `conformance/` pin this port to the same language-neutral spec the C# implementation runs
-  against, and the mesh has hosted live cross-language (C#↔Go) fleets.
+  `conformance/` pin this port to the same language-neutral spec the .NET, TypeScript, and
+  Python ports run against, and the mesh has hosted live cross-language (C#↔Go) fleets.
 - **Zero dependencies is a policy, not an accident** - see `CLAUDE.md` and `RELEASING.md`.
-  The two packages that genuinely need an SDK live in their own modules so the exception
-  can't spread.
+  Every package that genuinely needs an SDK lives in its own Go module, so the root module
+  stays dependency-free and the exception can't spread.
 - **Observability without an observability stack.** A Benzene fleet self-describes (topics,
   schemas, contract hashes) and self-reports (semantic traces with W3C `traceparent`), and
   the collector + Mesh View run as an ordinary Benzene service - deployable to any of the
@@ -72,10 +72,11 @@ nothing added to your dependency graph and nothing new to operate.
 
 Kept current in `ROADMAP.md`; the headline ones for a multi-cloud evaluation:
 
-- **Broker breadth.** SQS, SNS, EventBridge, Pub/Sub, Kafka, and unary gRPC are all covered
-  (plus anything CloudEvents-shaped via the `cloudevents` package - Event Grid, Knative,
-  EventBridge); Watermill or Dapr still cover more brokers (RabbitMQ, NATS, Redis Streams)
-  today, and `grpcbinding` is unary-only - gRPC's streaming shapes remain a documented gap.
+- **Broker breadth.** SQS, SNS, EventBridge, Pub/Sub, Kafka, RabbitMQ, Azure Service Bus /
+  Event Hubs / Event Grid / Queue Storage, and unary gRPC are all covered (plus anything
+  CloudEvents-shaped via the `cloudevents` package - Knative, Eventarc); Watermill or Dapr
+  still cover more brokers (NATS, Redis Streams) today, and `grpcbinding` is unary-only -
+  gRPC's streaming shapes remain a documented gap.
 - **The deploy workflows are real but unexercised** - each cloud example documents exactly
   what was and wasn't verified without live credentials. Nothing here claims a deploy that
   didn't happen.
