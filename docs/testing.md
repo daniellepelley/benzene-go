@@ -131,7 +131,12 @@ native response. Lines that create the host and assert are identical across tran
 | `SendAzureHTTP(t, host, method, path, payload, headers)` | `benzenetest` | Azure Functions HTTP trigger | `HTTPResponse` |
 | `SendAzureQueue(t, host, dataName, path, topic, payload, headers)` | `benzenetest` | Azure Functions queue trigger | `HTTPResponse` (200 / 500) |
 | `SendCosmosChangeFeed(t, host, dataName, path, topic, documents)` | `benzenetest` | Azure Cosmos DB change feed | `HTTPResponse` (200 / 500) |
+| `SendTimer(t, host, dataName, path, topic, tick)` | `benzenetest` | Azure Functions timer trigger | `HTTPResponse` (200 / 500) |
+| `SendEventGrid(t, host, dataName, path, eventType, payload)` | `benzenetest` | Azure Functions Event Grid trigger | `HTTPResponse` (200 / 500) |
 | `SendDynamoDBStream(t, host, eventName, tableName, sequenceNumber, newImage)` | `benzenetest` | Lambda DynamoDB stream | `[]string` (failing sequence numbers) |
+| `SendKinesisStream(t, host, streamName, sequenceNumber, payload)` | `benzenetest` | Lambda Kinesis stream | `[]string` (failing sequence numbers) |
+| `SendKafkaEvent(t, host, topic, partition, offset, payload)` | `benzenetest` | Lambda MSK / self-managed Kafka mapping | `[]string` (failing `{partition}@{offset}` ids) |
+| `SendS3Event(t, host, bucket, eventName, key)` | `benzenetest` | Lambda S3 event notification | `error` (async invoke — no partial-failure report) |
 | `SendSQS(t, host, topic, payload, headers)` | `awssqs` | Lambda SQS event-source mapping | `awssqs.SQSResponse` |
 | `SendSNS(t, host, topic, payload, headers)` | `awssns` | Lambda SNS notification | `error` (SNS has no partial-failure report) |
 
@@ -275,8 +280,9 @@ func TestConsumer_MissingNameIsReportedAsBatchItemFailure(t *testing.T) {
 }
 ```
 
-`SendDynamoDBStream` returns the failing records' sequence numbers as a `[]string`; the Pub/Sub and
-Azure queue helpers surface ack/nack as an `HTTPResponse.StatusCode` (204/200 vs 500).
+The stream helpers (`SendDynamoDBStream`, `SendKinesisStream`, `SendKafkaEvent`) return the failing
+records' checkpoint identifiers as a `[]string`; the Pub/Sub and Azure queue helpers surface
+ack/nack as an `HTTPResponse.StatusCode` (204/200 vs 500).
 
 ## Faking the outbound edge
 
@@ -387,8 +393,9 @@ to what you're testing.
 
 Each `Send*` helper is a thin wrapper over a `New*Event` builder (`NewHTTPRequest`,
 `NewAPIGatewayEvent`, `NewEnvelopeEvent`, `NewSQSEvent`, `NewSNSEvent`, `NewPubSubEvent`,
-`NewAzureHTTPEvent`, `NewCosmosChangeFeedEvent`, `NewDynamoDBStreamEvent`) plus a dispatch and
-decode. These are exported for the occasional hand-rolled dispatch — a malformed-event or
+`NewAzureHTTPEvent`, `NewCosmosChangeFeedEvent`, `NewTimerEvent`, `NewEventGridEvent`,
+`NewDynamoDBStreamEvent`, `NewKinesisStreamEvent`, `NewKafkaEvent`, `NewS3Event`) plus a dispatch
+and decode. These are exported for the occasional hand-rolled dispatch — a malformed-event or
 partial-batch case a `Send*` helper doesn't parameterize — but the `Send*` helpers cover the common
 path and are what the examples use.
 
@@ -401,5 +408,3 @@ path and are what the examples use.
   vocabulary and the envelope `SendEnvelope` exercises.
 - [`examples/`](https://github.com/daniellepelley/benzene-go/tree/main/examples) — every runnable
   service and its tests.
-</content>
-</invoke>
