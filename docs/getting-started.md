@@ -14,21 +14,27 @@ at a time, read on.
 Benzene's promise is **write your message handler once, host it anywhere**. Everything below is one
 shape:
 
-1. **A handler** — your logic. It takes a typed request and returns a typed
-   [`benzene.Result[T]`](https://benzene.app/docs/specification/core-concepts.html). It never
-   imports `net/http` and never sees a status code.
-2. **A topic** — a stable string (`"greet"`) that every transport routes by. A handler is bound to a
-   topic in the registry.
-3. **A pipeline** — an ordered onion of middleware, ending in the router that dispatches a topic to
-   its handler.
+1. **A handler** — your logic: a plain function that takes a typed request and returns a typed
+   `benzene.Result[T]`. A result carries a Benzene **status** (`ok`, `not-found`,
+   `validation-error`, …), an optional payload, and any error messages — success and failure are
+   both ordinary return values, never a thrown error. The handler itself never imports `net/http`
+   and never names an HTTP code; whichever transport hosts it translates the status into its own
+   native signal.
+2. **A topic** — a stable string (`"greet"`) that names what the handler serves. Every transport —
+   an HTTP route, a queue message, a service-to-service call — resolves to a topic, and the
+   registry binds each topic to exactly one handler.
+3. **A pipeline** — an ordered onion of middleware (logging, health checks, your own), ending in
+   the router that dispatches a topic to its handler. Cross-cutting concerns live here, not in the
+   handler.
 4. **A transport binding** — the *only* platform-specific part. Here it's `httpbinding` over
    `net/http`; on a cloud host it's a Lambda or Azure Functions binding, and the handler is
    byte-for-byte identical.
 
-These four are the language-neutral Benzene concepts, defined once for every port on the website —
-see [Core concepts](https://benzene.app/docs/specification/core-concepts.html) for the full model and
-[Wire contracts](https://benzene.app/docs/specification/wire-contracts.html) for the envelope and
-status vocabulary. This guide won't re-explain them; it shows the Go shape.
+These four concepts are language-neutral — every Benzene port implements the same model, defined
+once on the website. You don't need the spec to follow this guide; when you want the deeper
+reference, [Core concepts](https://benzene.app/docs/specification/core-concepts.html) has the full
+model and [Wire contracts](https://benzene.app/docs/specification/wire-contracts.html) the envelope
+and status vocabulary.
 
 ## Prerequisites
 
@@ -318,10 +324,14 @@ each cloud host. Each guide starts from this service and swaps only the host wir
 
 - [Getting started: AWS Lambda](getting-started-aws.md) — one function behind API Gateway, SQS, SNS,
   and more.
-- [Getting started: Azure Functions](getting-started-azure.md) — the custom-handler binding for HTTP
-  and queue triggers.
+- [Getting started: Azure Functions](getting-started-azure.md) — the custom-handler binding for HTTP,
+  queue, and event triggers.
 - [Getting started: Google Cloud](getting-started-google.md) — Cloud Run (plain `net/http`, no new
   package) and Pub/Sub push subscriptions.
+- [Getting started: Kubernetes](getting-started-kubernetes.md) — one handler hosted over HTTP, SQS,
+  and Kafka from a single binary and Deployment.
+- [gRPC](getting-started-grpc.md) and [Kafka](getting-started-kafka.md) — the unary gRPC binding and
+  the self-hosted Kafka consumer/producer.
 
 For the full set of runnable services — local HTTP, every cloud host, and the mesh demo — see the
 [`examples/`](https://github.com/daniellepelley/benzene-go/tree/main/examples) directory.
