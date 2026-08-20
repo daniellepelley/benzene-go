@@ -19,8 +19,11 @@ example:
 
 > **Why Cloud Run and not Cloud Functions?** Cloud Functions (2nd gen) is built on Cloud Run under
 > the hood. Deploying straight to Cloud Run gets the same scale-to-zero autoscaling with one fewer
-> layer, and without the `functions-framework-go` buildpack dependency — the one Google-specific
-> dependency this port avoids everywhere else. See the
+> layer, and with zero Google-specific dependencies. If your team standardizes on Cloud Functions
+> anyway, the [`gcpfunctions`](../gcpfunctions) module (its own Go module — it depends on
+> `functions-framework-go`) registers a Benzene app as a Gen2 HTTP or CloudEvent-triggered function
+> (`gcpfunctions.RegisterHTTP` / `gcpfunctions.RegisterCloudEvent`). This guide takes the
+> dependency-free Cloud Run path; see the
 > [Cloud Run example's README](../examples/gcp-cloudrun-helloworld/README.md#why-cloud-run-and-not-cloud-functions)
 > for the full reasoning.
 
@@ -216,10 +219,13 @@ envelope (base64 data + attributes), resolves the topic per
 result into an acknowledgement: **`204` acks**, **`500` nacks** (and Pub/Sub redelivers per the
 subscription's retry policy, dead-lettering if one is configured).
 
-This half is **consumer-only**. Publishing needs the Pub/Sub SDK — a dependency this repo hasn't
-taken — so you publish with `gcloud pubsub topics publish`, no code required. The service still runs
-on Cloud Run; the difference from [part 1](#1-cloud-run-the-http-binding-in-a-container) is what's
-mounted at the endpoint.
+The `gcppubsub` binding is the **consumer** half, and it's zero-dependency (a push delivery is just
+HTTP). This guide publishes with `gcloud pubsub topics publish`, no code required; when a service
+needs to publish from Go, the [`gcppubsubclient`](../gcppubsubclient) module (its own Go module — it
+needs the Pub/Sub SDK) provides an outbound `client.Sender`
+(`gcppubsubclient.NewClient(publisher, topicID)`). The service still runs on Cloud Run; the
+difference from [part 1](#1-cloud-run-the-http-binding-in-a-container) is what's mounted at the
+endpoint.
 
 ### The handler
 
