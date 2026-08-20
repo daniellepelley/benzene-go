@@ -48,6 +48,8 @@ type metadataExpectation struct {
 func TestConformance_TransportMetadata(t *testing.T) {
 	var fixture transportMetadataFixture
 	loadFixture(t, "transport-metadata-cases.json", &fixture)
+	requireCases(t, len(fixture.MetadataCases), "transport-metadata-cases", "metadataCases")
+	requireCases(t, len(fixture.OverrideCases), "transport-metadata-cases", "overrideCases")
 
 	defaultKey := fixture.DefaultMetadataKeys.Topic
 	versionKey := fixture.DefaultMetadataKeys.Version

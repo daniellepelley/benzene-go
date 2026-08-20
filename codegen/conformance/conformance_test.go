@@ -29,6 +29,20 @@ func loadFixture(t *testing.T, name string, out any) {
 	}
 }
 
+// requireCases fails the test when a fixture list the runner is about to iterate is empty.
+//
+// json.Unmarshal leaves a slice nil when the fixture has no such key, and `for range` over nil
+// iterates nothing - so a renamed key upstream does not break the test, it disables it, and a run
+// that checked nothing is indistinguishable from a clean pass. These fixtures are vendored
+// snapshots of a canonical set that other people rename; the runner is the only thing positioned to
+// notice the drift.
+func requireCases(t *testing.T, n int, fixture, key string) {
+	t.Helper()
+	if n == 0 {
+		t.Fatalf("%s: fixture list %q is empty - the runner and the fixture have drifted", fixture, key)
+	}
+}
+
 // --- contract-document-cases.json ---
 
 type documentCasesFixture struct {
@@ -86,6 +100,9 @@ type schemaClosureCase struct {
 func TestConformance_ContractDocument(t *testing.T) {
 	var fixture documentCasesFixture
 	loadFixture(t, "contract-document-cases.json", &fixture)
+	requireCases(t, len(fixture.ParseCases), "contract-document-cases", "parseCases")
+	requireCases(t, len(fixture.TopicScopeCases), "contract-document-cases", "topicScopeCases")
+	requireCases(t, len(fixture.SchemaClosureCases), "contract-document-cases", "schemaClosureCases")
 
 	docFor := func(t *testing.T, ref string) *contractdoc.Document {
 		t.Helper()
@@ -243,6 +260,7 @@ type hashCase struct {
 func TestConformance_ContractHash(t *testing.T) {
 	var fixture hashCasesFixture
 	loadFixture(t, "contract-hash-cases.json", &fixture)
+	requireCases(t, len(fixture.Cases), "contract-hash-cases", "cases")
 
 	for _, c := range fixture.Cases {
 		t.Run(c.Name, func(t *testing.T) {

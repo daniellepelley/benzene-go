@@ -233,6 +233,8 @@ func dispatchTraced(t *testing.T, request wire.Request) mesh.TraceEvent {
 func TestConformance_MeshTraceCases(t *testing.T) {
 	var fixture meshTraceFixture
 	loadFixture(t, "mesh-trace-cases.json", &fixture)
+	requireCases(t, len(fixture.Traceparent), "mesh-trace-cases", "traceparent")
+	requireCases(t, len(fixture.Invocations), "mesh-trace-cases", "invocations")
 
 	t.Run("traceparent", func(t *testing.T) {
 		for _, row := range fixture.Traceparent {
@@ -311,6 +313,7 @@ type meshCollectorFixture struct {
 func TestConformance_MeshCollectorCases(t *testing.T) {
 	var fixture meshCollectorFixture
 	loadFixture(t, "mesh-collector-cases.json", &fixture)
+	requireCases(t, len(fixture.Cases), "mesh-collector-cases", "cases")
 	runMeshCollectorFixture(t, fixture)
 }
 
@@ -320,6 +323,7 @@ func TestConformance_MeshCollectorCases(t *testing.T) {
 func TestConformance_MeshIssueCases(t *testing.T) {
 	var fixture meshCollectorFixture
 	loadFixture(t, "mesh-issue-cases.json", &fixture)
+	requireCases(t, len(fixture.Cases), "mesh-issue-cases", "cases")
 	runMeshCollectorFixture(t, fixture)
 }
 

@@ -33,6 +33,7 @@ type statusVocabularyFixture struct {
 func TestConformance_StatusVocabulary(t *testing.T) {
 	var fixture statusVocabularyFixture
 	loadFixture(t, "status-vocabulary.json", &fixture)
+	requireCases(t, len(fixture.Statuses), "status-vocabulary", "statuses")
 
 	for _, entry := range fixture.Statuses {
 		t.Run(entry.Status, func(t *testing.T) {
@@ -62,6 +63,8 @@ type mappingFixture struct {
 func TestConformance_HTTPStatusMapping(t *testing.T) {
 	var fixture mappingFixture
 	loadFixture(t, "http-status-mapping.json", &fixture)
+	requireCases(t, len(fixture.Forward), "http-status-mapping", "forward")
+	requireCases(t, len(fixture.Reverse), "http-status-mapping", "reverse")
 
 	t.Run("forward", func(t *testing.T) {
 		for _, row := range fixture.Forward {
@@ -112,6 +115,8 @@ var grpcCodeByName = map[string]int{
 func TestConformance_GRPCStatusMapping(t *testing.T) {
 	var fixture mappingFixture
 	loadFixture(t, "grpc-status-mapping.json", &fixture)
+	requireCases(t, len(fixture.Forward), "grpc-status-mapping", "forward")
+	requireCases(t, len(fixture.Reverse), "grpc-status-mapping", "reverse")
 
 	t.Run("forward", func(t *testing.T) {
 		for _, row := range fixture.Forward {
@@ -207,6 +212,7 @@ type envelopeCaseFixture struct {
 func TestConformance_EnvelopeCases(t *testing.T) {
 	var fixture envelopeCaseFixture
 	loadFixture(t, "envelope-cases.json", &fixture)
+	requireCases(t, len(fixture.Cases), "envelope-cases", "cases")
 
 	registry := benzene.NewRegistry()
 	must(t, benzene.Register(registry, benzene.NewTopic("conformance:greet"), benzene.Handler[conformanceGreetRequest, conformanceGreetResponse](conformanceGreetHandler)))
@@ -311,6 +317,21 @@ func loadFixture(t *testing.T, name string, target any) {
 	}
 	if err := json.Unmarshal(data, target); err != nil {
 		t.Fatalf("json.Unmarshal(%q) error = %v", name, err)
+	}
+}
+
+// requireCases fails the test when a fixture list the runner is about to iterate is empty.
+//
+// json.Unmarshal leaves a slice nil when the fixture has no such key, and `for range` over nil
+// iterates nothing - so a renamed key upstream does not break the test, it disables it, and a run
+// that checked nothing is indistinguishable from a clean pass. These fixtures are vendored
+// snapshots of a canonical set that other people rename; the runner is the only thing positioned to
+// notice the drift. (It has happened: the descriptor runner spent the whole producer/consumer role
+// inversion reading a hash-property key the fixture had renamed, asserting nothing, staying green.)
+func requireCases(t *testing.T, n int, fixture, key string) {
+	t.Helper()
+	if n == 0 {
+		t.Fatalf("%s: fixture list %q is empty - the runner and the fixture have drifted", fixture, key)
 	}
 }
 
