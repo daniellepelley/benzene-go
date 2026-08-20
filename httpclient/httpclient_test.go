@@ -40,6 +40,13 @@ func newTestServer(t *testing.T) *httptest.Server {
 	if err := benzene.Register(registry, benzene.NewTopic("delete"), deleteHandler); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
+	structuredHandler := benzene.Handler[greetRequest, greetResponse](func(_ context.Context, _ greetRequest) benzene.Result[greetResponse] {
+		return benzene.ValidationErrorWith[greetResponse](
+			benzene.Error{Message: "name is required", Field: "Name", Code: "required"})
+	})
+	if err := benzene.Register(registry, benzene.NewTopic("structured"), structuredHandler); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
 	builder := &benzene.ApplicationBuilder{
 		Registry:  registry,
 		Container: benzene.NewContainer(),
@@ -81,6 +88,49 @@ func TestSend_FailureCarriesDetail(t *testing.T) {
 	}
 	if len(result.Errors) == 0 || result.Errors[0].Message != "name is required" {
 		t.Errorf("Errors = %v, want [%q]", result.Errors, "name is required")
+	}
+}
+
+// TestSend_StructuredErrorsSurviveTheRoundTrip is the end-to-end proof that a field and a code
+// survive being serialized into a problem document by the server and decoded back by this client.
+// The client used to rebuild the Result from ErrorPayload.Messages(), which is the messages alone -
+// so a peer that went to the trouble of saying WHICH field failed had that thrown away one hop later.
+func TestSend_StructuredErrorsSurviveTheRoundTrip(t *testing.T) {
+	server := newTestServer(t)
+	defer server.Close()
+	client := NewClient(server.URL)
+
+	result := client.Send(context.Background(), benzene.NewTopic("structured"), map[string]string{}, []byte(`{"name":""}`))
+
+	if result.Status != benzene.StatusValidationError {
+		t.Fatalf("status = %q, want %q", result.Status, benzene.StatusValidationError)
+	}
+	if len(result.Errors) != 1 {
+		t.Fatalf("len(Errors) = %d, want 1", len(result.Errors))
+	}
+	got := result.Errors[0]
+	if got.Message != "name is required" || got.Field != "Name" || got.Code != "required" {
+		t.Errorf("Errors[0] = %+v, want the message, field and code the server sent", got)
+	}
+}
+
+// A peer that sends only `detail` - no errors array - still yields one message-only error rather
+// than nothing, and specifically is NOT split on ", " (a rule RFC 9457 withdrew, since messages
+// contain commas).
+func TestSend_DetailOnlyProblemBecomesOneOpaqueError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"statusCode":"bad-request","headers":{},"body":"{\"benzeneStatus\":\"bad-request\",\"detail\":\"one, two\"}"}`))
+	}))
+	defer server.Close()
+
+	result := NewClient(server.URL).Send(context.Background(), benzene.NewTopic("greet"), map[string]string{}, []byte(`{}`))
+
+	if len(result.Errors) != 1 {
+		t.Fatalf("Errors = %+v, want exactly one opaque error", result.Errors)
+	}
+	if result.Errors[0].Message != "one, two" {
+		t.Errorf("Errors[0].Message = %q, want the detail unsplit", result.Errors[0].Message)
 	}
 }
 

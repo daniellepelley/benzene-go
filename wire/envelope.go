@@ -123,8 +123,31 @@ func NewProblem(status string, errors []ProblemError) ErrorPayload {
 	return payload
 }
 
+// Problems returns the problem's structured errors: Errors when present (authoritative and ordered),
+// otherwise Detail as a single message-only error, otherwise none.
+//
+// This is what a client decoding a peer's problem document should use. Messages() flattens the same
+// document to prose, which throws away a field and a code the peer went to the trouble of sending -
+// fine for logging, wrong for rebuilding a Result.
+func (e ErrorPayload) Problems() []ProblemError {
+	if len(e.Errors) > 0 {
+		problems := make([]ProblemError, 0, len(e.Errors))
+		for _, item := range e.Errors {
+			if item.Message != "" {
+				problems = append(problems, item)
+			}
+		}
+		return problems
+	}
+	if e.Detail != "" {
+		return []ProblemError{{Message: e.Detail}}
+	}
+	return nil
+}
+
 // Messages returns the problem's error messages: Errors when present (authoritative and ordered),
-// otherwise Detail as a single opaque message, otherwise none.
+// otherwise Detail as a single opaque message, otherwise none. See Problems for the structured
+// view, which is what a client rebuilding a Result wants.
 func (e ErrorPayload) Messages() []string {
 	if len(e.Errors) > 0 {
 		messages := make([]string, 0, len(e.Errors))

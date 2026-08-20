@@ -102,13 +102,15 @@ func toResult(resp wire.Response) benzene.Result[json.RawMessage] {
 	status := benzene.Status(resp.StatusCode)
 	if status.IsFailure() {
 		errPayload, parseErr := wire.UnmarshalErrorPayload([]byte(resp.Body))
-		// Messages() prefers the problem document's errors array, which is authoritative and
+		// Problems() prefers the problem document's errors array, which is authoritative and
 		// ordered, and falls back to detail as ONE opaque message - never splitting it on ", ",
-		// a rule the RFC 9457 revision withdrew because error messages contain commas.
+		// a rule the RFC 9457 revision withdrew because error messages contain commas. Structured,
+		// not Messages(): a peer that sent a field and a code went to the trouble of knowing them,
+		// and a caller that re-renders or re-raises this failure should still have them.
 		if parseErr != nil {
 			return benzene.Fail[json.RawMessage](status)
 		}
-		return benzene.Fail[json.RawMessage](status, errPayload.Messages()...)
+		return benzene.FailWith[json.RawMessage](status, errPayload.Problems()...)
 	}
 
 	if resp.Body == "" {
