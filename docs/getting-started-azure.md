@@ -221,7 +221,8 @@ func TestGreet(t *testing.T) {
 `benzenetest.SendAzureHTTP` is the Azure analogue of `SendAPIGateway` — it builds the exact
 `Data`/`Metadata` JSON the Functions host sends and asserts the outer HTTP 200 / `Outputs.res.statusCode`
 split that the real host relies on (see [Supported triggers](#supported-triggers) for why that split
-matters). `SendAzureQueue` and `SendCosmosChangeFeed` do the same for the other two triggers.
+matters). `SendAzureQueue`, `SendCosmosChangeFeed`, `SendTimer`, and `SendEventGrid` do the same for
+the other triggers.
 
 Run the suite the usual way:
 
@@ -264,7 +265,8 @@ below require the default (`false`) mode.
 
 ## Supported triggers
 
-The `azurefunctions` package implements **three** trigger shapes today. Each is a separate
+The `azurefunctions` package implements **six** trigger shapes today: HTTP, queue-shaped (Storage
+Queue / Service Bus), Cosmos DB Change Feed, Timer, Event Grid, and Event Hubs. Each is a separate
 `http.Handler` you mount on that function's local invocation path; a single custom handler can host
 several at once by mounting them on an `http.ServeMux`, one per function path.
 
@@ -327,17 +329,54 @@ successful dispatch answers outer HTTP 200 (the host advances the lease past thi
 non-success dispatch answers outer HTTP 500 (the host does not checkpoint and redelivers the whole
 batch). Design the handler to be **idempotent** across a redelivered batch.
 
+### Timer — `azurefunctions.TimerHandler`
+
+```go
+mux.Handle("/NightlyCleanup", azurefunctions.TimerHandler(builder, benzene.NewTopic("nightly-cleanup"), "myTimer"))
+```
+
+A scheduled tick carries no message, so — like the Cosmos trigger — this is **fan-in, not
+topic-routed**: the topic is the scheduled job's identity, named in code, and the body is the tick's
+schedule info (`IsPastDue`, `ScheduleStatus`). A handler with an empty request type (`struct{}`)
+binds cleanly if it doesn't care. A timer has no redelivery, so the outer 200/500 only surfaces a
+failed run to the host's monitoring — it does not cause a retry. Test with `benzenetest.SendTimer`.
+
+### Event Grid — `azurefunctions.EventGridHandler`
+
+```go
+mux.Handle("/BlobCreated", azurefunctions.EventGridHandler(builder, "eventGridEvent"))
+```
+
+One event per invocation (the host de-batches an Event Grid delivery). The topic is the event
+**type** — Event Grid schema's `eventType` or CloudEvents 1.0's `type` (told apart by
+`specversion`) — so `benzene.NewTopic("Microsoft.Storage.BlobCreated")` handles that event. The body
+is the event's `data`; the envelope's `id`, `subject`, and `source` become headers. A non-success
+dispatch answers outer HTTP 500 so Event Grid's own retry and dead-letter machinery takes over —
+the same fire-and-forget posture as `QueueHandler`. Test with `benzenetest.SendEventGrid`.
+
+### Event Hubs — `azurefunctions.EventHubHandler`
+
+```go
+mux.Handle("/OrderPlaced", azurefunctions.EventHubHandler(builder, "eventHubMessages"))
+```
+
+Requires the trigger's `function.json` to set `"cardinality": "many"` (batch mode — the shape the
+.NET binding also uses). Each event in the batch is its own pipeline invocation, topic-resolved
+exactly like a Service Bus message on `QueueHandler` (a `topic` application property, else the body
+as a wire envelope). Events dispatch strictly in order and processing **stops at the first
+failure**, answering outer HTTP 500 so the host redelivers the whole batch — checkpointing is
+invocation-level, so handlers must be idempotent across a redelivered batch.
+
 ### Other triggers
 
-Other Azure trigger types — Timer, Blob Storage, Event Grid, Event Hubs, Kafka — are **not**
-implemented in the Go port. They follow the same `Data`/`Metadata` envelope, so a new adapter is the
-`QueueHandler` pattern with a different payload interpretation; nothing in the design blocks them, but
-the package does not ship them today.
+Blob Storage (and the other SDK-typed triggers) are **not** implemented in the Go port. They follow
+the same `Data`/`Metadata` envelope, so a new adapter is the `QueueHandler` pattern with a different
+payload interpretation; nothing in the design blocks them, but the package does not ship them today
+(see [`ROADMAP.md`](../ROADMAP.md)).
 
-> This is narrower than the .NET port, whose Azure Functions guide covers HTTP, Event Hubs, Kafka,
-> Service Bus, Cosmos DB Change Feed, Queue Storage, Blob Storage, Event Grid, and Timer. That
-> breadth rides on .NET's isolated-worker model and a source generator; the Go port uses the
-> custom-handler HTTP contract and ships the three trigger shapes above.
+For **self-hosted** compute (a container or VM that owns its own receive loop, rather than the
+Functions host), the `azureservicebus`, `azureeventhub`, and `azurecosmos` modules provide worker
+counterparts to these triggers.
 
 ## See also
 
