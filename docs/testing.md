@@ -59,7 +59,8 @@ func TestHandler_MissingNameIsBadRequest(t *testing.T) {
   each transport maps to its own failure signal.
 - **`Payload`** — a `*T`, non-nil on success (a pointer so "absent" is distinct from `T`'s zero
   value). Nil-check it before dereferencing, as the example does.
-- **`Errors`** — a `[]string` of human-readable messages, populated on failure.
+- **`Errors`** — a `[]benzene.Error` (`Message`, and `Field`/`Code` when the producer knew
+  them), populated on failure. `ResultErrors()` gives just the messages.
 
 ### What a direct call does *not* cover
 

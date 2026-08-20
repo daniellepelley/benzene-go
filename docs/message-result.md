@@ -35,15 +35,31 @@ Defined in `result.go`:
 
 ```go
 type Result[T any] struct {
-	Status  Status   // the Benzene status (see the vocabulary below)
-	Payload *T       // present on success; a pointer so "absent" is representable
-	Errors  []string // human-readable error messages, populated on failure
-	// unexported: an explicit success flag, set only via SetResult
+	Status  Status  // the Benzene status (see the vocabulary below)
+	Payload *T      // present on success; a pointer so "absent" is representable
+	Errors  []Error // structured errors, populated on failure
+	// unexported: an explicit success flag (SetResult) and an authored problem document
+	// (ProblemResult)
 }
 ```
 
 The three exported fields are the result's data. `Payload` is a pointer so that "no payload" is
 distinct from `T`'s own zero value — on a failure it is `nil`.
+
+`Error` carries a `Message` and, when the producer knows them, the `Field` the value came from and
+the `Code` of the rule that rejected it:
+
+```go
+type Error struct {
+	Message string
+	Field   string
+	Code    string
+}
+```
+
+It is an **alias** of `wire.ProblemError`, so the value a handler builds is the value that reaches
+the wire — there is no second shape to keep in step. The plain-string constructors (`Fail`,
+`NotFound`, …) fill in `Message` only; `FailWith` and `ValidationErrorWith` take `Error` values.
 
 ### Reading a result
 
@@ -52,7 +68,8 @@ r := getOrder(ctx, req)
 
 r.Status                 // benzene.Status, e.g. benzene.StatusOk
 r.IsSuccessful()         // bool — see the classification rule below
-r.Errors                 // []string, populated on failure
+r.Errors                 // []benzene.Error, populated on failure
+r.ResultErrors()         // []string — just the messages, for code that only wants prose
 if r.Payload != nil {    // nil on failure; check before dereferencing
 	use(*r.Payload)
 }
@@ -78,9 +95,21 @@ type ResultInfo interface {
 }
 ```
 
-There is also an optional `ResultIsSuccessful() bool` (implemented by `Result[T]`) that lets an
-explicit success flag survive type erasure; a binding checks for it and falls back to the status
-otherwise.
+`ResultErrors()` deliberately still returns `[]string`: every binding that only ever wanted messages
+is unaffected by structured errors existing.
+
+Three optional interfaces sit alongside it, each checked with a type assertion so that adding one
+never breaks an external implementation of `ResultInfo`:
+
+| Interface | Method | What it recovers |
+|---|---|---|
+| — | `ResultIsSuccessful() bool` | an explicit success flag (`SetResult`) surviving type erasure |
+| `ProblemInfo` | `ResultProblems() []Error` | the structured errors, so a `field` and a `code` are not flattened to prose |
+| `ProblemDocumentInfo` | `ResultProblemDocument() *Problem` | an application-authored problem document (`ProblemResult`), emitted verbatim |
+
+`ProblemsOf(result)` is the helper every rebuild-a-typed-result site should use: it takes the
+`ProblemInfo` view when there is one and wraps the messages when there is not, so no caller writes
+its own assertion and quietly drops the structure.
 
 ## Constructors
 
