@@ -1,7 +1,9 @@
 // Package conformance runs this port against the language-neutral fixtures vendored from
-// daniellepelley/Benzene's docs/specification/conformance/ (see testdata/README.md for how
-// they got here and how to re-sync them). Passing these fixtures is what "conformant" means
-// per conformance/README.md - API shape is explicitly not part of conformance.
+// daniellepelley/Benzene's docs/specification/conformance/ into testdata/. Passing them is what
+// "conformant" means; the vendored README.md alongside them (the canonical one, vendored with the
+// fixtures) defines each fixture and which claim requires it - API shape is explicitly not part of
+// conformance. SPEC_VERSION records which canonical commit the snapshot came from, and
+// .github/workflows/conformance-drift-check.yml holds both to it.
 package conformance
 
 import (
@@ -154,7 +156,7 @@ func TestConformance_GRPCStatusMapping(t *testing.T) {
 // --- envelope-cases.json ---
 //
 // Run against the canonical conformance handlers every runner MUST register natively
-// (testdata/README.md / the upstream conformance/README.md's "Canonical handlers" section).
+// (README.md's "Canonical handlers" section).
 
 type conformanceGreetRequest struct {
 	Name string `json:"name"`
@@ -322,7 +324,7 @@ func runEnvelopeCases(t *testing.T, fixture envelopeCaseFixture) {
 
 // subsetMismatches reports every key in expected that is absent from, or not deeply equal in,
 // actual - nested objects are compared recursively. Extra keys in actual are ignored, per
-// testdata/README.md's subset-matching rule.
+// README.md's subset-matching rule.
 func subsetMismatches(expected, actual map[string]any) []string {
 	var mismatches []string
 	for key, expectedValue := range expected {

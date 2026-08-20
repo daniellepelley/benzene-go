@@ -144,9 +144,11 @@ delivery order - just the current honest picture, kept up to date as things land
   (nack/redeliver - handlers must be idempotent); `LogAndContinue` keeps the result and continues,
   with an optional `OnPublishError` hook so the package forces no logger dependency. Deliberately
   scoped to the runtime capability: the .NET package's AsyncAPI/event-service spec-catalog and its
-  build-time unmapped-response diagnostic are NOT ported - Go has no spec generator here, and mesh
-  descriptor derivation is this port's introspection path (`Mapping.Covers` is kept for a future
-  diagnostic). The nil-payload check is reflect-free (dispatch path), so a successful *typed*-nil
+  build-time unmapped-response diagnostic are NOT ported. This port does have a spec generator -
+  `asyncapi.Generate`/`asyncapi.Handler` - so the real gap is narrower: AsyncAPI's send side is
+  declared by hand via `asyncapi.WithSentEvent` rather than derived from the mappings here, which
+  are the very things that publish those events. Deriving one from the other is the open work
+  (`Mapping.Covers` is kept for the diagnostic half of it). The nil-payload check is reflect-free (dispatch path), so a successful *typed*-nil
   pointer payload publishes JSON `null` - a documented divergence from .NET's reference-null semantics.
 - `cloudserviceprobe` - the external, black-box conformance checker for the Cloud Service Profile
   (`docs/specification/cloud-service-profile.md` §2, §5), matching `Benzene.CloudService.Probe`
@@ -225,8 +227,13 @@ delivery order - just the current honest picture, kept up to date as things land
   one event per invocation (the host de-batches), the topic is the event **type** (Event Grid schema
   `eventType` or CloudEvents 1.0 `type`, told apart by `specversion`), the body is the event's
   `data`, headers are the envelope's `id`/`subject`/`source`; a non-success dispatch is outer 500 so
-  Event Grid's own retry + dead-letter machinery takes over. Only the Event Grid trigger is in scope
-  here - the SDK-typed BlobStorage/EventHub function triggers stay deferred (see below).
+  Event Grid's own retry + dead-letter machinery takes over. `EventHubHandler` covers the Event Hub
+  trigger (`Benzene.Azure.Function.EventHub`): batch mode (`"cardinality": "many"`) only, mirroring
+  .NET's `EventData[]`-only shape, but each event in the batch is its own pipeline invocation -
+  an Event Hub batch is a batch of independently-topic-routed messages, not a fan-in - resolved from
+  that event's `PropertiesArray` entry with `QueueHandler`'s precedence, stopping at the first
+  failure since the host checkpoints per invocation and redelivers the whole batch anyway. Only the
+  SDK-typed BlobStorage function trigger stays deferred.
 - `client` - outbound-client decorators (`CorrelationDecorator`, `RetryDecorator`) over a
   transport-agnostic `Sender` interface; `httpclient.Client` satisfies it structurally. The
   spec's third cross-cutting client behavior, trace-context propagation, is
@@ -400,15 +407,17 @@ unilateral add. (Several once-listed here have since been approved and shipped, 
 module - see `PARITY.md`: `gcppubsubclient` Pub/Sub outbound, `azurecosmos` self-hosted Cosmos
 change-feed worker, and `gcpfunctions` Cloud Functions Gen2.)
 
-- **SDK-typed Azure Function triggers - Blob Storage and Event Hub** (`Benzene.Azure.Function.
-  BlobStorage`/`.EventHub`). Unlike the HTTP/Queue/Cosmos/Timer/Event Grid triggers - whose
-  custom-handler `Data`/`Metadata` JSON shape is a documented, verifiable contract this port already
-  covers zero-dependency - the Blob and Event Hub triggers in .NET use the isolated-worker SDK
-  binding types (`BlobClient`, `EventData`), not a plain JSON/string the custom handler forwards. A
-  faithful Go port would open the blob container / Event Hub itself (owning the checkpoint/lease),
-  which needs the Azure SDK (`azblob` / `azeventhubs`) - the same own-module shape as `awssqs`. Not
-  started, and deliberately not faked: this repo has no way to verify a fabricated custom-handler
-  shape for them (see the no-fabricated-deployment-config rule).
+- **SDK-typed Azure Function trigger - Blob Storage** (`Benzene.Azure.Function.BlobStorage`).
+  Unlike the HTTP/Queue/Cosmos/Timer/Event Grid/Event Hub triggers - whose custom-handler
+  `Data`/`Metadata` JSON shape is a documented, verifiable contract this port covers
+  zero-dependency - the Blob trigger in .NET uses an isolated-worker SDK binding type
+  (`BlobClient`), not a plain JSON/string the custom handler forwards. A faithful Go port would open
+  the blob container itself (owning the lease), which needs the Azure SDK (`azblob`) - the same
+  own-module shape as `awssqs`. Not started, and deliberately not faked: this repo has no way to
+  verify a fabricated custom-handler shape for it (see the no-fabricated-deployment-config rule).
+  (Event Hub left this list: its batch trigger DOES reduce to the custom-handler envelope - the
+  bodies under `Data[name]` plus the host's `PropertiesArray` metadata - and ships as
+  `azurefunctions.EventHubHandler`.)
 - **Hedging** (the last remaining `Benzene.Resilience.Polly` primitive). Retry, timeout, **bulkhead**,
   and **fallback** now ship zero-dependency in the root `resilience` package, and the **circuit
   breaker** ships in its own `circuitbreaker` module wrapping `github.com/sony/gobreaker/v2` (all in

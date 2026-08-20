@@ -42,7 +42,7 @@ This is a multi-module repo (see `go.work`):
 | `github.com/daniellepelley/benzene-go/diagnostics` | `diagnostics/` | Needs `go.opentelemetry.io/otel` (the OTel API - the SDK stays the application's) - same isolation pattern |
 | `github.com/daniellepelley/benzene-go/examples/aws-sqs-helloworld` | `examples/aws-sqs-helloworld/` | Depends on *both* the root and `awssqs`; would be a dependency cycle inside either one |
 | `github.com/daniellepelley/benzene-go/examples/aws-sns-helloworld` | `examples/aws-sns-helloworld/` | Depends on *both* the root and `awssns`; same reason |
-| `github.com/daniellepelley/benzene-go/codegen` | `codegen/` | Needs `github.com/gowebpki/jcs` (RFC 8785 canonicalization for `contractHash`) - the `benzene-codegen` client generator (see `docs/codegen-client.md`). Not listed in `go.work` below: nothing it generates imports it (generated code is emitted as text), so nothing needs it locally `replace`d - build/test it directly from `codegen/` |
+| `github.com/daniellepelley/benzene-go/codegen` | `codegen/` | Needs `github.com/gowebpki/jcs` (RFC 8785 canonicalization for `contractHash`) - the `benzene-codegen` client generator (see `docs/codegen-client.md`). It is in `go.work`'s `use` list so the repo-wide `scripts/modules.sh` sweep covers it, but it needs no `replace` entry: nothing it generates imports it (generated code is emitted as text), so nothing resolves it locally |
 
 **Policy**: a package gets its own module only when it has a genuine third-party dependency the
 rest of the repo shouldn't carry (matching how OpenTelemetry-Go splits its exporters out from
@@ -53,7 +53,8 @@ dependency actually shows up, exactly as happened with `awssqs` and `awssns`.
 ### Local development: `go.work`
 
 `go.work` ties the modules together for local builds without needing their tags to be
-resolvable over the network yet:
+resolvable over the network yet. Abridged - the real file lists every module in the repo, and
+`scripts/modules.sh` derives the build/test/vet package list from it:
 
 ```
 go 1.24.7

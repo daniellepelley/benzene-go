@@ -24,10 +24,12 @@ seam, `wire` kept dependency-free, one third-party dep per satellite module, `Wi
 `struct + Validate()` workers used **consistently** across the satellites — are exactly what a
 seasoned Go developer expects, and the doc comments teach the two real surprises (`Result[T]` over
 `(T, error)`; DI-lite `Container`) instead of hiding them. There are **no Blockers and no High
-correctness/safety findings**. What remains is DX polish: a storefront gap (few runnable
+correctness/safety findings**. What remained was DX polish: a storefront gap (few runnable
 `Example`s), one mis-named adapter (`healthcheck.CheckFunc`), one inconsistent nil-guard
 (`App.GetConfiguration`), and the flagship examples teaching a DI-key shortcut the docs
-themselves warn against. Landing verdict: **IDIOMATIC & ENJOYABLE (polish findings filed)**.
+themselves warn against. All but the storefront gap have since landed - each finding below
+carries its own **Status** line, and A2 is the one still substantially open. Landing verdict:
+**IDIOMATIC & ENJOYABLE (polish findings filed)**.
 
 (Note on scope: the task brief referenced a `port-quality-standards.md` in the spec — that file
 does not exist in `/home/user/Benzene/docs/specification/`; the grounding here is
@@ -87,26 +89,37 @@ window, but the example and docs should show `NamedCheck`.
 **Fix (recommended):** add `NamedCheck`; migrate `examples/helloworld` and any other `CheckFunc{}`
 call sites; consider renaming the struct's `CheckName` field to `Name`… (blocked by the method
 name) — prefer deleting the struct once `NamedCheck` lands.
+**Status: DONE.** `healthcheck.NamedCheck(name, fn)` is the adapter, and the mis-named struct is
+gone.
 
-### A2 — Few runnable `Example`s for a port whose headline is testability
-**What & where:** only 4 `Example*` functions exist module-wide (`example_test.go`,
-`httpbinding/example_test.go`, `benzenetest/example_test.go`). No `ExampleSend*` for any transport
-family, no `Example` on `Register`, `Result`, `healthcheck.Middleware`, a `Consumer`, or the
-resilience/auth building blocks.
+### A2 — The `Example` storefront: most of it filled, the transport half still bare
+**What & where:** when this review was written, only 4 `Example*` functions existed module-wide.
+There are now **18**, and most of the named gaps are closed: `Register`, `Result`, `GetService` and
+`RouterMiddleware` in the root `example_test.go`; `httpbinding.Handler`; the `benzenetest`
+ingress→egress flow; and the building blocks — `healthcheck.Middleware`, `auth.BasicAuth`,
+`resilience.Fallback`, `idempotency.Middleware`, `ratelimiting.Middleware`, `cache.GetOrLoad`,
+`validation`, `saga`, `asyncapi`, `cloudevents`.
+
+What is still bare is the transport half, which is the half a DX-branded port is judged on: there
+is **no `ExampleSend*` for any transport family** (queue / HTTP / stream / fan-in), and no `Example`
+on a self-hosted `Consumer`. A reader landing on `awssqs` or `kafka` on pkg.go.dev still sees no
+runnable code.
 
 **Idiom:** Go treats `Example` functions as first-class, **compile-checked** documentation that
 renders directly on pkg.go.dev (`testing` package docs; Effective Go). For a library that sells
 itself on "write your handler once, host anywhere, test it the same way everywhere," pkg.go.dev is
-the storefront and it is nearly bare. This was the prior review's #1 (rated High) and is still
-substantially open.
+the storefront — and "test it the same way everywhere" is exactly the claim the missing
+`ExampleSend*` set would demonstrate in one screen. This was the prior review's #1 (rated High);
+the core-flow half is now done, the transport half is not.
 
 **Pull & landing:** Pure idiom/DX, no contract dimension. Adopt.
 
-**Severity:** High (storefront for a DX-branded port; also the cheapest credibility win).
-**Fix (recommended):** add `Example` for the core flow (`Register` → `App.Run` →
-`httpbinding.Handler`), one `ExampleSend`-family per transport shape (queue / HTTP / stream /
-fan-in — reuse the "shape families" framing already in the prior review's #6), and one for the
-`benzenetest` ingress→egress flow. These double as compile-checked usage tests.
+**Severity:** Medium (down from High — the core flow now has examples; what is left is breadth).
+**Fix (recommended):** one `ExampleSend`-family per transport shape (queue / HTTP / stream / fan-in
+— reuse the "shape families" framing already in the prior review's #6, and already written up in
+`benzenetest/README.md`), plus one `Example` on a self-hosted `Consumer`. These double as
+compile-checked usage tests.
+**Status: PARTLY DONE.** 4 → 18 `Example*` functions; the `ExampleSend*` set remains open.
 
 ### A3 — `App.GetConfiguration` is the only lifecycle phase that isn't nil-tolerant
 **What & where:** `app.go:29`. `Run()` calls `config := a.GetConfiguration()` unconditionally,
@@ -128,6 +141,8 @@ Non-breaking — it only turns a panic into a sensible default and removes boile
 **Fix (recommended, maintainer's call since it's public behavior):** nil-guard
 `GetConfiguration` in `Run()` to fall back to the zero `TConfig`, and update the doc comment to
 list all three phases as optional.
+**Status: DONE.** `Run()` starts `var config TConfig` and only calls `GetConfiguration` when it is
+non-nil; the doc comment now says all three phases are optional.
 
 ### A4 — Doc comments still carry .NET identifiers / spec-section density in the lead sentence
 **What & where:** ~91 non-test doc-comment lines reference `.NET`, `mirrors`, or a
@@ -208,6 +223,8 @@ being one line shorter.
 **Fix (recommended):** switch the flagship example to an unexported key type; add a short "DI keys"
 note to `docs/message-handlers.md` (or wherever DI is taught) showing the typed key as the default
 and "capture the singleton in the handler closure" as the even-simpler path.
+**Status: DONE.** The examples use unexported zero-size struct keys (`greetingCounterKey{}`,
+`greeterKey{}`), each with the collision-boundary comment.
 
 ### C2 — Two wiring styles are shown before either is explained
 **What & where:** the `README.md` Quickstart hand-builds
@@ -222,6 +239,9 @@ exact wiring that ships (see `benzenetest`)." Uniformity of *explanation*, not o
 
 **Severity:** Polish.
 **Fix (recommended):** one sentence in the README Quickstart pointing at the `App` form and why.
+**Status: DONE.** The Quickstart now says it wires the builder directly because that is the
+shortest thing that runs, and points at the three-phase `App[TConfig]` lifecycle and
+`examples/helloworld` for the real-service form.
 
 ---
 

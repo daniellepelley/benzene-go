@@ -22,14 +22,13 @@ unverifiable wire shape is deferred, not guessed.
   Step Functions (`awsstepfunctions`) clients, plus the self-hosted SQS poller (`awssqs.Consumer`) are
   all done.
 - **Azure Functions triggers: parity on the custom-handler-expressible ones** (Queue Storage, Service
-  Bus*, Event Grid, Timer, Cosmos change feed). Kafka trigger missing; Event Hub / Blob are SDK-typed
+  Bus*, Event Grid, Timer, Cosmos change feed, Event Hub). Kafka trigger missing; Blob is SDK-typed
   and deferred. *Service Bus lacks explicit per-message settle/dead-letter.
 - **Azure outbound: done** — Service Bus (`azureservicebus`), Event Hub (`azureeventhub`), Event Grid
   (`azureeventgrid`), Queue Storage (`azurequeuestorage`) outbound clients all ship. **Self-hosted
   workers: Service Bus (`azureservicebus.Worker`), Event Hub (`azureeventhub.Consumer`, caller-owned
   checkpoint), and the Cosmos change-feed worker (`azurecosmos.Worker`, caller-owned lease) done**;
-  the isolated-worker Event Hub/Blob Functions triggers stay deferred (SDK-typed, need `azblob`/an
-  Event Hub SDK trigger shape).
+  only the Blob Functions trigger stays deferred (SDK-typed, needs `azblob`).
 - **GCP: full** — Pub/Sub push (Cloud Run, zero-dep) + the Pub/Sub outbound client (`gcppubsubclient`)
   + the Cloud Functions Gen2 binding (`gcpfunctions`: `RegisterHTTP` + `RegisterCloudEvent`).
 - **Kafka self-hosted: done.** **RabbitMQ: done** (`rabbitmq` — self-hosted worker + outbound client).
@@ -72,15 +71,15 @@ stream (Event Hub, Blob do not).
 | `Azure.Function.Timer` | Inbound Timer trigger | Done `azurefunctions.TimerHandler` | — |
 | `Azure.Function.CosmosDb` | Inbound Cosmos change-feed (host owns feed) | Done `azurefunctions.CosmosHandler` | — |
 | `Azure.Function.Kafka` | Inbound Kafka trigger (value bytes→string) | **Missing** — zero-dep-achievable via the custom-handler envelope, but the exact payload shape must be pinned against a live Functions host first (no fabrication) | — (inbound), pending shape verification |
-| `Azure.Function.EventHub` | Inbound Event-Hub trigger — SDK-typed `EventData`, batch, checkpoint | **Deferred** (not a clean custom-handler JSON contract) | `azure-sdk-for-go/.../azeventhubs` |
+| `Azure.Function.EventHub` | Inbound Event-Hub trigger — batch + per-event application properties | **Done** `azurefunctions.EventHubHandler` — `"cardinality": "many"` only, matching .NET's `EventData[]`-only shape; one pipeline invocation per event, stopping at the first failure | — |
 | `Azure.Function.BlobStorage` | Inbound Blob trigger — SDK-typed `byte[]` + lease | **Deferred** | `azure-sdk-for-go/.../azblob` |
-| `Azure.ServiceBus` | **Self-hosted** Service-Bus worker (settle/dead-letter) | **Missing** | `azure-sdk-for-go/.../azservicebus` |
-| `Azure.EventHub` | **Self-hosted** Event-Hub worker (+ checkpoint store) | **Missing/Deferred** | `azure-sdk-for-go/.../azeventhubs` |
+| `Azure.ServiceBus` | **Self-hosted** Service-Bus worker (settle/dead-letter) | **Done** `azureservicebus.Worker` (explicit complete/abandon/dead-letter) | `azure-sdk-for-go/.../azservicebus` |
+| `Azure.EventHub` | **Self-hosted** Event-Hub worker (+ checkpoint store) | **Done** `azureeventhub.Consumer` (caller-owned checkpoint) | `azure-sdk-for-go/.../azeventhubs` |
 | `Azure.CosmosDb` | **Self-hosted** Cosmos change-feed worker (owns lease) | **Done** `azurecosmos.Worker` (caller-owned checkpoint/lease, fan-in dispatch) | `azure-sdk-for-go/.../data/azcosmos` |
-| `Clients.Azure.ServiceBus` | Outbound Service-Bus publish | **Missing** | `azure-sdk-for-go/.../azservicebus` |
-| `Clients.Azure.EventHub` | Outbound Event-Hub publish | **Missing** | `azure-sdk-for-go/.../azeventhubs` |
-| `Clients.Azure.EventGrid` | Outbound Event-Grid publish | **Missing** | `azure-sdk-for-go/.../azeventgrid` |
-| `Clients.Azure.QueueStorage` | Outbound Storage-Queue send | **Missing** | `azure-sdk-for-go/.../azqueue` |
+| `Clients.Azure.ServiceBus` | Outbound Service-Bus publish | **Done** `azureservicebus.Client` | `azure-sdk-for-go/.../azservicebus` |
+| `Clients.Azure.EventHub` | Outbound Event-Hub publish | **Done** `azureeventhub.Client` | `azure-sdk-for-go/.../azeventhubs` |
+| `Clients.Azure.EventGrid` | Outbound Event-Grid publish | **Done** `azureeventgrid.Client` | `azure-sdk-for-go/.../azeventgrid` |
+| `Clients.Azure.QueueStorage` | Outbound Storage-Queue send | **Done** `azurequeuestorage.Client` | `azure-sdk-for-go/.../azqueue` |
 | `Azure.Function.SourceGenerators` / `.AspNet` | Codegen / ASP.NET hosting | Out-of-scope | — |
 
 ## GCP
@@ -89,14 +88,14 @@ stream (Event Hub, Blob do not).
 |---|---|---|---|
 | `GoogleCloud.Functions.Http` | Cloud Functions Gen2 HTTP (functions-framework) | **Done** `gcpfunctions.RegisterHTTP` (also still supports the zero-dep Cloud Run path via `httpbinding`) | `GoogleCloudPlatform/functions-framework-go` |
 | `GoogleCloud.Functions.PubSub` | Inbound Pub/Sub CloudEvent trigger (functions-framework) | **Done** `gcpfunctions.RegisterCloudEvent` (plus the zero-dep `gcppubsub` push-subscription path for Cloud Run) | `functions-framework-go` + `cloudevents/sdk-go/v2` |
-| `Clients.GoogleCloud.PubSub` | Outbound Pub/Sub publish | **Missing** (inbound push half is done) | `cloud.google.com/go/pubsub` |
+| `Clients.GoogleCloud.PubSub` | Outbound Pub/Sub publish | **Done** `gcppubsubclient.Client` | `cloud.google.com/go/pubsub` |
 
 ## Kafka + RabbitMQ
 
 | .NET package | What it is | Go status | Dependency to close |
 |---|---|---|---|
 | `Kafka.Core` | Self-hosted consumer-group loop + producer | Done `kafka` module | — |
-| `RabbitMq` | **Self-hosted** worker + outbound publish | **Missing** (both halves) | `github.com/rabbitmq/amqp091-go` |
+| `RabbitMq` | **Self-hosted** worker + outbound publish | **Done** `rabbitmq.Consumer` + `rabbitmq.Client` | `github.com/rabbitmq/amqp091-go` |
 
 ## Prioritized plan to close the gap
 
@@ -113,8 +112,8 @@ That is essentially the *only* remaining zero-dep cloud gap — everything else 
   already present in the `awssqs` module).
 - **Azure** — done: outbound Service Bus (`azservicebus`), Event Hub (`azeventhubs`), Event Grid
   (`azeventgrid`), Queue Storage (`azqueue`), the self-hosted Service Bus / Event Hub workers, and the
-  self-hosted Cosmos change-feed worker (`azcosmos`). Still deferred: the isolated-worker Event Hub /
-  Blob Functions triggers (SDK-typed).
+  self-hosted Cosmos change-feed worker (`azcosmos`). Still deferred: the Blob Functions trigger
+  (SDK-typed).
 - **GCP** — done: outbound Pub/Sub (`cloud.google.com/go/pubsub`) and the Cloud Functions Gen2 target
   (`functions-framework-go` + `cloudevents/sdk-go/v2`).
 - **RabbitMQ** — done: self-hosted worker + outbound client (`github.com/rabbitmq/amqp091-go`).

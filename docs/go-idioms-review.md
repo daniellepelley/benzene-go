@@ -36,20 +36,23 @@ from C#" was almost entirely ergonomic surface, addressed by the items below.
 
 ## Findings
 
+Status is **Done** (the decision below is implemented), **Partly** (landed, with a named remainder),
+or **Won't do** (the decision was to leave it).
+
 | # | Finding | Where | Class | Priority | Status |
 |---|---------|-------|-------|----------|--------|
-| 1 | No godoc `Example` tests anywhere | whole module | A | High | |
-| 2 | Godoc leaks .NET identifiers / essay-length | all packages | A | High | |
-| 3 | Split constructor convention (options vs struct+`Validate()`) | self-hosted consumers/workers | A/C | High | |
-| 4 | `Result[T]`/`Status` not `(T, error)`; DI-lite `Container`/`Scope` | `result.go`, `scope.go` | B | High (doc) | |
-| 5 | `*Decorator` sender naming (GoF/C# term) | `client/*`, `mesh`, `diagnostics` | A | Medium | |
-| 6 | `Send*` shape variation undocumented | `benzenetest` | C→doc | Medium | |
-| 7 | `responseevents` not dogfooded through the harness | `responseevents` | C | Medium | |
-| 8 | `gcp-cloudrun-helloworld` test uses raw `httptest` | example test | A | Medium | |
-| 9 | `App[TConfig]` / `ApplicationBuilder` `Use*` redundancy | `app.go` | C | Medium | |
-| 10 | Naming polish: `CreatedResult`→`Created`, predicate cluster | `result.go`, `status.go` | A | Low | |
-| 11 | "table-driven where the shape allows" claim overstated | `AGENTS.md` | B | Low | |
-| 12 | Module path ≠ package name forces import alias | `go.mod` | C | Low | |
+| 1 | No godoc `Example` tests anywhere | whole module | A | High | **Partly** — 18 `Example*` functions now ship (root `Register`/`Result`/`GetService`/`RouterMiddleware`, `httpbinding.Handler`, `benzenetest`'s flagship flow, `saga`, `asyncapi`, `auth`, `cache`, `cloudevents`, `healthcheck`, `idempotency`, `ratelimiting`, `resilience`, `validation`). Remainder: the `ExampleSend*`-per-transport-family set, and an example for one self-hosted `Consumer` |
+| 2 | Godoc leaks .NET identifiers / essay-length | all packages | A | High | **Done** — exported comments lead with the caller-facing sentence; cross-language rationale reads as deliberate context rather than name-dropping |
+| 3 | Split constructor convention (options vs struct+`Validate()`) | self-hosted consumers/workers | A/C | High | **Done** — all six converged on struct fields + `Validate()`: `awssqs.Consumer`, `azureservicebus.Worker`, `azureeventhub.Consumer`, `azurecosmos.Worker`, `kafka.Consumer`, `rabbitmq.Consumer`. The options constructors are gone |
+| 4 | `Result[T]`/`Status` not `(T, error)`; DI-lite `Container`/`Scope` | `result.go`, `scope.go` | B | High (doc) | **Done** — kept, and taught: README's "Handlers return `Result[T]`, not `(T, error)`" section |
+| 5 | `*Decorator` sender naming (GoF/C# term) | `client/*`, `mesh`, `diagnostics` | A | Medium | **Done** — `client.WithRetry`, `client.WithCorrelationID`, `mesh.WithTraceContext`, `diagnostics.WithTraceContext` |
+| 6 | `Send*` shape variation undocumented | `benzenetest` | C→doc | Medium | **Done** — the four shape families are documented in `benzenetest/README.md`; the signatures stay as the wire dictates |
+| 7 | `responseevents` not dogfooded through the harness | `responseevents` | C | Medium | **Done** — `responseevents/harness_test.go` |
+| 8 | `gcp-cloudrun-helloworld` test uses raw `httptest` | example test | A | Medium | **Done** — resolved the second way the finding allowed: the raw `net/http` path is kept *because* it is the point of the Cloud Run example, and the test now says so and points at the sibling example that uses the harness |
+| 9 | `App[TConfig]` / `ApplicationBuilder` `Use*` redundancy | `app.go` | C | Medium | **Partly** — `App` kept and repositioned, and `UseDefaultPipeline` earns its place as a shorthand. Remainder: `UsePipeline`/`UseReservedNames` still duplicate the exported fields, so there are still two ways to say the same thing |
+| 10 | Naming polish: `CreatedResult`→`Created`, predicate cluster | `result.go`, `status.go` | A | Low | **Done** — `benzene.Created`, symmetrical with `Ok`/`Accepted`/`Updated` |
+| 11 | "table-driven where the shape allows" claim overstated | `CLAUDE.md` | B | Low | **Done** — the wording now says table-driven where cases share a shape, named per-scenario where failure paths have distinct setup, and to match the package you are in |
+| 12 | Module path ≠ package name forces import alias | `go.mod` | C | Low | **Won't do** — decided to leave; the README import snippet shows the `benzene "…/benzene-go"` alias so it reads as intentional |
 
 ## Detail & decisions
 
@@ -116,7 +119,7 @@ default. The `ApplicationBuilder` `Use*` setters duplicate its exported fields; 
 
 ### 11 — Correct the convention wording (B, Low)
 Reality is a sound mix of table-driven and named per-scenario tests. **Decision: soften the
-`AGENTS.md` claim to match.**
+repo-guide claim to match** (the claim lives in `CLAUDE.md`, this repo's project guide).
 
 ### 12 — Module path vs package name (C, Low)
 `…/benzene-go` imports as package `benzene`, forcing an alias. **Decision: leave** (a rename is

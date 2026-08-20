@@ -18,14 +18,24 @@ promotion was authored from.
 > **Superseded (2026-08).** This document is kept as a historical record of Phases 1-5 and is
 > **not updated to match every later spec revision** - `docs/specification/mesh.md` in the main
 > repo is the current normative text, and this port's `mesh`/`meshd` packages implement *that*,
-> not this narrative. In particular: everywhere below that says a consumer edge is "derived from
-> trace parentage" describes a rule the main repo's 2026-08 revision (PR #66) superseded - the
-> producer/consumer graph is now built **only** from the latest registered `ServiceDescriptor`
-> (`topics` for providers, the new `consumes` - populated via `mesh.OutboundRegistry`/
-> `RegisterOutbound`, mesh.md §2.3 - for consumers); trace parentage is an additive, observed-only
-> signal for liveness and drift (mesh.md §4.2: "Unobserved"/last-observed-at and undeclared-edge
-> `contract-drift` issues), never a way to admit or remove a graph edge. See the revision note at
-> the top of the main repo's mesh.md for the full rationale.
+> not this narrative. Two things below are out of date:
+>
+> 1. **The roles inverted.** Wherever this document treats a registered handler as making a
+>    service that topic's *provider*, read *consumer*. Registering a handler for a topic makes a
+>    service that topic's consumer, which is how every broker in the field uses the word; the
+>    service that *sends* is the provider. So `ServiceDescriptor.topics` (the handlers) now yields
+>    the topic's **consumers**, and the field added alongside it - named `produces`, populated via
+>    `mesh.OutboundRegistry`/`RegisterOutbound` (mesh.md §2.3) - yields its **providers**. In code:
+>    `mesh.Descriptor.Produces`, and `meshd`'s `register`, which writes `Topics -> consumers,
+>    Produces -> providers`.
+> 2. **The graph is declared, not trace-derived.** Everywhere below that says an edge is "derived
+>    from trace parentage" describes a rule the main repo's 2026-08 revision (PR #66) superseded:
+>    the producer/consumer graph is now built **only** from the latest registered
+>    `ServiceDescriptor`, replaced wholesale on re-registration. Trace parentage is an additive,
+>    observed-only signal for liveness and drift (mesh.md §4.2: "Unobserved"/last-observed-at and
+>    undeclared-edge `contract-drift` issues), never a way to admit or remove a graph edge.
+>
+> See the revision note at the top of the main repo's mesh.md for the full rationale.
 
 A degradation rule became explicit during Phase 1 implementation and binds every later
 phase: **every mesh feed is independent and optional, and an unavailable feed reduces

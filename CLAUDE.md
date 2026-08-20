@@ -162,7 +162,8 @@ alongside the shared spec.
   and the fail-fast result is built once at wiring time (a success-class open status panics at
   construction, never per-request). Its own module because gobreaker is third-party; the circuit
   breaker is the piece that genuinely wants a library (retry + a plain deadline do not - those stay
-  zero-dep in `resilience`). Bulkhead/hedging/fallback remain deferred.
+  zero-dep in `resilience`). Bulkhead and fallback ship in `resilience`; only hedging remains
+  deferred.
 - `auth/` - authentication/authorization building block, matching `Benzene.Auth.Core`+`.Basic`+
   `.OAuth2` (zero-dep). Go has no `ClaimsPrincipal`, so a `Principal` (name/roles/claims) is a plain
   value threaded on the context (`ContextWithPrincipal`/`PrincipalFromContext`). `BasicAuth(validate,
@@ -218,8 +219,11 @@ alongside the shared spec.
   `FailMessage` (default) replaces the result with `unexpected-error` and stops (nack/redeliver -
   handlers must be idempotent); `LogAndContinue` keeps the result and continues, with an optional
   `OnPublishError` hook (no forced logger dependency). The .NET package's AsyncAPI/spec-catalog and
-  build-time unmapped-response diagnostic are **not** ported (Go has no spec generator here; mesh
-  descriptor derivation is the introspection path); `Mapping.Covers` is kept for a future diagnostic.
+  build-time unmapped-response diagnostic are **not** ported. This port DOES have a spec generator
+  (`asyncapi.Generate`/`asyncapi.Handler`) - the gap is narrower than "no generator": its send side
+  is declared by hand with `WithSentEvent`, not derived from the `responseevents` mappings that
+  actually produce those events, so the two never check each other. `Mapping.Covers` is kept for the
+  diagnostic that would close it.
   Reflect-free nil-payload check (dispatch path), so a *typed*-nil pointer payload publishes JSON
   `null` - a documented divergence from .NET's reference-null semantics.
 - `clienthealthcheck/` - the consumer-side dependency health check, matching
@@ -366,16 +370,21 @@ alongside the shared spec.
   schema `eventType` or CloudEvents 1.0 `type`, told apart by `specversion`), the body is the
   event's `data`, and headers are the envelope's `id`/`subject`/`source`; a non-success dispatch is
   outer 500 so Event Grid's own retry + dead-letter machinery takes over (same fire-and-forget
-  outer-200/500 as `QueueHandler`). Event Grid trigger only - the SDK-typed BlobStorage/EventHub
-  triggers are deferred (isolated-worker shapes, see `ROADMAP.md`).
+  outer-200/500 as `QueueHandler`), and `EventHubHandler` for the Event Hub trigger (matching
+  `Benzene.Azure.Function.EventHub`): batch mode (`"cardinality": "many"`) only, mirroring .NET's
+  `EventData[]`-only shape, but each event in the batch is its OWN pipeline invocation (an Event Hub
+  batch is a batch of independently-topic-routed messages, unlike Cosmos/Timer fan-in), resolved with
+  QueueHandler's precedence from that event's `PropertiesArray` entry; dispatch stops at the first
+  failure, since the host checkpoints per invocation and the whole batch redelivers anyway. Only the
+  SDK-typed BlobStorage trigger is deferred (isolated-worker shape, see `ROADMAP.md`).
   The change-feed binding is **fan-in, not topic-routed** (core-concepts §3, streaming-shaped):
   the whole delivered batch of changed documents is one pipeline invocation - not one per
   document - dispatched to the topic named in code, whose handler takes the batch as a slice
   (`Handler[[]TDocument, TRes]`). Checkpointing is batch-level and on success only, so a failed
   dispatch is a non-2xx outer status that redelivers the entire batch (same convention as
   `QueueHandler`); the version-aware fan-in uses `envelope.DispatchTopicResult`. The self-hosted
-  worker flavor (`Benzene.Azure.CosmosDb`) is deferred - it needs the Cosmos SDK (see
-  `ROADMAP.md`).
+  worker flavor (`Benzene.Azure.CosmosDb`) ships as `azurecosmos.Worker` - its own module, since it
+  needs the Cosmos SDK.
 - `awssqs/` - AWS SQS binding, in **its own Go module** (`awssqs/go.mod`) - one of the packages
   with a third-party dependency (`aws-sdk-go-v2/service/sqs`, needed for the outbound publish
   client; the inbound Lambda-trigger `Handler` is zero-dependency, like `awslambda`). See
@@ -484,8 +493,8 @@ alongside the shared spec.
 - `gcppubsub/` - Google Cloud Pub/Sub inbound binding, zero-dependency in the root module: an
   `http.Handler` for a push subscription's endpoint (base64 data + attributes in, ack/nack via
   the response status code), wire-contracts §2 topic resolution like `awssqs`/`awssns`. The
-  outbound publish half needs the Pub/Sub SDK - a pending dependency decision (`ROADMAP.md`);
-  if approved it gets its own module like `awssqs`/`awssns`.
+  outbound publish half ships as `gcppubsubclient`, its own module like `awssqs`/`awssns`, since
+  it needs the Pub/Sub SDK.
 - `awsdynamodb/` - DynamoDB Streams inbound binding, zero-dependency in the root module: a
   Lambda `Handler` for a stream event source mapping. Topic is `{tableName}:{eventName}` (table
   parsed from the stream ARN + INSERT/MODIFY/REMOVE), body is the record's image unmarshalled
