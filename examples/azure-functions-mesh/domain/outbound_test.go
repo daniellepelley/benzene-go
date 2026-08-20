@@ -188,11 +188,16 @@ func describeService(t *testing.T, service string) mesh.Descriptor {
 // descriptor and nothing else (mesh.md §4).
 //
 // Note the direction meshd's vocabulary uses, which is what these field names mean: a topic's
-// PROVIDERS are the services that registered a handler for it (they answer it), and its CONSUMERS
-// are the services that declared they send it (they call it) - store.go's register() writes
-// providers from Descriptor.Topics and consumers from Descriptor.Produces. So orders, which sends
-// payment:take, appears on payment:take's consumers, and payments, which handles it, on its
-// providers.
+// PROVIDERS are the services that declared they send it (they supply it), and its CONSUMERS are the
+// services that registered a handler for it (they take delivery of it) - store.go's register()
+// writes providers from Descriptor.Produces and consumers from Descriptor.Topics. So orders, which
+// sends payment:take, appears on payment:take's providers, and payments, which handles it, on its
+// consumers.
+//
+// This is the direction mesh.md settled on in the role inversion (spec f45a187, "consumes" becoming
+// "produces"): a handler is a consumer of the topic it handles. Before it, these two columns were
+// the other way round, and this test was left asserting the old direction - it went unnoticed
+// because CI's hand-listed module set did not include this module. Both are fixed together.
 func TestEstate_DeclaredProducerConsumerGraph(t *testing.T) {
 	ctx := context.Background()
 	collector := meshd.New(meshd.Options{})
@@ -212,19 +217,19 @@ func TestEstate_DeclaredProducerConsumerGraph(t *testing.T) {
 
 	for _, tc := range []struct {
 		topic     string
-		providers []string // registered a handler for it
-		consumers []string // declared they send it
+		providers []string // declared they send it
+		consumers []string // registered a handler for it
 	}{
-		// The command chain: each hop's sender shows up as the declared consumer.
-		{TopicPaymentTake, []string{ServicePayments}, []string{ServiceOrders}},
-		{TopicShipmentBook, []string{ServiceShipping}, []string{ServicePayments}},
+		// The command chain: each hop's sender shows up as the declared provider.
+		{TopicPaymentTake, []string{ServiceOrders}, []string{ServicePayments}},
+		{TopicShipmentBook, []string{ServicePayments}, []string{ServiceShipping}},
 		// Event Hub fan-out: one declared sender, two handlers.
-		{TopicOrderPlaced, []string{ServiceInventory, ServiceNotifications}, []string{ServiceOrders}},
+		{TopicOrderPlaced, []string{ServiceOrders}, []string{ServiceInventory, ServiceNotifications}},
 		// Event Grid integration events.
-		{TopicPaymentCaptured, []string{ServiceAnalytics, ServiceNotifications}, []string{ServicePayments}},
-		{TopicShipmentDispatched, []string{ServiceAnalytics, ServiceInventory, ServiceNotifications}, []string{ServiceShipping}},
+		{TopicPaymentCaptured, []string{ServicePayments}, []string{ServiceAnalytics, ServiceNotifications}},
+		{TopicShipmentDispatched, []string{ServiceShipping}, []string{ServiceAnalytics, ServiceInventory, ServiceNotifications}},
 		// orders' own HTTP entry point: handled by orders, sent by nobody in the estate.
-		{TopicOrderCreate, []string{ServiceOrders}, nil},
+		{TopicOrderCreate, nil, []string{ServiceOrders}},
 	} {
 		t.Run(tc.topic, func(t *testing.T) {
 			body, ok := dispatch(ctx, collector, mesh.TopicQueryTopic, `{"topic":"`+tc.topic+`"}`)

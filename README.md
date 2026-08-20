@@ -322,13 +322,19 @@ already embodies: message handlers, like everything else, are the steer, never a
 ## Developing
 
 ```
-go build ./...
-go vet ./...
-gofmt -l .              # should print nothing
-go test ./... -race -cover
+gofmt -l .                                  # should print nothing
+go vet   $(scripts/modules.sh)
+go build $(scripts/modules.sh)
+go test  $(scripts/modules.sh) -race -cover
 ```
 
-CI (`.github/workflows/ci.yml`) runs all of the above on every push/PR to `main`.
+`scripts/modules.sh` prints every module in `go.work`. Use it rather than a bare `./...`: this is a
+multi-module workspace, and `./...` does not cross a nested module boundary even with `go.work`
+present, so `go test ./...` from the root tests the root module *only* - 52 of the repo's 102
+packages - and says nothing about the other twenty-eight modules.
+
+CI (`.github/workflows/ci.yml`) runs exactly these commands, off the same script, on every push/PR
+to `main`.
 
 ## License
 

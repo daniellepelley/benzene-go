@@ -1,14 +1,16 @@
-# Builds, vets, and tests every module in this repo: a gofmt check, go vet, go build ./...,
-# go test ./... -race -cover, and a cross-compile smoke check for each cloud example's actual
-# deployment target (Lambda: linux/arm64, Azure/Cloud Run: linux/amd64) so a change that breaks
-# cross-compilation for a target this runner's own GOOS/GOARCH can't build natively is still
-# caught. This is a multi-module repo (go.work) - the root module, awssqs/ and awssns/ (each its
-# own module, since they're the packages with a third-party dependency), and
-# examples/aws-sqs-helloworld/ and examples/aws-sns-helloworld/ (each its own module, since it
-# depends on both the root and its respective binding - putting it in either would create a
-# cycle); vet/build/test steps run against all of them explicitly, since `./...` from the root
-# does not cross a nested module boundary even in workspace mode. See README.md for the local
-# equivalent of each step.
+# Builds, vets, and tests every module in this repo: a gofmt check, go vet, go build, go test
+# -race -cover, and a cross-compile smoke check for each cloud example's actual deployment target
+# (Lambda: linux/arm64, Azure/Cloud Run: linux/amd64) so a change that breaks cross-compilation for
+# a target this runner's own GOOS/GOARCH can't build natively is still caught. See README.md for the
+# local equivalent of each step.
+#
+# This is a multi-module repo (go.work), and `./...` does not cross a nested module boundary even in
+# workspace mode, so every module has to be named on the command line. That list used to be written
+# out by hand in three steps - and a hand-maintained list is a list that goes stale silently. It did:
+# nine of the twenty-nine modules were missing from it, among them examples/azure-functions-mesh,
+# whose descriptor test went on asserting the pre-role-inversion provider/consumer direction while
+# CI stayed green. The list is now derived from go.work by the "workspace modules" step below, so a
+# module is covered from the moment it joins the workspace.
 
 name: CI
 
@@ -45,14 +47,25 @@ jobs:
             exit 1
           fi
 
+      - name: workspace modules
+        # scripts/modules.sh is the single source of truth, shared with the commands in README.md,
+        # so CI and a developer's local run cover exactly the same set. The count is echoed so a
+        # run's log shows how much was covered.
+        run: |
+          set -euo pipefail
+          mods=$(scripts/modules.sh)
+          echo "covering $(printf '%s\n' $mods | wc -l) workspace modules:"
+          printf '  %s\n' $mods
+          echo "GO_MODULES=$mods" >> "$GITHUB_ENV"
+
       - name: go vet
-        run: go vet ./... ./awssqs/... ./awslambdaclient/... ./awsstepfunctions/... ./azureservicebus/... ./azureeventgrid/... ./azureeventhub/... ./azurequeuestorage/... ./azurecosmos/... ./circuitbreaker/... ./gcpfunctions/... ./gcppubsubclient/... ./rabbitmq/... ./awssns/... ./awseventbridge/... ./kafka/... ./diagnostics/... ./grpcbinding/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/...
+        run: go vet $GO_MODULES
 
       - name: go build
-        run: go build ./... ./awssqs/... ./awslambdaclient/... ./awsstepfunctions/... ./azureservicebus/... ./azureeventgrid/... ./azureeventhub/... ./azurequeuestorage/... ./azurecosmos/... ./circuitbreaker/... ./gcpfunctions/... ./gcppubsubclient/... ./rabbitmq/... ./awssns/... ./awseventbridge/... ./kafka/... ./diagnostics/... ./grpcbinding/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/...
+        run: go build $GO_MODULES
 
       - name: go test
-        run: go test ./... ./awssqs/... ./awslambdaclient/... ./awsstepfunctions/... ./azureservicebus/... ./azureeventgrid/... ./azureeventhub/... ./azurequeuestorage/... ./azurecosmos/... ./circuitbreaker/... ./gcpfunctions/... ./gcppubsubclient/... ./rabbitmq/... ./awssns/... ./awseventbridge/... ./kafka/... ./diagnostics/... ./grpcbinding/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/... -race -cover
+        run: go test $GO_MODULES -race -cover
 
       - name: cross-compile cloud examples
         run: |

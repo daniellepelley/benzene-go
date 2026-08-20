@@ -681,16 +681,13 @@ alongside the shared spec.
 ## Workflow expectations
 
 - Run `gofmt -w .` before every commit; CI fails on unformatted files.
-- Run `go vet ./... ./awssqs/... ./awslambdaclient/... ./awsstepfunctions/... ./azureservicebus/...
-  ./azureeventhub/... ./azureeventgrid/... ./azurequeuestorage/... ./azurecosmos/... ./circuitbreaker/...
-  ./gcpfunctions/...
-  ./gcppubsubclient/... ./rabbitmq/... ./awssns/... ./awseventbridge/... ./kafka/... ./diagnostics/...
-  ./grpcbinding/... ./examples/aws-sqs-helloworld/... ./examples/aws-sns-helloworld/... && go build
-  (same paths) &&
-  go test (same paths) -race -cover` before considering a task
-  complete - `./...` from the root does not cross a nested
-  module boundary even with `go.work` present, so the nested modules need their own explicit
-  path. Every non-test-only package should sit at 100% coverage, or just under it with the gap
+- Run `go vet $(scripts/modules.sh) && go build $(scripts/modules.sh) && go test
+  $(scripts/modules.sh) -race -cover` before considering a task complete. `./...` from the root does
+  not cross a nested module boundary even with `go.work` present, so every module must be named -
+  `scripts/modules.sh` derives that list from `go.work` and is what CI runs too. Never substitute a
+  bare `go test ./...`: it passes while testing barely half the repo, which is how a stale assertion
+  in `examples/azure-functions-mesh` survived the producer/consumer role inversion.
+  Every non-test-only package should sit at 100% coverage, or just under it with the gap
   being a documented, genuinely-unreachable defensive branch (not an untested real code path) -
   if you can't tell which one a gap is, write the test that would prove it one way or the other
   rather than assuming.
