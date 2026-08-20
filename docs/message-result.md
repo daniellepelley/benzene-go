@@ -121,14 +121,13 @@ constructors take variadic error strings (`errors ...string`).
 | Constructor | Signature | Status |
 |---|---|---|
 | `Ok` | `Ok[T any](payload T) Result[T]` | `ok` |
-| `CreatedResult` | `CreatedResult[T any](payload T) Result[T]` | `created` |
+| `Created` | `Created[T any](payload T) Result[T]` | `created` |
 | `Accepted` | `Accepted[T any](payload T) Result[T]` | `accepted` |
 | `Updated` | `Updated[T any](payload T) Result[T]` | `updated` |
 | `Deleted` | `Deleted[T any](payload T) Result[T]` | `deleted` |
 | `Ignored` | `Ignored[T any](payload T) Result[T]` | `ignored` — handled deliberately, not an error |
 
-`Ok` infers `T` from its argument (`benzene.Ok(orderResponse{...})`); the rest do too. Note the name
-is `CreatedResult`, not `Created`.
+`Ok` infers `T` from its argument (`benzene.Ok(orderResponse{...})`); the rest do too.
 
 ### Failure — carry error messages
 
@@ -223,9 +222,11 @@ zero-dependency and implement the spec's tables directly.
 
 ### HTTP — `httpstatus`
 
-`httpstatus.ToHTTP(status benzene.Status) int` implements
+`httpstatus.ToHTTP(status benzene.Status, isSuccessful ...bool) int` implements
 [wire-contracts §4.1](https://benzene.app/docs/specification/wire-contracts.html). An unrecognized,
-application-defined, or empty status (and `unexpected-error`) maps to `500`:
+application-defined, or empty status (and `unexpected-error`) maps to `500` — unless the result was
+explicitly marked successful (the optional `isSuccessful` argument), in which case an unknown status
+maps to `200` rather than misreporting a success as a server error:
 
 | Benzene status | HTTP code |
 |---|---|
@@ -250,11 +251,12 @@ used by an HTTP outbound client reading a response.
 
 ### gRPC — `grpcstatus`
 
-`grpcstatus.ToGRPC(status benzene.Status) int` implements
+`grpcstatus.ToGRPC(status benzene.Status, isSuccessful ...bool) int` implements
 [wire-contracts §4.2](https://benzene.app/docs/specification/wire-contracts.html). Codes are the raw
 numeric gRPC status codes (a `gRPC` binding wraps the result as `codes.Code(grpcstatus.ToGRPC(...))`).
 All success-class statuses collapse to `OK (0)`; an unrecognized or empty status (and
-`unexpected-error`) maps to `Internal (13)`:
+`unexpected-error`) maps to `Internal (13)`, with the same explicit-success exception as HTTP
+(an unknown status on a result marked successful maps to `OK`):
 
 | Benzene status | gRPC code |
 |---|---|

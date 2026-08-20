@@ -433,7 +433,7 @@ The IAM requirements differ per source, and the example templates encode the min
   caller's W3C `traceparent`, with `benzene.topic`/`benzene.version`/`benzene.status` attributes, plus
   `benzene.messages.processed`/`benzene.message.duration` metrics. Add it as a middleware in your
   pipeline. Your app owns the OTel SDK/exporter; with no SDK installed the no-op defaults make it
-  free. It also provides `TraceContextDecorator` for propagating trace context on outbound calls.
+  free. It also provides `WithTraceContext` for propagating trace context on outbound calls.
 - **Structured logging** — the zero-dependency [`logging`](../logging) package
   (`log/slog` only) emits one structured line per invocation (topic, status, duration; Info/Warn/Error
   by outcome). It's the dependency-free alternative to `diagnostics`.

@@ -251,10 +251,8 @@ the OpenTelemetry API)
 Produces one OpenTelemetry span per invocation (named by topic, `SpanKind` server, joined to the
 caller's trace via the inbound W3C `traceparent` header, tagged `benzene.topic`/`benzene.version`/
 `benzene.status`), plus a `benzene.messages.processed` counter and a `benzene.message.duration`
-histogram — both attributed by `topic`/`transport`/`result`, the cross-port
-[observability conventions](https://github.com/daniellepelley/Benzene/blob/main/docs/guides/observability-conventions.md)
-(`transport` is currently always `"<missing>"` — this port has no way yet to read a binding's
-identity back). It depends on the OpenTelemetry *API* only, never the SDK: the application owns SDK
+histogram — both attributed by `topic`/`transport`/`result` (`transport` is currently always
+`"<missing>"` — this port has no way yet to read a binding's identity back). It depends on the OpenTelemetry *API* only, never the SDK: the application owns SDK
 setup, and with no SDK installed the API's no-op defaults make the middleware free and silent.
 Register it outermost so it observes every invocation.
 
@@ -275,7 +273,7 @@ pipeline := benzene.NewPipeline(
 By default the middleware discovers the ambient global tracer/meter providers; pass
 `diagnostics.WithTracerProvider` / `diagnostics.WithMeterProvider` to supply them explicitly. The
 span's context is passed to `next`, so downstream middleware, handlers, and outbound clients see the
-current span. The package also ships `diagnostics.TraceContextDecorator`, which is *not* a pipeline
+current span. The package also ships `diagnostics.WithTraceContext`, which is *not* a pipeline
 middleware but an outbound `client.Sender` decorator — it injects the current span context as
 `traceparent`/`tracestate` headers on outbound `Send` calls so a downstream Benzene service continues
 the same trace.

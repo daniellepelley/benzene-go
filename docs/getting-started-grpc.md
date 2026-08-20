@@ -179,8 +179,8 @@ The `grpcstatus` package (wire-contracts.md §4.2) drives the forward mapping:
 ## 6. Calling another gRPC service
 
 `grpcbinding.NewClient(conn, routes)` returns a `*grpcbinding.Client` that satisfies
-`client.Sender`, so it composes with `client.CorrelationDecorator` / `client.RetryDecorator` like
-any other sender. Each `grpcbinding.ClientRoute` is keyed by topic and carries the method path plus
+`client.Sender`, so it composes with the `client` decorators (`client.WithRetry`,
+`client.WithCorrelationID`, …) like any other sender. Each `grpcbinding.ClientRoute` is keyed by topic and carries the method path plus
 `NewRequest` / `NewResponse` factories:
 
 ```go

@@ -28,7 +28,7 @@ so a transport binding can decode a request body into `TReq` and marshal the `TR
 The handler returns a *value*, not an error: `benzene.Ok(...)` for success and a status constructor
 like `benzene.BadRequest[T](...)` for a client failure. See
 [Message results](https://benzene.app/docs/specification/core-concepts.html) for the full status
-vocabulary and the `benzene.Result[T]` factories (`benzene.Ok`, `benzene.CreatedResult`,
+vocabulary and the `benzene.Result[T]` factories (`benzene.Ok`, `benzene.Created`,
 `benzene.NotFound`, `benzene.Conflict`, `benzene.ValidationError`, `benzene.ServiceUnavailable`,
 `benzene.UnexpectedError`, …) — this page doesn't repeat that detail.
 
@@ -238,7 +238,7 @@ every inbound binding built off the builder.
 func newApp() benzene.App[struct{}] {
 	return benzene.App[struct{}]{
 		ConfigureServices: func(registry *benzene.Registry, container *benzene.Container, _ struct{}) {
-			benzene.AddSingleton(container, greetingCounterKey, func(_ *benzene.Scope) GreetingCounter {
+			benzene.AddSingleton(container, greetingCounterKey{}, func(_ *benzene.Scope) GreetingCounter {
 				return &inMemoryGreetingCounter{}
 			})
 			benzene.MustRegister(registry, benzene.NewTopic("greet"), greetHandler)
@@ -267,9 +267,10 @@ explicit registry object rather than a full reflection framework, and this `Cont
 — a small first-party object, not a general-purpose DI container. You get one from the `App` lifecycle
 (passed to `ConfigureServices`), or standalone with `benzene.NewContainer()`.
 
-Services are keyed by any comparable value (`serviceKey = any`). Use a package-level unexported type or
-a stable string constant as the key to avoid collisions — the helloworld example uses a
-`const greetingCounterKey = "greeting-counter"`.
+Services are keyed by any comparable value (`serviceKey = any`). Use a package-level unexported type
+as the key to avoid collisions — the helloworld example uses an unexported zero-size struct,
+`type greetingCounterKey struct{}`, registered and resolved as `greetingCounterKey{}` (the same
+idiom `context.WithValue` keys use).
 
 ### Registering services
 
@@ -297,7 +298,7 @@ func TryAddTransient[T any](c *Container, key serviceKey, factory func(s *Scope)
   `TryAdd`s its default and the application's own explicit `Add*` wins.
 
 ```go
-benzene.AddSingleton(container, greetingCounterKey, func(_ *benzene.Scope) GreetingCounter {
+benzene.AddSingleton(container, greetingCounterKey{}, func(_ *benzene.Scope) GreetingCounter {
 	return &inMemoryGreetingCounter{}
 })
 ```
@@ -329,7 +330,7 @@ func greetHandler(ctx context.Context, req greetRequest) benzene.Result[greetRes
 	if !ok {
 		return benzene.UnexpectedError[greetResponse]("no DI scope on context")
 	}
-	counter := benzene.GetService[GreetingCounter](scope, greetingCounterKey)
+	counter := benzene.GetService[GreetingCounter](scope, greetingCounterKey{})
 
 	return benzene.Ok(greetResponse{
 		Greeting: "Hello, " + req.Name + "!",

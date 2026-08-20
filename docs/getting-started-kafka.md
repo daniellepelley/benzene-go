@@ -132,7 +132,8 @@ returns from `Run`.
 ## 4. Publishing to Kafka
 
 `kafka.NewClient(writer)` returns a `*kafka.Client` that satisfies `client.Sender`, so it composes
-with `client.CorrelationDecorator` / `client.RetryDecorator` like any other sender. Give it a
+with the `client` decorators (`client.WithRetry`, `client.WithCorrelationID`, …) like any other
+sender. Give it a
 `*kafka.Writer` constructed **with no fixed `Topic`** — the client sets the topic per message from
 the Benzene topic (kafka-go rejects a message that sets `Topic` when the writer also has one):
 

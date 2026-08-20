@@ -80,7 +80,7 @@ The request and response are ordinary structs with JSON tags — the binding dec
 into `greetRequest` and marshals the response payload back out. The handler returns *values*, not
 errors: `benzene.Ok(...)` for success and `benzene.BadRequest[greetResponse]("...")` for a
 client error. There's a constructor for each status in the framework vocabulary —
-`benzene.Ok`, `benzene.CreatedResult`, `benzene.NotFound`, `benzene.Conflict`,
+`benzene.Ok`, `benzene.Created`, `benzene.NotFound`, `benzene.Conflict`,
 `benzene.ValidationError`, and so on — each mapping to a Benzene
 [status](https://benzene.app/docs/specification/wire-contracts.html) the transport translates into
 its own native failure signal (an HTTP code, here).
