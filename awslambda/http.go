@@ -87,7 +87,7 @@ type httpV1Response struct {
 // (v2.0 payload), an API Gateway REST API or HTTP API v1.0 payload, or an Application Load
 // Balancer target group. The event shape is detected per invocation (see httpEvent), the
 // response uses the matching shape, and either way the invocation carries real HTTP status
-// codes via httpstatus.ToHTTP, dispatched through envelope.DispatchTopicResult exactly like
+// codes via httpstatus.Response, dispatched through envelope.DispatchTopicResult exactly like
 // httpbinding.Handler.
 func HTTPHandler(builder *benzene.ApplicationBuilder, routes []httpbinding.Route) HandlerFunc {
 	table := httpbinding.NewRouteTable(routes)
@@ -132,7 +132,12 @@ func HTTPHandler(builder *benzene.ApplicationBuilder, routes []httpbinding.Route
 
 		resp, _ := envelope.DispatchTopicResult(ctx, builder.Pipeline, builder.Container, topic, headers, body)
 
-		return marshalResponse(&req, httpstatus.ToHTTP(benzene.Status(resp.StatusCode)), resp.Headers, resp.Body)
+		// The same §4.1 rendering httpbinding uses - in particular, a failure's problem document
+		// leaves this binding carrying the `status` member equal to the statusCode being sent,
+		// which a response assembled by hand here used to omit while still calling itself
+		// application/problem+json.
+		code, respBody, respHeaders := httpstatus.Response(resp)
+		return marshalResponse(&req, code, respHeaders, respBody)
 	}
 }
 

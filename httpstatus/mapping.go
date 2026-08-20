@@ -2,7 +2,10 @@
 // daniellepelley/Benzene's docs/specification/wire-contracts.md §4.1.
 package httpstatus
 
-import benzene "github.com/daniellepelley/benzene-go"
+import (
+	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/wire"
+)
 
 // ToHTTP maps a Benzene status to its HTTP status code (wire-contracts.md §4.1, forward).
 //
@@ -89,4 +92,38 @@ func FromHTTP(code int) benzene.Status {
 	default:
 		return benzene.StatusUnexpectedError
 	}
+}
+
+// Response renders a wire.Response as the three things an HTTP binding has to send: the response
+// code, the body, and the headers. Every HTTP binding in this port goes through it, so none of
+// them can quietly disagree about wire-contracts.md §4.1.
+//
+// The code is ToHTTP's, honouring the response's own IsSuccessful (§1.2) rather than re-deriving
+// success from the status. On a failure whose body is a problem document, the document's `status`
+// member is filled in with that same code - §4.1's "MUST equal the code actually being sent" -
+// and the content type states the body for what it is. The transport-neutral document leaves the
+// member out (§1.3), because most transports have no HTTP response for it to equal, so an HTTP
+// binding is the only place it can be filled in.
+//
+// The returned header map is a copy: the caller may write to it, and resp is left untouched.
+func Response(resp wire.Response) (code int, body string, headers map[string]string) {
+	successful := !benzene.Status(resp.StatusCode).IsFailure()
+	if resp.IsSuccessful != nil {
+		successful = *resp.IsSuccessful
+	}
+	code = ToHTTP(benzene.Status(resp.StatusCode), successful)
+
+	headers = make(map[string]string, len(resp.Headers)+1)
+	for name, value := range resp.Headers {
+		headers[name] = value
+	}
+
+	body = resp.Body
+	if !successful && body != "" {
+		if withStatus, ok := wire.WithHTTPStatus(body, code); ok {
+			body = withStatus
+			headers["content-type"] = "application/problem+json"
+		}
+	}
+	return code, body, headers
 }

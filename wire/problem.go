@@ -1,5 +1,7 @@
 package wire
 
+import "encoding/json"
+
 // ProblemBase is the namespace every framework-defined problem type URI lives under
 // (wire-contracts.md §3.1). These URIs are opaque identifiers, not live pages: a reader compares
 // them by string equality and never dereferences one.
@@ -56,4 +58,25 @@ func ProblemHTTPStatus(status string) int {
 		return 500
 	}
 	return row.status
+}
+
+// WithHTTPStatus re-serializes an already-encoded problem document with its `status` member set
+// to code - the §4.1 rule that an HTTP failure's document MUST carry the code actually being
+// sent. The transport-neutral document omits the member (§1.3) precisely because most transports
+// have no HTTP response for it to equal, so filling it in is each HTTP binding's job; this is the
+// one implementation all of them share, so they cannot drift apart on it.
+//
+// It reports false, leaving body untouched, when body is not a JSON object - an empty body, or a
+// peer sending something the binding should pass through rather than guess at.
+func WithHTTPStatus(body string, code int) (string, bool) {
+	var problem map[string]any
+	if err := json.Unmarshal([]byte(body), &problem); err != nil || problem == nil {
+		return body, false
+	}
+	problem["status"] = code
+	encoded, err := json.Marshal(problem)
+	if err != nil {
+		return body, false
+	}
+	return string(encoded), true
 }

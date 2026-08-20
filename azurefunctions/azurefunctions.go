@@ -107,7 +107,12 @@ func Handler(builder *benzene.ApplicationBuilder, routes []httpbinding.Route) ht
 
 		resp, _ := envelope.DispatchTopicResult(r.Context(), builder.Pipeline, builder.Container, topic, headers, trigger.Body)
 
-		writeInvocationResponse(w, httpstatus.ToHTTP(benzene.Status(resp.StatusCode)), resp.Body, resp.Headers)
+		// The same §4.1 rendering httpbinding uses - in particular, a failure's problem document
+		// reaches Outputs.res carrying the `status` member equal to the statusCode being sent,
+		// which a response assembled by hand here used to omit while still calling itself
+		// application/problem+json.
+		code, respBody, respHeaders := httpstatus.Response(resp)
+		writeInvocationResponse(w, code, respBody, respHeaders)
 	})
 }
 
