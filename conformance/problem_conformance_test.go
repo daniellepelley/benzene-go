@@ -44,6 +44,18 @@ type problemDetailsFixture struct {
 			HTTPStatus    int    `json:"httpStatus"`
 			ContentType   string `json:"contentType"`
 		} `json:"successCase"`
+		EnvelopeEndpoint struct {
+			Path  string `json:"path"`
+			Cases []struct {
+				Name     string          `json:"name"`
+				Request  json.RawMessage `json:"request"`
+				RawBody  *string         `json:"rawBody"`
+				Expected struct {
+					HTTPStatus int                  `json:"httpStatus"`
+					Envelope   *envelopeExpectation `json:"envelope"`
+				} `json:"expected"`
+			} `json:"cases"`
+		} `json:"envelopeEndpoint"`
 		HealthEndpoint struct {
 			Path  string `json:"path"`
 			Cases []struct {
@@ -239,6 +251,47 @@ func TestConformance_ProblemHTTPSuccessUnaffected(t *testing.T) {
 					t.Errorf("a success body must carry no problem member, found %q: %s", member, resp.body)
 				}
 			}
+		})
+	}
+}
+
+// TestConformance_ProblemHTTPEnvelopeEndpoint is httpRules.envelopeEndpoint (transport-bindings.md
+// §1): every envelope the endpoint processed is HTTP 200 with the response envelope as the body,
+// whatever its status - deleted included, not 204 - and a problem document inside it carries no
+// status member; only a carrier failure (a body that is not an envelope) is not 200. This port
+// serves the envelope over HTTP through httpbinding.EnvelopeHandler alone (awslambda.EnvelopeHandler
+// is a Lambda invoke, not HTTP).
+func TestConformance_ProblemHTTPEnvelopeEndpoint(t *testing.T) {
+	fixture := loadProblemFixture(t)
+	endpoint := fixture.HTTPRules.EnvelopeEndpoint
+	requireCases(t, len(endpoint.Cases), "problem-details-cases", "httpRules.envelopeEndpoint.cases")
+	if endpoint.Path != httpbinding.EnvelopePath {
+		t.Errorf("httpbinding.EnvelopePath = %q, want the default %q", httpbinding.EnvelopePath, endpoint.Path)
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle(httpbinding.EnvelopePath, httpbinding.EnvelopeHandler(conformanceBuilder(t)))
+
+	for _, c := range endpoint.Cases {
+		t.Run(c.Name, func(t *testing.T) {
+			body := string(c.Request)
+			if c.RawBody != nil {
+				body = *c.RawBody
+			}
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, endpoint.Path, strings.NewReader(body)))
+
+			if rec.Code != c.Expected.HTTPStatus {
+				t.Errorf("response status = %d, want %d; body = %s", rec.Code, c.Expected.HTTPStatus, rec.Body.String())
+			}
+			if c.Expected.Envelope == nil {
+				return
+			}
+			resp, err := wire.UnmarshalResponse(rec.Body.Bytes())
+			if err != nil {
+				t.Fatalf("body is not a response envelope: %v; body = %s", err, rec.Body.String())
+			}
+			checkEnvelope(t, resp, *c.Expected.Envelope)
 		})
 	}
 }

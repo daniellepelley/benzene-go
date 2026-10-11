@@ -10,6 +10,7 @@ package envelope
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/wire"
@@ -154,4 +155,45 @@ func errorResponse(result benzene.ResultInfo) wire.Response {
 		Body:         string(body),
 		IsSuccessful: boolPtr(false),
 	}
+}
+
+// ToResult rebuilds a Result from a response envelope a peer sent back - the receiving half of
+// wire-contracts.md §1.2, shared by every outbound client that speaks the envelope (httpclient,
+// awslambdaclient). The envelope's isSuccessful decides, never the statusCode text: a failure is
+// read back from its problem document (§1.3) with each error's field and code intact, and a success
+// carries its body as the raw JSON payload. That is what lets an application-defined status from a
+// peer arrive with the meaning the peer gave it.
+//
+// An envelope that omits isSuccessful is from a non-conformant peer; it is classified by its
+// statusCode against the vocabulary as the only signal left. One whose isSuccessful contradicts a
+// vocabulary statusCode (a "not-found" marked successful) is malformed and is read as an
+// unexpected-error naming the contradiction, rather than as either half of it.
+func ToResult(resp wire.Response) benzene.Result[json.RawMessage] {
+	status := benzene.Status(resp.StatusCode)
+	successful := !status.IsFailure()
+	if resp.IsSuccessful != nil {
+		successful = *resp.IsSuccessful
+	}
+
+	if (successful && status.IsFailure()) || (!successful && status.IsSuccess()) {
+		return benzene.UnexpectedError[json.RawMessage](fmt.Sprintf(
+			"malformed response envelope: statusCode %q contradicts isSuccessful %v", status, successful))
+	}
+	if !successful {
+		problem, err := wire.UnmarshalErrorPayload([]byte(resp.Body))
+		if err != nil {
+			return benzene.Fail[json.RawMessage](status)
+		}
+		// Problems(), not Messages(): a peer that sent a field and a code went to the trouble of
+		// knowing them, and a caller that re-renders or re-raises this failure should still have
+		// them. It prefers the errors array (authoritative, ordered) and falls back to detail as
+		// ONE opaque message - never splitting it on ", ", since messages contain commas.
+		return benzene.FailWith[json.RawMessage](status, problem.Problems()...)
+	}
+
+	if resp.Body == "" {
+		return benzene.Result[json.RawMessage]{Status: status}
+	}
+	payload := json.RawMessage(resp.Body)
+	return benzene.Result[json.RawMessage]{Status: status, Payload: &payload}
 }

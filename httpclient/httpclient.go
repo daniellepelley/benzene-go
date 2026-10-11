@@ -15,6 +15,8 @@ import (
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/client"
+	"github.com/daniellepelley/benzene-go/envelope"
+	"github.com/daniellepelley/benzene-go/httpstatus"
 	"github.com/daniellepelley/benzene-go/wire"
 )
 
@@ -50,9 +52,17 @@ func (c *Client) httpClient() *http.Client {
 // propagation requirement, and this transport has no separate native metadata channel to also
 // populate, since it already speaks the envelope.
 //
-// A transport-level failure (network error, non-2xx HTTP from the transport itself rather than
-// the envelope's own statusCode, a malformed response) maps to ServiceUnavailable, per
-// transport-bindings §1.7's failure rule: the caller always gets a Result back, never a Go
+// The response is read the way transport-bindings.md §1 asks of an envelope-over-HTTP client:
+// the envelope in the body is the outcome, whatever the HTTP status line says (a conformant
+// envelope endpoint answers 200 for every envelope it processed, failures included), and it is
+// read by envelope.ToResult - isSuccessful decides, never the status text. Only when the body is
+// not an envelope (a gateway's error page, a proxy's 502, the wrong URL) does the HTTP status
+// decide, through the reverse table of wire-contracts.md §4.1 (httpstatus.FromHTTP): a failure
+// code becomes that status with a message naming the code, and a success code that status with
+// the body as the payload when it is JSON.
+//
+// A transport-level failure (a network error, an unreadable response) maps to ServiceUnavailable,
+// per transport-bindings §1.7's failure rule: the caller always gets a Result back, never a Go
 // error. Use Unmarshal to convert the raw payload into an application type.
 func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[string]string, message []byte) benzene.Result[json.RawMessage] {
 	reqBody, err := wire.MarshalRequest(wire.Request{Topic: topic.String(), Headers: headers, Body: string(message)})
@@ -79,40 +89,23 @@ func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[stri
 		return benzene.ServiceUnavailable[json.RawMessage]("failed to read outbound response: " + err.Error())
 	}
 
-	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
-		return benzene.ServiceUnavailable[json.RawMessage](fmt.Sprintf("outbound request returned HTTP %d", httpResp.StatusCode))
+	if resp, err := wire.UnmarshalResponse(respBody); err == nil && resp.StatusCode != "" {
+		return envelope.ToResult(resp)
 	}
-
-	resp, err := wire.UnmarshalResponse(respBody)
-	if err != nil {
-		return benzene.ServiceUnavailable[json.RawMessage]("failed to parse outbound envelope response: " + err.Error())
-	}
-
-	return toResult(resp)
+	return fromHTTPStatus(httpResp.StatusCode, respBody)
 }
 
-func toResult(resp wire.Response) benzene.Result[json.RawMessage] {
-	status := benzene.Status(resp.StatusCode)
-	// Only a framework failure status is read back as an error payload; a success status and
-	// an application-defined (unknown) status both carry their body as the payload, mirroring
-	// the server-side envelope rendering and .NET's IsSuccessful (= !IsFailure).
+// fromHTTPStatus is the fallback for a response whose body is not an envelope: the HTTP status
+// read through the reverse table of wire-contracts.md §4.1.
+func fromHTTPStatus(code int, body []byte) benzene.Result[json.RawMessage] {
+	status := httpstatus.FromHTTP(code)
 	if status.IsFailure() {
-		errPayload, parseErr := wire.UnmarshalErrorPayload([]byte(resp.Body))
-		// Problems() prefers the problem document's errors array, which is authoritative and
-		// ordered, and falls back to detail as ONE opaque message - never splitting it on ", ",
-		// a rule the RFC 9457 revision withdrew because error messages contain commas. Structured,
-		// not Messages(): a peer that sent a field and a code went to the trouble of knowing them,
-		// and a caller that re-renders or re-raises this failure should still have them.
-		if parseErr != nil {
-			return benzene.Fail[json.RawMessage](status)
-		}
-		return benzene.FailWith[json.RawMessage](status, errPayload.Problems()...)
+		return benzene.Fail[json.RawMessage](status, fmt.Sprintf("outbound request returned HTTP %d with no response envelope", code))
 	}
-
-	if resp.Body == "" {
+	if !json.Valid(body) {
 		return benzene.Result[json.RawMessage]{Status: status}
 	}
-	payload := json.RawMessage(resp.Body)
+	payload := json.RawMessage(body)
 	return benzene.Result[json.RawMessage]{Status: status, Payload: &payload}
 }
 

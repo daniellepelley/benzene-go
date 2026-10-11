@@ -3,6 +3,7 @@ package envelope
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	benzene "github.com/daniellepelley/benzene-go"
@@ -352,5 +353,44 @@ func TestWithResponseHeaders_AllocatesWhenResponseHasNoHeaderMap(t *testing.T) {
 
 	if got := resp.Headers["x-request-id"]; got != "abc" {
 		t.Errorf(`Headers["x-request-id"] = %q, want %q`, got, "abc")
+	}
+}
+
+func TestToResult_IsSuccessfulDecides(t *testing.T) {
+	yes, no := true, false
+	tests := []struct {
+		name        string
+		resp        wire.Response
+		wantStatus  benzene.Status
+		wantSuccess bool
+		wantPayload string
+		wantErrors  []benzene.Error
+	}{
+		{"success carries its body", wire.Response{StatusCode: "ok", IsSuccessful: &yes, Body: `{"a":1}`}, benzene.StatusOk, true, `{"a":1}`, nil},
+		{"success with no body", wire.Response{StatusCode: "deleted", IsSuccessful: &yes}, benzene.StatusDeleted, true, "", nil},
+		{"an application-defined success", wire.Response{StatusCode: "partly-done", IsSuccessful: &yes, Body: `{}`}, "partly-done", true, `{}`, nil},
+		{"an application-defined failure keeps field and code",
+			wire.Response{StatusCode: "payment-declined", IsSuccessful: &no, Body: `{"benzeneStatus":"payment-declined","errors":[{"message":"declined","field":"/card","code":"D1"}]}`},
+			"payment-declined", false, "", []benzene.Error{{Message: "declined", Field: "/card", Code: "D1"}}},
+		{"a failure whose body is not a problem document", wire.Response{StatusCode: "not-found", IsSuccessful: &no, Body: "nope"}, benzene.StatusNotFound, false, "", nil},
+		{"an envelope without isSuccessful falls back to the vocabulary", wire.Response{StatusCode: "conflict", Body: `{"detail":"taken"}`}, benzene.StatusConflict, false, "", []benzene.Error{{Message: "taken"}}},
+		{"a failure status marked successful is malformed", wire.Response{StatusCode: "not-found", IsSuccessful: &yes}, benzene.StatusUnexpectedError, false, "", nil},
+		{"a success status marked unsuccessful is malformed", wire.Response{StatusCode: "ok", IsSuccessful: &no}, benzene.StatusUnexpectedError, false, "", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ToResult(tt.resp)
+			if got.Status != tt.wantStatus || got.IsSuccessful() != tt.wantSuccess {
+				t.Fatalf("ToResult() = %s (successful %v), want %s (successful %v)", got.Status, got.IsSuccessful(), tt.wantStatus, tt.wantSuccess)
+			}
+			if payload := got.ResultPayload(); tt.wantPayload == "" && payload != nil {
+				t.Errorf("payload = %v, want none", payload)
+			} else if tt.wantPayload != "" && (got.Payload == nil || string(*got.Payload) != tt.wantPayload) {
+				t.Errorf("payload = %v, want %s", payload, tt.wantPayload)
+			}
+			if tt.wantErrors != nil && !reflect.DeepEqual(got.Errors, tt.wantErrors) {
+				t.Errorf("errors = %+v, want %+v", got.Errors, tt.wantErrors)
+			}
+		})
 	}
 }

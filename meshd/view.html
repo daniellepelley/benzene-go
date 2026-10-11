@@ -171,10 +171,11 @@
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ topic: "benzene:mesh:query:fleet", headers: {}, body: "{}" })
     }).then(function (response) {
-      if (!response.ok) throw new Error("HTTP " + response.status);
-      return response.json();
+      // The envelope endpoint answers 200 for every envelope it processed; read the envelope
+      // whatever the status line, and fall back to the status line only when there is none.
+      return response.json().catch(function () { throw new Error("HTTP " + response.status); });
     }).then(function (envelope) {
-      if (envelope.statusCode !== "Ok") throw new Error(envelope.statusCode);
+      if (!envelope.isSuccessful) throw new Error(envelope.statusCode);
       render(JSON.parse(envelope.body));
       document.getElementById("status").textContent = "";
     }).catch(function (err) {

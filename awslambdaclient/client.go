@@ -16,6 +16,7 @@ import (
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/client"
+	"github.com/daniellepelley/benzene-go/envelope"
 	"github.com/daniellepelley/benzene-go/wire"
 )
 
@@ -57,7 +58,7 @@ func NewClient(api InvokeAPI, functionName string) *Client {
 // to StatusAccepted. For a request/response invocation, a set FunctionError means the target
 // function threw - AWS returns the error object, not the normal output, as the payload, so that is
 // surfaced as UnexpectedError rather than mis-parsed as a success. Otherwise the payload is parsed
-// as the target's wire envelope response and converted with the same rules as httpclient. Use
+// as the target's wire envelope response and read by envelope.ToResult (isSuccessful decides). Use
 // Unmarshal to convert the raw payload into an application type.
 func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[string]string, message []byte) benzene.Result[json.RawMessage] {
 	payload, err := wire.MarshalRequest(wire.Request{Topic: topic.String(), Headers: headers, Body: string(message)})
@@ -92,32 +93,7 @@ func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[stri
 	if err != nil {
 		return benzene.ServiceUnavailable[json.RawMessage]("awslambdaclient: failed to parse invoke envelope response: " + err.Error())
 	}
-	return toResult(resp)
-}
-
-// toResult converts the target's wire envelope response into a Result[json.RawMessage], mirroring
-// httpclient.toResult: a framework failure status is read back as an error payload; a success or
-// application-defined (unknown) status carries its body as the payload.
-func toResult(resp wire.Response) benzene.Result[json.RawMessage] {
-	status := benzene.Status(resp.StatusCode)
-	if status.IsFailure() {
-		errPayload, parseErr := wire.UnmarshalErrorPayload([]byte(resp.Body))
-		// Problems() prefers the problem document's errors array, which is authoritative and
-		// ordered, and falls back to detail as ONE opaque message - never splitting it on ", ",
-		// a rule the RFC 9457 revision withdrew because error messages contain commas. Structured,
-		// not Messages(): a peer that sent a field and a code went to the trouble of knowing them,
-		// and a caller that re-renders or re-raises this failure should still have them.
-		if parseErr != nil {
-			return benzene.Fail[json.RawMessage](status)
-		}
-		return benzene.FailWith[json.RawMessage](status, errPayload.Problems()...)
-	}
-
-	if resp.Body == "" {
-		return benzene.Result[json.RawMessage]{Status: status}
-	}
-	payload := json.RawMessage(resp.Body)
-	return benzene.Result[json.RawMessage]{Status: status, Payload: &payload}
+	return envelope.ToResult(resp)
 }
 
 var _ client.Sender = (*Client)(nil)

@@ -6,13 +6,15 @@
 //
 // It offers two entry points:
 //   - Handler: a native REST-style handler - real HTTP status codes, an explicit route table.
-//   - EnvelopeHandler: the wire-contracts.md §1 envelope carried directly over HTTP (always
-//     HTTP 200; the real outcome travels in the envelope's own statusCode field) - the "raw
-//     BenzeneMessage envelope for direct invocation" transport-bindings.md's Lambda catalog
-//     entry describes, useful for service-to-service calls with no route table to agree on.
+//   - EnvelopeHandler: the wire-contracts.md §1 envelope carried directly over HTTP (HTTP 200
+//     for every envelope it processed; the outcome travels in the envelope's own statusCode and
+//     isSuccessful) - the envelope endpoint of transport-bindings.md §1, useful for
+//     service-to-service calls with no route table to agree on.
 package httpbinding
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -219,13 +221,48 @@ const (
 	SpecPath = "/benzene/spec"
 )
 
-// EnvelopeHandler builds an HTTP entry point that speaks the wire-contracts.md §1 envelope
-// directly: the request body is a wire.Request (any method/path - the caller POSTs the
-// envelope), and the response body is a wire.Response. The outer HTTP status is always 200;
-// the real Benzene outcome travels inside the envelope's own statusCode field, matching how a
-// Lambda invoke or an internal function call carries the envelope with no HTTP layer at all.
-// The default service standard mounts it at EnvelopePath.
-func EnvelopeHandler(builder *benzene.ApplicationBuilder) http.Handler {
+// EnvelopeOption configures EnvelopeHandler.
+type EnvelopeOption func(*envelopeConfig)
+
+type envelopeConfig struct {
+	allow func(topic string) bool
+}
+
+// WithTopicFilter restricts which topics the envelope endpoint reaches (transport-bindings.md §1):
+// a request whose topic allow rejects is answered not-found, exactly as if no handler matched, and
+// never reaches the pipeline. The endpoint otherwise reaches every handler the service registers,
+// including topics with no HTTP route of their own, so a service exposing it beyond its own trust
+// boundary should restrict it. allow sees the envelope's topic id; reserved topics (benzene:*) are
+// filtered like any other, so allow the ones the endpoint should still answer:
+//
+//	httpbinding.EnvelopeHandler(builder, httpbinding.WithTopicFilter(func(topic string) bool {
+//		return strings.HasPrefix(topic, "orders:") || topic == healthcheck.ReservedTopic
+//	}))
+func WithTopicFilter(allow func(topic string) bool) EnvelopeOption {
+	return func(c *envelopeConfig) { c.allow = allow }
+}
+
+// EnvelopeHandler builds the envelope endpoint (transport-bindings.md §1): an HTTP entry point that
+// speaks the wire-contracts.md §1 envelope directly. The request body is a wire.Request (any
+// method/path - the caller POSTs the envelope), and the response body is the wire.Response. The
+// default service standard mounts it at EnvelopePath.
+//
+// It answers HTTP 200 for every envelope it processed, whatever the result - not-found, a
+// validation-error, an unauthorized from the pipeline's own auth middleware and a deleted alike -
+// because the envelope carries the outcome (statusCode, isSuccessful) and a client reads it, never
+// the status line; a problem document inside it carries no `status` member. A non-2xx status means
+// the carrier failed and no envelope was processed: 400 for a body that is not an envelope, 500 if
+// the response cannot be written. Authentication the HTTP host enforces before the envelope is read
+// (401, 403) belongs in an ordinary net/http middleware wrapping this handler; authentication by
+// topic belongs in the pipeline, which this endpoint runs exactly like every other binding.
+//
+// Use WithTopicFilter to restrict the topics it reaches.
+func EnvelopeHandler(builder *benzene.ApplicationBuilder, opts ...EnvelopeOption) http.Handler {
+	var cfg envelopeConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -239,7 +276,11 @@ func EnvelopeHandler(builder *benzene.ApplicationBuilder) http.Handler {
 			return
 		}
 
-		resp := envelope.Dispatch(r.Context(), builder.Pipeline, builder.Container, req)
+		pipeline := builder.Pipeline
+		if cfg.allow != nil && !cfg.allow(req.Topic) {
+			pipeline = restricted
+		}
+		resp := envelope.Dispatch(r.Context(), pipeline, builder.Container, req)
 		data, err := wire.MarshalResponse(resp)
 		if err != nil {
 			http.Error(w, "failed to serialize envelope response", http.StatusInternalServerError)
@@ -250,6 +291,13 @@ func EnvelopeHandler(builder *benzene.ApplicationBuilder) http.Handler {
 		w.Write(data)
 	})
 }
+
+// restricted is the pipeline a topic outside WithTopicFilter runs: the router's own not-found, so
+// a restricted topic cannot be told apart from one with no handler.
+var restricted = benzene.NewPipeline(func(_ context.Context, ic *benzene.InvocationContext, _ func(context.Context) error) error {
+	ic.Result = benzene.NotFound[any](fmt.Sprintf("no handler found for topic %q", ic.Topic.ID))
+	return nil
+})
 
 func routeKey(method, path string) string {
 	return strings.ToUpper(method) + " " + path

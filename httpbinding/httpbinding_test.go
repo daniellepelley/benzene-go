@@ -421,3 +421,60 @@ func TestWriteNativeResponse_SuccessIsUntouched(t *testing.T) {
 		t.Errorf("body = %s, want it passed through unchanged", rec.Body.String())
 	}
 }
+
+// postEnvelope POSTs topic's envelope to handler and returns the HTTP status and parsed envelope.
+func postEnvelope(t *testing.T, handler http.Handler, topic, body string) (int, wire.Response) {
+	t.Helper()
+	envReq, err := wire.MarshalRequest(wire.Request{Topic: topic, Headers: map[string]string{}, Body: body})
+	if err != nil {
+		t.Fatalf("MarshalRequest() error = %v", err)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, EnvelopePath, strings.NewReader(string(envReq))))
+	resp, err := wire.UnmarshalResponse(rec.Body.Bytes())
+	if err != nil {
+		t.Fatalf("UnmarshalResponse() error = %v; body = %s", err, rec.Body.String())
+	}
+	return rec.Code, resp
+}
+
+func TestEnvelopeHandler_TopicFilterAnswersNotFound(t *testing.T) {
+	builder := newTestBuilder(t)
+	reached := false
+	builder.Pipeline = benzene.NewPipeline(func(ctx context.Context, ic *benzene.InvocationContext, next func(context.Context) error) error {
+		reached = true
+		return next(ctx)
+	}, benzene.RouterMiddleware(builder.Registry))
+	handler := EnvelopeHandler(builder, WithTopicFilter(func(topic string) bool { return topic != "greet" }))
+
+	code, resp := postEnvelope(t, handler, "greet", `{"name":"World"}`)
+	if code != http.StatusOK || resp.StatusCode != string(benzene.StatusNotFound) || resp.IsSuccessful == nil || *resp.IsSuccessful {
+		t.Errorf("restricted topic = HTTP %d, envelope %+v; want HTTP 200 with a not-found envelope", code, resp)
+	}
+	if !strings.Contains(resp.Body, `no handler found for topic \"greet\"`) || strings.Contains(resp.Body, `"status"`) {
+		t.Errorf("restricted body = %s, want the router's own not-found problem, with no status member", resp.Body)
+	}
+	if reached {
+		t.Error("a restricted topic reached the pipeline")
+	}
+}
+
+func TestEnvelopeHandler_TopicFilterLetsAllowedTopicsThrough(t *testing.T) {
+	handler := EnvelopeHandler(newTestBuilder(t), WithTopicFilter(func(topic string) bool { return topic == "greet" }))
+	if code, resp := postEnvelope(t, handler, "greet", `{"name":"World"}`); code != http.StatusOK || resp.StatusCode != string(benzene.StatusOk) {
+		t.Errorf("allowed topic = HTTP %d, envelope %+v; want ok", code, resp)
+	}
+}
+
+func TestEnvelopeHandler_PipelineAuthFailureIsAProcessedEnvelope(t *testing.T) {
+	builder := newTestBuilder(t)
+	builder.Pipeline = benzene.NewPipeline(func(ctx context.Context, ic *benzene.InvocationContext, next func(context.Context) error) error {
+		ic.Result = benzene.Unauthorized[any]("no credentials")
+		return nil
+	})
+	// transport-bindings.md §1: an unauthorized result from the pipeline's own auth middleware is a
+	// processed envelope, so 200 - only host-enforced auth before the envelope is read is 401/403.
+	if code, resp := postEnvelope(t, EnvelopeHandler(builder), "greet", `{}`); code != http.StatusOK || resp.StatusCode != string(benzene.StatusUnauthorized) {
+		t.Errorf("pipeline auth failure = HTTP %d, envelope %+v; want HTTP 200 with an unauthorized envelope", code, resp)
+	}
+}

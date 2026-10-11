@@ -208,31 +208,66 @@ func TestSend_ResponseBodyReadErrorIsServiceUnavailable(t *testing.T) {
 	}
 }
 
-func TestSend_NonSuccessHTTPStatusIsServiceUnavailable(t *testing.T) {
-	client := &Client{Endpoint: "http://example.invalid", HTTPClient: &http.Client{
+// stubResponse is a Client whose every request is answered with code and body.
+func stubResponse(code int, body string) *Client {
+	return &Client{Endpoint: "http://example.invalid", HTTPClient: &http.Client{
 		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-			return &http.Response{StatusCode: 502, Body: io.NopCloser(bytesReader("")), Header: make(http.Header)}, nil
+			return &http.Response{StatusCode: code, Body: io.NopCloser(bytesReader(body)), Header: make(http.Header)}, nil
 		}),
 	}}
+}
 
-	result := client.Send(context.Background(), benzene.NewTopic("greet"), map[string]string{}, []byte(""))
+// transport-bindings.md §1: an envelope-over-HTTP client reads the envelope from the body whatever
+// the HTTP status, and falls back to the reverse HTTP table only when the body is not an envelope.
+func TestSend_NonEnvelopeResponseFallsBackToTheReverseHTTPTable(t *testing.T) {
+	tests := []struct {
+		name string
+		code int
+		body string
+		want benzene.Status
+	}{
+		{"a proxy's 502", 502, "", benzene.StatusServiceUnavailable},
+		{"a gateway's 401", 401, "<html>denied</html>", benzene.StatusUnauthorized},
+		{"the wrong URL", 404, "404 page not found", benzene.StatusNotFound},
+		{"a 200 that is not an envelope", 200, "{not valid", benzene.StatusOk},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := stubResponse(tt.code, tt.body).Send(context.Background(), benzene.NewTopic("greet"), nil, nil)
+			if result.Status != tt.want {
+				t.Errorf("Status = %q, want %q", result.Status, tt.want)
+			}
+			if result.Payload != nil {
+				t.Errorf("Payload = %s, want none for a body that is not JSON", *result.Payload)
+			}
+		})
+	}
 
-	if result.Status != benzene.StatusServiceUnavailable {
-		t.Errorf("Status = %q, want %q", result.Status, benzene.StatusServiceUnavailable)
+	result := stubResponse(200, `{"some":"json"}`).Send(context.Background(), benzene.NewTopic("greet"), nil, nil)
+	if result.Status != benzene.StatusOk || result.Payload == nil || string(*result.Payload) != `{"some":"json"}` {
+		t.Errorf("a JSON 200 that is not an envelope = %+v, want ok carrying the body", result)
 	}
 }
 
-func TestSend_MalformedEnvelopeResponseIsServiceUnavailable(t *testing.T) {
-	client := &Client{Endpoint: "http://example.invalid", HTTPClient: &http.Client{
-		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-			return &http.Response{StatusCode: 200, Body: io.NopCloser(bytesReader("{not valid")), Header: make(http.Header)}, nil
-		}),
-	}}
+func TestSend_EnvelopeIsReadWhateverTheHTTPStatus(t *testing.T) {
+	body := `{"statusCode":"not-found","isSuccessful":false,"headers":{},"body":"{\"benzeneStatus\":\"not-found\",\"detail\":\"no order 7\"}"}`
+	result := stubResponse(404, body).Send(context.Background(), benzene.NewTopic("greet"), nil, nil)
+	if result.Status != benzene.StatusNotFound || len(result.Errors) != 1 || result.Errors[0].Message != "no order 7" {
+		t.Errorf("Send() = %+v, want the envelope's not-found with its detail", result)
+	}
+}
 
-	result := client.Send(context.Background(), benzene.NewTopic("greet"), map[string]string{}, []byte(""))
+func TestSend_IsSuccessfulDecidesNotTheStatusText(t *testing.T) {
+	declined := `{"statusCode":"payment-declined","isSuccessful":false,"headers":{},"body":"{\"benzeneStatus\":\"payment-declined\",\"detail\":\"card declined\"}"}`
+	result := stubResponse(200, declined).Send(context.Background(), benzene.NewTopic("pay"), nil, nil)
+	if result.IsSuccessful() || result.Status != "payment-declined" || len(result.Errors) != 1 {
+		t.Errorf("Send() = %+v, want an unsuccessful payment-declined carrying its error", result)
+	}
 
-	if result.Status != benzene.StatusServiceUnavailable {
-		t.Errorf("Status = %q, want %q", result.Status, benzene.StatusServiceUnavailable)
+	partial := `{"statusCode":"partly-done","isSuccessful":true,"headers":{},"body":"{\"done\":2}"}`
+	result = stubResponse(200, partial).Send(context.Background(), benzene.NewTopic("pay"), nil, nil)
+	if !result.IsSuccessful() || result.Payload == nil {
+		t.Errorf("Send() = %+v, want a successful partly-done carrying its payload", result)
 	}
 }
 
