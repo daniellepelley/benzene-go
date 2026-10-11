@@ -38,8 +38,8 @@ type Response struct {
 	// IsSuccessful is the success/failure signal (§1.2), set by whoever set the status: for a
 	// status in the vocabulary it equals that status's class, and for an application-defined
 	// status it is the only signal there is. A receiver takes it as authoritative and never
-	// reclassifies from StatusCode. Every writer in this port sets it; it is a pointer so a reader
-	// can tell an envelope that omits it (a non-conformant peer) from one that says false.
+	// reclassifies from StatusCode. Every writer in this port sets it; it is a pointer only so a
+	// reader can see an envelope that omits it - which is malformed and read as unsuccessful.
 	IsSuccessful *bool `json:"isSuccessful,omitempty"`
 }
 

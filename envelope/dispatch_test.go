@@ -373,7 +373,9 @@ func TestToResult_IsSuccessfulDecides(t *testing.T) {
 			wire.Response{StatusCode: "payment-declined", IsSuccessful: &no, Body: `{"benzeneStatus":"payment-declined","errors":[{"message":"declined","field":"/card","code":"D1"}]}`},
 			"payment-declined", false, "", []benzene.Error{{Message: "declined", Field: "/card", Code: "D1"}}},
 		{"a failure whose body is not a problem document", wire.Response{StatusCode: "not-found", IsSuccessful: &no, Body: "nope"}, benzene.StatusNotFound, false, "", nil},
-		{"an envelope without isSuccessful falls back to the vocabulary", wire.Response{StatusCode: "conflict", Body: `{"detail":"taken"}`}, benzene.StatusConflict, false, "", []benzene.Error{{Message: "taken"}}},
+		{"an envelope without isSuccessful is unsuccessful", wire.Response{StatusCode: "conflict", Body: `{"detail":"taken"}`}, benzene.StatusConflict, false, "", []benzene.Error{{Message: "taken"}}},
+		{"an application-defined status without isSuccessful is unsuccessful", wire.Response{StatusCode: "partly-done", Body: `{}`}, "partly-done", false, "", nil},
+		{"a success status without isSuccessful is malformed", wire.Response{StatusCode: "ok", Body: `{}`}, benzene.StatusUnexpectedError, false, "", nil},
 		{"a failure status marked successful is malformed", wire.Response{StatusCode: "not-found", IsSuccessful: &yes}, benzene.StatusUnexpectedError, false, "", nil},
 		{"a success status marked unsuccessful is malformed", wire.Response{StatusCode: "ok", IsSuccessful: &no}, benzene.StatusUnexpectedError, false, "", nil},
 	}

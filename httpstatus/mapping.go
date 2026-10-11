@@ -100,7 +100,7 @@ func FromHTTP(code int) benzene.Status {
 // through it, so none of them can quietly disagree about wire-contracts.md §4.1.
 //
 // The code is ToHTTP's, honouring the response's own IsSuccessful (§1.2) rather than re-deriving
-// success from the status. On a failure whose body is a problem document, the document's `status`
+// success from the status; a response without one is unsuccessful. On a failure whose body is a problem document, the document's `status`
 // member is filled in with that same code - §4.1's "MUST equal the code actually being sent" -
 // and the content type states the body for what it is. The transport-neutral document leaves the
 // member out (§1.3), because most transports have no HTTP response for it to equal, so an HTTP
@@ -117,10 +117,9 @@ func FromHTTP(code int) benzene.Status {
 //
 // The returned header map is a copy: the caller may write to it, and resp is left untouched.
 func Response(topic benzene.Topic, resp wire.Response) (code int, body string, headers map[string]string) {
-	successful := !benzene.Status(resp.StatusCode).IsFailure()
-	if resp.IsSuccessful != nil {
-		successful = *resp.IsSuccessful
-	}
+	// An envelope without isSuccessful is malformed and unsuccessful (§1.2); the envelope package
+	// always sets it, so this only matters for a hand-built response.
+	successful := resp.IsSuccessful != nil && *resp.IsSuccessful
 	code = ToHTTP(benzene.Status(resp.StatusCode), successful)
 	if successful && healthTopics[topic.ID] && reportsUnhealthy(resp.Body) {
 		code = 503

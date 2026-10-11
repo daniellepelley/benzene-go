@@ -172,16 +172,13 @@ func errorResponse(result benzene.ResultInfo) wire.Response {
 // carries its body as the raw JSON payload. That is what lets an application-defined status from a
 // peer arrive with the meaning the peer gave it.
 //
-// An envelope that omits isSuccessful is from a non-conformant peer; it is classified by its
-// statusCode against the vocabulary as the only signal left. One whose isSuccessful contradicts a
-// vocabulary statusCode (a "not-found" marked successful) is malformed and is read as an
+// An envelope that omits isSuccessful is malformed and is read as unsuccessful (§1.2) - never
+// classified from its statusCode. One whose isSuccessful contradicts a vocabulary statusCode (a
+// "not-found" marked successful, or an "ok" marked or left unsuccessful) is read as an
 // unexpected-error naming the contradiction, rather than as either half of it.
 func ToResult(resp wire.Response) benzene.Result[json.RawMessage] {
 	status := benzene.Status(resp.StatusCode)
-	successful := !status.IsFailure()
-	if resp.IsSuccessful != nil {
-		successful = *resp.IsSuccessful
-	}
+	successful := resp.IsSuccessful != nil && *resp.IsSuccessful
 
 	if (successful && status.IsFailure()) || (!successful && status.IsSuccess()) {
 		return benzene.UnexpectedError[json.RawMessage](fmt.Sprintf(

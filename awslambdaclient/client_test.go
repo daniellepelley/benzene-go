@@ -34,6 +34,10 @@ func (f *fakeInvokeAPI) Invoke(ctx context.Context, params *lambda.InvokeInput, 
 	return &lambda.InvokeOutput{}, nil
 }
 
+// successful is the isSuccessful a conformant target states on a success envelope (wire-contracts.md
+// §1.2); an envelope without it is read as unsuccessful.
+var successful = true
+
 // responsePayload marshals a wire.Response into the JSON bytes a target Lambda would return.
 func responsePayload(t *testing.T, resp wire.Response) []byte {
 	t.Helper()
@@ -56,7 +60,7 @@ func TestNewClient_DefaultsToRequestResponse(t *testing.T) {
 
 func TestClient_RequestResponseReturnsTargetResult(t *testing.T) {
 	api := &fakeInvokeAPI{output: &lambda.InvokeOutput{
-		Payload: responsePayload(t, wire.Response{StatusCode: "ok", Body: `{"greeting":"hi"}`}),
+		Payload: responsePayload(t, wire.Response{StatusCode: "ok", IsSuccessful: &successful, Body: `{"greeting":"hi"}`}),
 	}}
 	c := NewClient(api, "target-fn")
 
@@ -81,7 +85,7 @@ func TestClient_RequestResponseReturnsTargetResult(t *testing.T) {
 
 func TestClient_SuccessWithEmptyBodyHasNoPayload(t *testing.T) {
 	api := &fakeInvokeAPI{output: &lambda.InvokeOutput{
-		Payload: responsePayload(t, wire.Response{StatusCode: "ok", Body: ""}),
+		Payload: responsePayload(t, wire.Response{StatusCode: "ok", IsSuccessful: &successful, Body: ""}),
 	}}
 	c := NewClient(api, "target-fn")
 
