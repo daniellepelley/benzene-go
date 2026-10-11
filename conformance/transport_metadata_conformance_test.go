@@ -32,9 +32,9 @@ import (
 //     ships it and where its topic comes from - and the root-module bindings are driven to show it.
 //   - metadataCases and overrideCases, through the shared wire.ResolveMetadataTopic primitive and
 //     then through every native-metadata binding in this module (gcppubsub, the azurefunctions
-//     Service Bus and Event Hub triggers) via internal/transportmetadata, each delivering a real
+//     Service Bus and Event Hub triggers, awskafka) via internal/transportmetadata, each delivering a real
 //     message on its native channel to a builder configured with the case's reserved names.
-//   - The binding modules (awssqs, awssns, azureservicebus, azureeventhub, rabbitmq) run the same
+//   - The binding modules (awssqs, awssns, azureservicebus, azureeventhub, rabbitmq, kafka) run the same
 //     two groups through their own entry points in their own transport_metadata_conformance_test.go.
 
 func transportMetadataFixturePath() string { return "testdata/" + transportmetadata.FixtureName }
@@ -95,6 +95,11 @@ func TestConformance_TransportMetadataBindings(t *testing.T) {
 		"gcppubsub.Handler": probePubSub,
 		"azurefunctions.QueueHandler (Service Bus trigger)":  probeAzureServiceBusTrigger,
 		"azurefunctions.EventHubHandler (Event Hub trigger)": probeAzureEventHubTrigger,
+		// The record's Kafka topic is empty, so the unresolved cases stay unresolved rather than
+		// taking the Kafka-topic fallback, which the topicSources test drives.
+		"awskafka.Handler": func(t *testing.T, builder *benzene.ApplicationBuilder, metadata map[string]string) {
+			deliverAWSKafka(t, builder, "", metadata)
+		},
 	}
 	for name, probe := range probes {
 		t.Run(name, func(t *testing.T) {
@@ -138,6 +143,38 @@ func probeAzureEventHubTrigger(t *testing.T, builder *benzene.ApplicationBuilder
 	serveJSON(t, azurefunctions.EventHubHandler(builder, "events"), invocation)
 }
 
+// deliverAWSKafka delivers one MSK record from kafkaTopic with headers as its Kafka headers (byte
+// arrays as JSON integers, as Lambda delivers them) through awskafka.Handler.
+func deliverAWSKafka(t *testing.T, builder *benzene.ApplicationBuilder, kafkaTopic string, headers map[string]string) {
+	t.Helper()
+	kafkaHeaders := make([]map[string][]int, 0, len(headers))
+	for name, value := range headers {
+		bytes := make([]int, 0, len(value))
+		for _, b := range []byte(value) {
+			bytes = append(bytes, int(b))
+		}
+		kafkaHeaders = append(kafkaHeaders, map[string][]int{name: bytes})
+	}
+	event, err := json.Marshal(map[string]any{
+		"eventSource": "aws:kafka",
+		"records": map[string]any{
+			kafkaTopic + "-0": []map[string]any{{
+				"topic":     kafkaTopic,
+				"partition": 0,
+				"offset":    1,
+				"value":     base64.StdEncoding.EncodeToString([]byte(transportmetadata.Body)),
+				"headers":   kafkaHeaders,
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if _, err := awskafka.Handler(builder)(context.Background(), event); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+}
+
 func serveJSON(t *testing.T, handler http.Handler, body any) {
 	t.Helper()
 	data, err := json.Marshal(body)
@@ -164,7 +201,7 @@ var topicSourceClaims = map[string]topicSourceClaim{
 	"pubsub":           {[]string{"gcppubsub.Handler"}, "metadata", ""},
 	"servicebus":       {[]string{"azurefunctions.QueueHandler (Service Bus trigger)", "azureservicebus.Worker"}, "metadata", "azureservicebus"},
 	"eventhub":         {[]string{"azurefunctions.EventHubHandler", "azureeventhub.Consumer"}, "metadata", "azureeventhub"},
-	"kafka":            {[]string{"awskafka.Handler", "kafka.Consumer"}, "native", "kafka"},
+	"kafka":            {[]string{"awskafka.Handler", "kafka.Consumer"}, "metadata", "kafka"},
 	"rabbitmq":         {[]string{"rabbitmq.Consumer"}, "metadata", "rabbitmq"},
 	"eventbridge":      {[]string{"awseventbridge.Handler"}, "native", "awseventbridge"},
 	"dynamodb-streams": {[]string{"awsdynamodb.Handler"}, "derived", ""},
@@ -172,23 +209,8 @@ var topicSourceClaims = map[string]topicSourceClaim{
 	"grpc":             {[]string{"grpcbinding.UnaryServerInterceptor"}, "method", "grpcbinding"},
 }
 
-// topicSourceDivergences are claims that disagree with the fixture, each with the reason it is not
-// fixed here. An entry is an open question for the spec, not a waiver: it must be resolved there or
-// here, and this runner fails once the claim and the fixture agree again so the entry cannot
-// outlive it.
-var topicSourceDivergences = map[string]string{
-	// The fixture (with wire-contracts §2 and transport-bindings' Kafka entry) says a Kafka consumer
-	// reads the topic from the `topic` header. This port's two Kafka bindings - like .NET's
-	// KafkaMessageTopicGetter (the reference) and TypeScript's - route on the Kafka topic itself, and
-	// their Kafka clients produce to a Kafka topic named after the Benzene topic with no `topic`
-	// header; Python follows the fixture (one Kafka topic, header-routed). The ports therefore do not
-	// interoperate over Kafka today, and which side moves is a spec decision, not a fix in one port:
-	// raised against the spec rather than changed here.
-	"kafka": "routes on the Kafka topic itself, as .NET and TypeScript do; the fixture (and Python) read the `topic` header",
-}
-
 // TestConformance_TransportMetadataTopicSources runs the topicSources group: every fixture binding
-// is claimed, each claim matches the fixture's source (or is a listed divergence), and the
+// is claimed, each claim matches the fixture's source, and the
 // root-module bindings whose source is not native metadata are driven to show where their topic
 // comes from. The metadata-sourced ones are driven by TestConformance_TransportMetadataBindings.
 func TestConformance_TransportMetadataTopicSources(t *testing.T) {
@@ -204,14 +226,8 @@ func TestConformance_TransportMetadataTopicSources(t *testing.T) {
 			t.Errorf("topicSources %q has no claim in topicSourceClaims - say which Go binding ships it, or that none does", entry.Binding)
 			continue
 		}
-		reason, divergent := topicSourceDivergences[entry.Binding]
-		switch {
-		case claim.source != entry.Source && !divergent:
+		if claim.source != entry.Source {
 			t.Errorf("topicSources %q: this port's source is %q, the fixture's %q", entry.Binding, claim.source, entry.Source)
-		case claim.source == entry.Source && divergent:
-			t.Errorf("topicSources %q is listed as a divergence (%q) but the claim now matches the fixture - drop the entry", entry.Binding, reason)
-		case divergent:
-			t.Logf("topicSources %q: DIVERGES from the fixture (fixture %q, this port %q): %s", entry.Binding, entry.Source, claim.source, reason)
 		}
 	}
 	for binding := range topicSourceClaims {
@@ -219,12 +235,6 @@ func TestConformance_TransportMetadataTopicSources(t *testing.T) {
 			t.Errorf("topicSourceClaims names %q, which the fixture's topicSources does not - drop it", binding)
 		}
 	}
-	for binding := range topicSourceDivergences {
-		if !seen[binding] {
-			t.Errorf("topicSourceDivergences names %q, which the fixture's topicSources does not - drop it", binding)
-		}
-	}
-
 	sources := map[string]topicSource{}
 	for _, entry := range fixture.TopicSources {
 		sources[entry.Binding] = entry
@@ -257,39 +267,29 @@ func TestConformance_TransportMetadataTopicSources(t *testing.T) {
 		}
 	})
 
-	// The listed divergence, held to what this port actually does so the claim cannot drift
-	// silently either way: the Kafka topic routes, and a `topic` header stays a header.
+	// kafka: the topic header first (driven through the metadata cases above), the Kafka topic the
+	// record was consumed from as the fallback - and only as a fallback.
 	t.Run("kafka/awskafka.Handler", func(t *testing.T) {
-		builder, recorder := transportmetadata.NewBuilder(t, wire.ReservedNames{})
-		headerValue := make([]int, 0, len("not-the-topic"))
-		for _, b := range []byte("not-the-topic") {
-			headerValue = append(headerValue, int(b))
+		if sources["kafka"].Fallback == "" {
+			t.Fatalf("kafka topicSource names no fallback; this runner asserts the Kafka-topic fallback")
 		}
-		event := map[string]any{
-			"eventSource": "aws:kafka",
-			"records": map[string]any{
-				transportmetadata.Topic + "-0": []map[string]any{{
-					"topic":     transportmetadata.Topic,
-					"partition": 0,
-					"offset":    1,
-					"value":     base64.StdEncoding.EncodeToString([]byte(transportmetadata.Body)),
-					"headers":   []map[string][]int{{wire.DefaultTopicKey: headerValue}},
-				}},
-			},
-		}
-		raw, err := json.Marshal(event)
-		if err != nil {
-			t.Fatalf("marshal: %v", err)
-		}
-		if _, err := awskafka.Handler(builder)(context.Background(), raw); err != nil {
-			t.Fatalf("dispatch: %v", err)
-		}
-		got := recorder.Only(t)
-		if got.Topic != transportmetadata.Topic {
-			t.Errorf("topic = %q, want the Kafka topic %q", got.Topic, transportmetadata.Topic)
-		}
-		if got.Headers[wire.DefaultTopicKey] != "not-the-topic" {
-			t.Errorf("headers = %v, want the `topic` header passed through as an ordinary header", got.Headers)
-		}
+		t.Run("kafka-topic-fallback", func(t *testing.T) {
+			builder, recorder := transportmetadata.NewBuilder(t, wire.ReservedNames{})
+			deliverAWSKafka(t, builder, transportmetadata.Topic, map[string]string{"x-correlation-id": "abc-123"})
+			if got := recorder.Only(t).Topic; got != transportmetadata.Topic {
+				t.Errorf("topic = %q, want the Kafka topic %q when no topic header is present", got, transportmetadata.Topic)
+			}
+		})
+		t.Run("topic-header-wins-over-the-kafka-topic", func(t *testing.T) {
+			builder, recorder := transportmetadata.NewBuilder(t, wire.ReservedNames{})
+			deliverAWSKafka(t, builder, "benzene-events", map[string]string{wire.DefaultTopicKey: transportmetadata.Topic})
+			got := recorder.Only(t)
+			if got.Topic != transportmetadata.Topic {
+				t.Errorf("topic = %q, want the topic header %q", got.Topic, transportmetadata.Topic)
+			}
+			if _, ok := got.Headers[wire.DefaultTopicKey]; ok {
+				t.Errorf("headers = %v, want the consumed topic header excluded", got.Headers)
+			}
+		})
 	})
 }

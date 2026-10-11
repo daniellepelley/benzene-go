@@ -36,8 +36,8 @@ func NewClient(writer MessageWriter) *Client {
 	return &Client{Writer: writer}
 }
 
-// Send publishes message to the Kafka topic named after topic (per the package doc, one
-// Kafka topic per Benzene topic - matching the main repo's
+// Send publishes message to the Kafka topic named after topic (one Kafka topic per Benzene
+// topic, which a Consumer routes on through its Kafka-topic fallback - matching the main repo's
 // Benzene.Kafka.Core.Kafka.KafkaClientMiddleware, which produces to
 // context.Topic == the Benzene request's Topic verbatim), with headers written as Kafka
 // message headers verbatim - no reserved header name, no envelope wrapping. A successful

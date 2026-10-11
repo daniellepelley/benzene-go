@@ -8,8 +8,8 @@ record into an invocation this Lambda consumes.
 produce to `orders` topic --> MSK/Kafka event source mapping --> consumer Lambda --> orders handler
 ```
 
-The Kafka topic **is** the Benzene topic, verbatim — one Kafka topic maps to one Benzene topic (no
-envelope, no header). The record value is base64-decoded back to the JSON the producer wrote, and
+The record carries no `topic` header here, so the Kafka topic **is** the Benzene topic, verbatim
+(the binding reads a `topic` header first and falls back to the Kafka topic; no envelope). The record value is base64-decoded back to the JSON the producer wrote, and
 Kafka headers pass through verbatim, before the handler sees it.
 
 > **Not the self-hosted `kafka` module.** This example uses `awskafka`, the zero-dependency adapter
@@ -81,7 +81,7 @@ by its `{partition, offset}` for redelivery, not as an error back to the produce
 ## What this demonstrates
 
 - **`awskafka.Handler`**: adapts the Lambda MSK/Kafka event source mapping's batch payload —
-  resolving the topic as the Kafka topic verbatim, base64-decoding the record value into the
+  resolving the topic from the `topic` header, else the Kafka topic verbatim, base64-decoding the record value into the
   producer's JSON so the handler deserializes an ordinary struct, passing Kafka headers through
   verbatim, and running each record through the pipeline with its own DI scope.
 - **Per-partition, ordered, stop-at-first-failure batching**: records are ordered within a

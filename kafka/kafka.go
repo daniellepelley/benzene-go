@@ -4,19 +4,16 @@
 // wire messages, applied to a self-hosted (or managed - MSK, Confluent, Event Hubs' Kafka
 // surface) broker.
 //
-// The mapping is a deliberately thin pass-through, unlike the cloud queue bindings
-// (awssqs/awssns/gcppubsub), which invent a "topic" attribute/header convention because their
-// transports have no native concept of topic at all:
+// The mapping follows transport-bindings.md's Kafka entry:
 //
-//   - Topic: the Kafka topic itself, verbatim (kafkago.Message.Topic on read; Client writes
-//     to a Kafka topic named after the Benzene topic). One Kafka topic maps to exactly one
-//     Benzene (unversioned) topic - this binding does not multiplex several Benzene topics
-//     over one Kafka topic the way SQS/SNS/EventBridge do, because Kafka's own topic already
-//     is that routing key (`Benzene.Kafka.Core.KafkaMessage.KafkaMessageTopicGetter` /
-//     `KafkaSendMessageTopicGetter` both do exactly `new Topic(topic)` - no header, no
-//     envelope).
-//   - Headers: every Kafka header, verbatim, both directions (UTF-8 decoded on read) - no
-//     reserved header name, no fallback parsing.
+//   - Topic: the record's reserved topic header (default "topic", the same convention as
+//     SQS/SNS/Service Bus/RabbitMQ; configurable via ReservedNames, matched case-insensitively),
+//     falling back to the Kafka topic the record was consumed from - so one Kafka topic can carry
+//     several Benzene topics, and a producer that writes no topic header (a non-Benzene one, or one
+//     that names its Kafka topics after Benzene topics, as this module's Client and the .NET and
+//     TypeScript clients do) still routes. The same rule as RabbitMQ's routing-key fallback.
+//   - Headers: every other Kafka header, verbatim, both directions (UTF-8 decoded on read); the
+//     consumed topic header is not repeated as a header.
 //   - Body: the raw message value, verbatim, both directions - no envelope wrapping.
 //
 // This module depends on github.com/segmentio/kafka-go - a broker wire protocol is not
@@ -100,8 +97,22 @@ type Consumer struct {
 	// leaves no trace - configure one unless the pipeline's own middleware already records failures.
 	OnFailure func(ctx context.Context, msg kafkago.Message, resp wire.Response)
 
+	// ReservedNames overrides the reserved metadata names (wire-contracts.md §2) used to read the
+	// topic header. Leave it zero to inherit the Builder's reserved names; set it only to differ
+	// from the Builder.
+	ReservedNames wire.ReservedNames
+
 	// sleep is the backoff primitive, injectable for tests. nil means sleepContext.
 	sleep func(ctx context.Context, d time.Duration)
+}
+
+// topicKey resolves the reserved topic header key: the Consumer's explicit override if set, else
+// the Builder's reserved names (which default to "topic").
+func (c *Consumer) topicKey() string {
+	if c.ReservedNames.TopicKey != "" {
+		return c.ReservedNames.TopicKey
+	}
+	return c.Builder.ReservedNames.Topic()
 }
 
 // Run fetches, dispatches, and commits messages until ctx is cancelled (returns nil - the
@@ -125,7 +136,7 @@ func (c *Consumer) Run(ctx context.Context) error {
 		}
 
 		for {
-			outcome := settlement.Dispatch(ctx, c.Builder.Pipeline, c.Builder.Container, resolveRequest(msg))
+			outcome := settlement.Dispatch(ctx, c.Builder.Pipeline, c.Builder.Container, resolveRequest(msg, c.topicKey()))
 			if !outcome.Successful && c.OnFailure != nil {
 				c.OnFailure(ctx, msg, outcome.Response)
 			}
@@ -186,16 +197,19 @@ func (c *Consumer) Validate() error {
 	return nil
 }
 
-// resolveRequest maps a fetched record onto a wire.Request per the package doc: the Kafka
-// topic becomes the Benzene topic verbatim, every Kafka header becomes a wire header verbatim
-// (UTF-8 decoded; on duplicate keys, matching wire-contracts.md §2, the last value wins - the
-// natural effect of this map assignment loop), and the message value becomes the body
-// verbatim. No reserved header name, no envelope-in-value fallback - Kafka's own topic
-// already is the routing key, so there is nothing to lift out of the payload.
-func resolveRequest(msg kafkago.Message) wire.Request {
-	headers := make(map[string]string, len(msg.Headers))
+// resolveRequest maps a fetched record onto a wire.Request per the package doc: the topic from the
+// reserved topic header (topicKey), else the Kafka topic the record was consumed from; every other
+// Kafka header becomes a wire header verbatim (UTF-8 decoded; on duplicate keys, matching
+// wire-contracts.md §2, the last value wins - the natural effect of this map assignment loop), and
+// the message value becomes the body verbatim. No envelope-in-value fallback.
+func resolveRequest(msg kafkago.Message, topicKey string) wire.Request {
+	metadata := make(map[string]string, len(msg.Headers))
 	for _, header := range msg.Headers {
-		headers[header.Key] = string(header.Value)
+		metadata[header.Key] = string(header.Value)
 	}
-	return wire.Request{Topic: msg.Topic, Headers: headers, Body: string(msg.Value)}
+	topic, headers := wire.ResolveMetadataTopic(metadata, topicKey)
+	if topic == "" {
+		topic = msg.Topic
+	}
+	return wire.Request{Topic: topic, Headers: headers, Body: string(msg.Value)}
 }

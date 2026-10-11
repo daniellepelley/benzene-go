@@ -39,7 +39,7 @@ func orderReceived(_ context.Context, o order) benzene.Result[struct{}] {
 }
 
 // newApp is the composition root both main() and the tests boot from. The topic is the Kafka topic
-// name ("orders") - one Kafka topic maps to one Benzene topic, verbatim.
+// name ("orders"): the records carry no topic header, so awskafka falls back to the Kafka topic.
 func newApp() benzene.App[struct{}] {
 	return benzene.App[struct{}]{
 		ConfigureServices: func(registry *benzene.Registry, _ *benzene.Container, _ struct{}) {

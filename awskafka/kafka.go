@@ -7,15 +7,17 @@
 //
 // It is DISTINCT from this repo's self-hosted `kafka` module: that one runs its own consumer loop
 // against a broker (needing segmentio/kafka-go); this one is a zero-dependency Lambda adapter for
-// AWS's managed event source mapping. Both map one Kafka topic to one Benzene topic and pass Kafka
-// headers through verbatim, matching Benzene.Kafka.Core / Benzene.Aws.Lambda.Kafka.
+// AWS's managed event source mapping. Both resolve the topic the same way (transport-bindings.md's
+// Kafka entry) and pass the other Kafka headers through verbatim.
 //
 //   - Event: the records are grouped by "topic-partition" key (e.g. "orders-0"), each group a list
 //     of records ordered by offset.
-//   - Topic: the record's Kafka topic (one Kafka topic = one Benzene topic, verbatim - no envelope).
+//   - Topic: the record's reserved topic header (builder.ReservedNames, default "topic", matched
+//     case-insensitively), falling back to the record's Kafka topic - so one Kafka topic can carry
+//     several Benzene topics, and a producer that writes no topic header still routes. No envelope.
 //   - Body: the record's value, base64-decoded into the raw bytes the producer wrote (typically JSON).
-//   - Headers: the Kafka headers, passed through verbatim (their byte-array values UTF-8 decoded),
-//     matching the self-hosted binding. The record's own metadata (partition, offset, timestamp,
+//   - Headers: the other Kafka headers, passed through verbatim (their byte-array values UTF-8
+//     decoded), matching the self-hosted binding; a consumed topic header is not repeated. The record's own metadata (partition, offset, timestamp,
 //     key) is deliberately NOT surfaced as headers - unlike the `kinesis-`/`dynamodb-`-prefixed
 //     metadata the stream siblings synthesize, because those records carry no real headers whereas
 //     a Kafka record does. Matching Benzene.Aws.Lambda.Kafka, which documents that fabricating a
@@ -129,7 +131,7 @@ func Handler(builder *benzene.ApplicationBuilder, opts ...Option) awslambda.Hand
 		for partitionKey, records := range evt.Records {
 			sort.SliceStable(records, func(i, j int) bool { return records[i].Offset < records[j].Offset })
 			for _, record := range records {
-				req, err := resolveRequest(record)
+				req, err := resolveRequest(record, builder.ReservedNames.Topic())
 				if err != nil {
 					// A record whose value cannot be base64-decoded is a poison record: stop this
 					// partition and report its offset for redelivery rather than skipping past it -
@@ -156,14 +158,19 @@ func failAt(partitionKey string, offset int64) batchItemFailure {
 	return batchItemFailure{ItemIdentifier: itemIdentifier{Partition: partitionKey, Offset: offset}}
 }
 
-// resolveRequest derives the wire.Request for one Kafka record: the topic verbatim, the
-// base64-decoded value as the body, and the Kafka headers passed through verbatim.
-func resolveRequest(record kafkaRecord) (wire.Request, error) {
+// resolveRequest derives the wire.Request for one Kafka record: the topic from the header named
+// topicKey, else the record's Kafka topic; the base64-decoded value as the body; and the other
+// Kafka headers passed through verbatim.
+func resolveRequest(record kafkaRecord, topicKey string) (wire.Request, error) {
 	value, err := base64.StdEncoding.DecodeString(record.Value)
 	if err != nil {
 		return wire.Request{}, err
 	}
-	return wire.Request{Topic: record.Topic, Headers: recordHeaders(record), Body: string(value)}, nil
+	topic, headers := wire.ResolveMetadataTopic(recordHeaders(record), topicKey)
+	if topic == "" {
+		topic = record.Topic
+	}
+	return wire.Request{Topic: topic, Headers: headers, Body: string(value)}, nil
 }
 
 // recordHeaders decodes the record's Kafka headers into a flat string map, their byte-array values

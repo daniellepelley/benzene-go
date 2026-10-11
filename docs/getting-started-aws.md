@@ -424,9 +424,9 @@ func main() {
 }
 ```
 
-The topic is the **Kafka topic verbatim** (one Kafka topic = one Benzene topic, matching the
-self-hosted module); the body is the record's `value` base64-decoded; Kafka headers pass through
-verbatim. Records are grouped by topic-partition and each partition is processed sequentially,
+The topic is the record's `topic` header, falling back to the **Kafka topic** when the header is
+absent (as the self-hosted module does); the body is the record's `value` base64-decoded; the other
+Kafka headers pass through verbatim. Records are grouped by topic-partition and each partition is processed sequentially,
 stopping at its first failure and reporting `{partition, offset}` for that partition's resume — an
 object-shaped `batchItemFailures` identifier, so the mapping needs
 `FunctionResponseTypes: [ReportBatchItemFailures]`. See

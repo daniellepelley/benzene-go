@@ -8,6 +8,7 @@ import (
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/envelope"
+	"github.com/daniellepelley/benzene-go/wire"
 )
 
 // record builds one Kafka record for the given topic/partition/offset with a base64-encoded value.
@@ -27,7 +28,7 @@ func TestResolveRequest_TopicBodyHeaders(t *testing.T) {
 	// wire form AWS delivers).
 	r.Headers = []map[string][]int{{"h1": bytesToInts([]byte("v1"))}, {"h2": bytesToInts([]byte("v2"))}}
 
-	req, err := resolveRequest(r)
+	req, err := resolveRequest(r, wire.DefaultTopicKey)
 	if err != nil {
 		t.Fatalf("resolveRequest() error = %v", err)
 	}
@@ -42,17 +43,42 @@ func TestResolveRequest_TopicBodyHeaders(t *testing.T) {
 	}
 }
 
+func TestResolveRequest_TopicHeaderWinsOverTheKafkaTopic(t *testing.T) {
+	r := record("benzene-events", 0, 5, `{}`)
+	r.Headers = []map[string][]int{{"Topic": bytesToInts([]byte("order:create"))}, {"h1": bytesToInts([]byte("v1"))}}
+
+	req, err := resolveRequest(r, wire.DefaultTopicKey)
+	if err != nil {
+		t.Fatalf("resolveRequest() error = %v", err)
+	}
+	if req.Topic != "order:create" {
+		t.Errorf("Topic = %q, want the topic header %q", req.Topic, "order:create")
+	}
+	if _, ok := req.Headers["Topic"]; ok || req.Headers["h1"] != "v1" {
+		t.Errorf("Headers = %v, want h1 and not the consumed topic header", req.Headers)
+	}
+
+	// Under an overridden key, "topic" is an ordinary header and the Kafka topic is the fallback.
+	req, err = resolveRequest(r, "x-my-topic")
+	if err != nil {
+		t.Fatalf("resolveRequest() error = %v", err)
+	}
+	if req.Topic != "benzene-events" || req.Headers["Topic"] != "order:create" {
+		t.Errorf("resolveRequest(x-my-topic) = %+v, want the Kafka topic with Topic kept as a header", req)
+	}
+}
+
 func TestResolveRequest_DecodeFailure(t *testing.T) {
 	r := record("orders", 0, 1, "")
 	r.Value = "!!!not-base64!!!"
-	if _, err := resolveRequest(r); err == nil {
+	if _, err := resolveRequest(r, wire.DefaultTopicKey); err == nil {
 		t.Error("resolveRequest() with undecodable value = nil error, want an error")
 	}
 }
 
 func TestResolveRequest_EmptyValueIsEmptyBody(t *testing.T) {
 	// A tombstone (empty value) decodes to an empty body without error.
-	req, err := resolveRequest(record("orders", 0, 1, ""))
+	req, err := resolveRequest(record("orders", 0, 1, ""), wire.DefaultTopicKey)
 	if err != nil {
 		t.Fatalf("resolveRequest() error = %v", err)
 	}

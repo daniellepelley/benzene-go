@@ -2,9 +2,10 @@
 
 The `kafka` package is the self-hosted Kafka binding: a `Consumer` loop that dispatches each
 record through a Benzene pipeline (one invocation, one DI scope per record), and an outbound
-`Client` that publishes wire messages. The mapping is a deliberately thin pass-through — **one
-Kafka topic is one Benzene topic**, headers pass through verbatim both directions, and the message
-value is the body verbatim, with no envelope wrapping.
+`Client` that publishes wire messages. The topic is the record's `topic` header, falling back to
+the **Kafka topic** the record was consumed from when the header is absent (transport-bindings.md's
+Kafka entry); the other headers pass through verbatim both directions, and the message value is
+the body verbatim, with no envelope wrapping.
 
 **Worth using even if Kafka is the only transport this service ever has.** Unlike HTTP, where
 `net/http` already gives you routing for free (see
@@ -55,9 +56,11 @@ func greetHandler(_ context.Context, req greetRequest) benzene.Result[greetRespo
 }
 ```
 
-The **Benzene topic must equal the Kafka topic name literally** — there is no colon-separated
-topic-id convention here (unlike SQS/SNS). Whatever Kafka topic the record arrives on becomes the
-Benzene topic verbatim, so register the handler under that exact name.
+A record that carries a `topic` header (the reserved name, configurable with
+`builder.UseReservedNames`) routes on that header, so one Kafka topic can carry several Benzene
+topics. A record without one routes on the Kafka topic it arrived on, verbatim - which is what this
+module's own `Client` relies on, since it publishes to a Kafka topic named after the Benzene topic.
+Register the handler under whichever name your producers use.
 
 ## 2. Build the application
 
@@ -153,7 +156,8 @@ result := sender.Send(ctx, benzene.NewTopic("greet"),
 ```
 
 The message value is the body verbatim and the headers become Kafka message headers verbatim — no
-reserved header name, no envelope. The Kafka topic written to is named after the Benzene topic.
+envelope. The Kafka topic written to is named after the Benzene topic, which a consumer routes on
+when no `topic` header is present.
 
 ## 5. Testing
 
@@ -188,9 +192,9 @@ via a fake `kafka.MessageWriter`.
 
 ## Troubleshooting
 
-- **Handler never fires** — the registered Benzene topic must equal the literal Kafka topic name;
-  there's no colon-separated topic id. Confirm the `ReaderConfig.Topic` and the `benzene.NewTopic`
-  value match exactly, and that the consumer group's `GroupID` isn't already parked past the
+- **Handler never fires** — the registered Benzene topic must equal the record's `topic` header,
+  or, when the producer writes none, the literal Kafka topic name. Confirm the `ReaderConfig.Topic`
+  (or the producer's header) and the `benzene.NewTopic` value match exactly, and that the consumer group's `GroupID` isn't already parked past the
   offsets you expect.
 - **`kafka: Consumer requires both Source and Builder`** — `Validate()` (or the first `Run` fetch)
   found a nil `Source` or `Builder`. Construct the reader and run the app before building the

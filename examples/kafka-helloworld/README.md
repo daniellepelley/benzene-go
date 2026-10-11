@@ -19,8 +19,8 @@ handled. There is no HTTP endpoint - this is the queue-consumer shape, like
 ## What this demonstrates
 
 - **A Kafka consumer that hosts a Benzene handler**: `kafka.Consumer` fetches from a consumer group,
-  runs each record through the pipeline (its own DI scope per record), and commits - one Kafka topic
-  maps to one Benzene topic, headers pass through verbatim, no envelope wrapping.
+  runs each record through the pipeline (its own DI scope per record), and commits - the topic is
+  the record's `topic` header, else the Kafka topic; headers pass through verbatim, no envelope wrapping.
 - **The failure hook**: Kafka has no broker-side redelivery or dead-letter queue, so by default a
   non-success dispatch goes to `Consumer.OnFailure` (a dead-letter publish or log belongs there) and
   is committed past rather than replayed forever (skip-and-continue). Set

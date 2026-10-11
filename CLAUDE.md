@@ -556,8 +556,9 @@ alongside the shared spec.
 - `awskafka/` - AWS Lambda MSK/self-managed-Kafka inbound binding, zero-dependency in the root
   module and DISTINCT from the self-hosted `kafka` module (that one runs its own broker consumer
   loop needing `segmentio/kafka-go`; this is the zero-dep adapter for AWS's *managed* event source
-  mapping, which delivers records as plain JSON). Topic is the **Kafka topic verbatim** (one Kafka
-  topic = one Benzene topic - like the `kafka` module, unlike Kinesis's stream-name routing); body
+  mapping, which delivers records as plain JSON). Topic is the record's reserved **`topic` header**
+  (`builder.ReservedNames`), falling back to the **Kafka topic verbatim** (like the `kafka` module,
+  per transport-bindings' Kafka entry; unlike Kinesis's stream-name routing); body
   is the record's `value` base64-decoded into the producer's bytes; headers pass through verbatim
   (their byte-array wire form UTF-8 decoded), matching the self-hosted binding. Records are grouped
   by `{topic}-{partition}` and each partition is processed sequentially, **stopping at its first
@@ -604,8 +605,10 @@ alongside the shared spec.
   Failure returns a Go error - async-invoke retry, like `awssns`.
 - `kafka/` - Kafka binding, in **its own Go module** (`kafka/go.mod`, needs
   `segmentio/kafka-go` - a broker wire protocol isn't hand-rollable), matching
-  `Benzene.Kafka.Core` exactly: one Kafka topic = one Benzene topic (verbatim, not a header
-  or envelope), headers pass through verbatim both directions, body verbatim. `Consumer` loop
+  transport-bindings' Kafka entry: the topic is the record's reserved `topic` header (`ReservedNames`,
+  inherited from the builder), falling back to the Kafka topic it was consumed from - the same rule
+  as RabbitMQ's routing-key fallback; the other headers pass through verbatim both directions, body
+  verbatim, no envelope. `Consumer` loop
   (one scope per record, explicit commits; no broker-side redelivery/DLQ exists, so by default
   failures go to the `OnFailure` hook and are committed past - skip-and-continue,
   `kafka.DefaultDelivery` - while `envelope.AtLeastOnce` re-dispatches a failed message in place) + outbound `Client` satisfying

@@ -252,6 +252,15 @@ func TestResolveRequest(t *testing.T) {
 			wantHeaders: map[string]string{},
 		},
 		{
+			name: "the topic header wins over the Kafka topic and is not repeated as a header",
+			message: kafkago.Message{Topic: "orders", Value: []byte("{}"), Headers: []kafkago.Header{
+				{Key: "Topic", Value: []byte("greet")}, {Key: "x-tag", Value: []byte("a")},
+			}},
+			wantTopic:   "greet",
+			wantBody:    "{}",
+			wantHeaders: map[string]string{"x-tag": "a"},
+		},
+		{
 			name:        "no headers is not confused with nil",
 			message:     kafkago.Message{Topic: "greet"},
 			wantTopic:   "greet",
@@ -261,7 +270,7 @@ func TestResolveRequest(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := resolveRequest(tt.message)
+			req := resolveRequest(tt.message, wire.DefaultTopicKey)
 			if req.Topic != tt.wantTopic {
 				t.Errorf("Topic = %q, want %q", req.Topic, tt.wantTopic)
 			}
@@ -277,5 +286,19 @@ func TestResolveRequest(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestConsumer_HonorsReservedNames(t *testing.T) {
+	// The topic header key is the Builder's reserved name unless the Consumer overrides it.
+	builder := newTestBuilder(t)
+	builder.UseReservedNames(wire.ReservedNames{TopicKey: "x-my-topic"})
+	consumer := &Consumer{Builder: builder}
+	if got := consumer.topicKey(); got != "x-my-topic" {
+		t.Errorf("topicKey() = %q, want the Builder's %q", got, "x-my-topic")
+	}
+	consumer.ReservedNames = wire.ReservedNames{TopicKey: "x-own-topic"}
+	if got := consumer.topicKey(); got != "x-own-topic" {
+		t.Errorf("topicKey() = %q, want the Consumer's own %q", got, "x-own-topic")
 	}
 }
