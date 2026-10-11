@@ -54,7 +54,7 @@ Full parity with the .NET reference on cloud integrations (see `PARITY.md`).
 |---|---|---|---|
 | **Lambda runtime + HTTP** | `awslambda/` — hand-rolled Runtime API bootstrap; HTTP adapter for Function URL / API Gateway v2, REST/v1, ALB (shape-detected per invocation), plus envelope adapter | The API Gateway custom-authorizer sub-feature is **not implemented** | Attach an authorizer at the gateway; claims arrive as request context you can read in middleware |
 | **SQS** | `awssqs` (own module): inbound Lambda `Handler` (per-message batch-item failure) + outbound `Client` + self-hosted `Consumer` poller | Hide SQS specifics — the native record is exposed | Use SQS features (delay, FIFO, attributes) via the SDK directly |
-| **SNS / EventBridge / S3** | `awssns`, `awseventbridge` (own modules — inbound handlers + outbound clients), `awss3` (root module, inbound) | Batch/partial-failure reporting on these — the platform offers none for direct async invokes; a failure returns a Go error so AWS's async-invoke retry applies (deliberately **not** .NET S3's fire-and-forget swallow, per the no-silent-drop rule) | Handlers must be idempotent (at-least-once) |
+| **SNS / EventBridge / S3** | `awssns`, `awseventbridge` (own modules — inbound handlers + outbound clients), `awss3` (root module, inbound) | Batch/partial-failure reporting on these — the platform offers none for direct async invokes; a failure returns a Go error so AWS's async-invoke retry applies (the same default as .NET's 1.0 settlement contract; per-binding detail in the settlement breakdown below) | Handlers must be idempotent (at-least-once) |
 | **DynamoDB Streams / Kinesis / MSK Kafka** | `awsdynamodb/`, `awskinesis/`, `awskafka/` (root module, zero-dep) — ordered CDC/stream handlers: sequential per partition, stop at first failure, report the resume position via batch-item failures | Concurrent fan-out on ordered streams — ordering is the point of a stream; and no outbound side (writing the table/stream *is* the publish) | Configure `ReportBatchItemFailures` on the event source mapping |
 | **Outbound invoke / orchestration** | `awslambdaclient` (Lambda invoke, RequestResponse/Event), `awsstepfunctions` (StartExecution, idempotent name) — own modules | Run/resume workflows — starting an execution is Benzene's job; the workflow is Step Functions' (see Saga row) | Model durable workflows in Step Functions itself |
 | **X-Ray** | Covered via `diagnostics` (OTel → X-Ray via ADOT/OTLP) | A direct X-Ray-SDK port of `.Aws.Lambda.XRay` — **not implemented**; the OTel path is the intended route | Export OTLP to ADOT |
@@ -94,6 +94,7 @@ whether a trigger reduces to that envelope (see `PARITY.md` §Azure).
 | Area | What benzene-go provides | What it deliberately does NOT do (and why) | How to solve the rest |
 |---|---|---|---|
 | **Idempotency** | `idempotency/` — atomic-claim middleware over a pluggable `Store`; `InMemoryStore` (single-process, TTL); store outage fails open; a failure is never permanently suppressed | Cross-instance de-duplication — independent processes can't coordinate without external shared state, and shared state can relocate the race, not remove it | An external store with an atomic conditional write (DynamoDB conditional put, Redis `SET NX`) behind the `Store` interface, plus naturally idempotent handlers |
+| **Settlement of a returned failure result** | Every one-way inbound binding acknowledges a message only when the invocation's success flag is true (`envelope.DispatchResult`/`DispatchTopicResult`). A failure result, **no result** (reported as `unexpected-error`), an **unmatched topic** (`RouterMiddleware` sets `not-found`), a middleware's Go error and a recovered handler panic all count as failures and are left for the transport to redeliver — with two exceptions: the self-hosted `kafka.Consumer` commits past them by design (skip-and-continue), and `awslambda.EnvelopeHandler` acknowledges them when invoked asynchronously. The self-hosted `azureeventhub.Consumer` is written to redeliver but skips in a running process. See the [per-binding breakdown](#returned-failure-result-settlement--the-per-binding-breakdown) | A single cross-transport acknowledgement abstraction — each binding settles with its transport's own signal (batch-item failure, Go error, non-2xx, nack, abandon, withheld delete/commit/checkpoint). **Not implemented:** an at-most-once override on any binding except RabbitMQ (`NoRequeue`); an option to treat an unmatched topic as `ignored`; an at-least-once mode for `kafka.Consumer` | Make handlers idempotent (`idempotency/`). To acknowledge an outcome on purpose (at-most-once, or `not-found` on a shared-bus subscriber), add an outermost middleware that rewrites `ic.Result` to `benzene.Ignored` after `next` returns. Bound retries with the transport's redrive/DLQ settings |
 | **Outbox** | **Not implemented.** Nothing ships; the only trace is a seam — `responseevents.Publisher` is documented as implementable by "an outbox relay" (`responseevents/responseevents.go`). This is an unbuilt gap, not a design decision: the .NET reference ships `Benzene.Outbox`, and this port's ROADMAP records no "no" for it | — | Store-and-forward in your handler's own transaction against your store, relaying via a `client.Sender`; pair the consuming side with `idempotency` |
 | **Oversized payloads (claim check)** | **Not implemented.** No package, no seam. An unbuilt gap, not a design decision — the .NET reference ships `Benzene.ClaimCheck` | — | Offload to blob storage in a small middleware pair (offload before send, hydrate before deserialize), carrying the reference in a header |
 | **Resilience** | `resilience/` (zero-dep): retry (full-jitter backoff, `WithRetryOnError`/`WithRetryOnResult`), cooperative `Timeout`, `Bulkhead`, `Fallback`; `circuitbreaker` (own module, `sony/gobreaker/v2`) with `WithTripOnResult` | Forcibly stop a ctx-ignoring handler — impossible in Go; `Timeout` bounds the *wait* cooperatively. **Hedging is not implemented** — racing attempts needs per-attempt `InvocationContext` isolation the shared-`ic` pipeline contract doesn't provide, a core-concepts question deliberately not forced package-locally | Honor `ctx` in handlers; for hedging, race at the caller (your own goroutines) until the contract question settles |
@@ -105,6 +106,110 @@ whether a trigger reduces to that envelope (see `PARITY.md` §Azure).
 | **Observability** | `diagnostics` (own module, OTel **API** only): one server span per invocation, W3C traceparent join, count/duration metrics, outbound `WithTraceContext`; `logging/` — zero-dep `log/slog` per-invocation line | Own the OTel SDK/exporter or ship vendor packages (Datadog, Zipkin) — the application owns the SDK; standard OTLP export covers vendors | Configure the OTel SDK + OTLP exporter in `main` |
 | **Database / state access** | *(nothing — by design)* | Any database/state-store abstraction — a database is not a transport; wrapping one hides its capabilities (the core anti-pattern) | Your handler uses its own driver/SDK directly |
 | **Conformance** | `conformance/` — runs this port against the vendored language-neutral fixtures from the main repo's `docs/specification/conformance/` | Edit a fixture to make this port pass — the fixture is the neutral truth | A mismatch is a bug here or a deliberate spec change there, never a fixture patch |
+
+## Returned-failure-result settlement — the per-binding breakdown
+
+Audited against the source on 2026-10-11. "Failure result" means the pipeline ended with a result
+whose success flag is false (`validation-error`, `not-found`, …). Every row inherits four facts:
+
+- Every binding except `awslambda.EnvelopeHandler` settles on the success flag from
+  `envelope.DispatchResult`/`DispatchTopicResult` (`envelope/dispatch.go`). That flag is false for a
+  failure result, for **no result** (reported as `unexpected-error`), and for a middleware's returned
+  Go error (`service-unavailable`). So the *no result* column always matches the *failure result*
+  column.
+- `RouterMiddleware` (`router.go`) always sets a result: an unmatched topic is `not-found`, an empty
+  topic is `validation-error`, and a handler panic is recovered as `service-unavailable`. No binding
+  special-cases any of them, so *unmatched topic* also matches *failure result*. No binding offers to
+  treat an unmatched topic as `ignored`.
+- `Pipeline.Run` (`middleware.go`) does **not** recover a panic in a middleware outside the router.
+  The *uncaught error* column records where that panic lands.
+- `redeliver` means the binding withholds acknowledgement (batch-item failure, Go error, non-2xx or
+  no response, nack, abandon, or no delete/commit/checkpoint), so the transport's own redelivery
+  applies. Retry counts and dead-lettering are the transport's redrive configuration, not Benzene's.
+
+| Binding | Package / file | Failure result | No result | Unmatched topic | Uncaught error (middleware panic) | Override knob | Unit of settlement |
+|---|---|---|---|---|---|---|---|
+| Lambda SQS trigger | `awssqs` — `sqs.go` `Handler` | redeliver (`batchItemFailures`) | redeliver | redeliver | redeliver — the runtime recovers it (`awslambda/runtime.go` `invoke`) and fails the invocation, so the whole batch is retried | none | per message (`messageId`; needs `ReportBatchItemFailures` on the mapping) |
+| SQS self-hosted poller | `awssqs` — `consumer.go` `Consumer.poll` | redeliver (not deleted; visibility timeout) | redeliver | redeliver | redeliver — panics out of `Run` (not recovered); nothing in the received batch is deleted | none (`OnFailure` only observes) | per message (`DeleteMessageBatch` of the successes) |
+| Lambda SNS | `awssns` — `sns.go` `Handler` | redeliver (Go error → async-invoke retry) | redeliver | redeliver | redeliver — invocation fails | none | per invocation (one notification) |
+| Lambda EventBridge | `awseventbridge` — `eventbridge.go` `Handler` | redeliver (Go error) | redeliver | redeliver | redeliver — invocation fails | none | per event |
+| Lambda S3 | `awss3` — `s3.go` `Handler` | redeliver (Go error; stops at the first failed record) | redeliver | redeliver | redeliver — invocation fails | none | per invocation (the whole event is re-run) |
+| Lambda DynamoDB Streams | `awsdynamodb` — `dynamodb.go` `Handler` | redeliver from the failed record | redeliver | redeliver (the shard is retried from that record) | redeliver — invocation fails (whole batch) | none | per shard position (stop at first failure, `SequenceNumber`) |
+| Lambda Kinesis | `awskinesis` — `kinesis.go` `Handler` | redeliver from the failed record | redeliver | redeliver (the shard is retried from that record) | redeliver — invocation fails (whole batch) | none | per shard position (stop at first failure, `SequenceNumber`) |
+| Lambda MSK / self-managed Kafka | `awskafka` — `kafka.go` `Handler` | redeliver from the failed offset | redeliver | redeliver (that partition is retried from that offset) | redeliver — invocation fails (whole batch) | none | per partition position (`{partition, offset}`; partitions independent) |
+| Lambda direct invoke, async (`InvocationType: Event`) | `awslambda` — `envelope.go` `EnvelopeHandler` | acknowledged (dropped) — the failure envelope is returned as a successful invocation | acknowledged (dropped) | acknowledged (dropped) | redeliver — invocation fails (async retry) | none | per invocation (n/a under `RequestResponse`: the caller reads the envelope) |
+| Kafka self-hosted consumer | `kafka` — `kafka.go` `Consumer.Run` | skip-and-continue (`OnFailure`, then committed) | skip-and-continue | skip-and-continue | redeliver on restart — panics out of `Run`; offset uncommitted | none (`OnFailure` can publish to a dead-letter topic but cannot stop the commit) | per message (commit after each record) |
+| RabbitMQ consumer | `rabbitmq` — `consumer.go` `Consumer.handle` | redeliver once (`Nack` with requeue), then nack without requeue (dead-letter exchange, or dropped) | same | same | redeliver — panics out of `Run`; the broker requeues the unacked delivery when the channel closes | `NoRequeue` (nack without requeue on the first failure); no auto-ack mode | per delivery |
+| Pub/Sub push | `gcppubsub` — `gcppubsub.go` `Handler` | redeliver (HTTP 500) | redeliver | redeliver | redeliver — no response (`net/http.Server` recovers and closes the connection) | none | per message |
+| Cloud Functions Gen2 CloudEvent | `gcpfunctions` — `gcpfunctions.go` `dispatchCloudEvent` | redeliver² (returns an error) | redeliver² | redeliver² | redeliver² — functions-framework v1.9.2 re-panics; cloudevents sdk-go v2.16.2 (`client/invoker.go`) recovers it into an error result | none (`WithOnFailure` only observes) | per event |
+| CloudEvents over HTTP | `cloudevents` — `http.go` `Handler` | redeliver (HTTP 500) | redeliver | redeliver | redeliver — no response (`net/http`) | none | per event (batched mode answers 415) |
+| Functions Storage Queue / Service Bus trigger | `azurefunctions` — `queue.go` `QueueHandler` | redeliver (outer 500) | redeliver | redeliver | redeliver — no response (`net/http`) | none | per message (invocation) |
+| Functions Event Grid trigger | `azurefunctions` — `eventgrid.go` `EventGridHandler` | redeliver (outer 500) | redeliver | redeliver | redeliver — no response (`net/http`) | none | per event |
+| Functions Event Hub trigger | `azurefunctions` — `eventhub.go` `EventHubHandler` | redeliver² (outer 500; stops at the first failed event) | redeliver² | redeliver² | redeliver² — no response (`net/http`) | none | per batch (invocation) |
+| Functions Cosmos DB change feed | `azurefunctions` — `cosmos.go` `CosmosHandler` | redeliver (outer 500, whole batch) | redeliver | redeliver (the code-named topic has no handler) | redeliver — no response (`net/http`) | none | per batch (fan-in: one invocation) |
+| Functions Timer | `azurefunctions` — `timer.go` `TimerHandler` | n/a — invocation marked failed (outer 500); a tick is never redelivered | n/a (same) | n/a (same) | n/a — no response | none | per tick |
+| Service Bus self-hosted worker | `azureservicebus` — `worker.go` `Worker.settle` | redeliver (`AbandonMessage`) | redeliver | redeliver | redeliver — panics out of `Run`; the lock expires | `AckMode`: `AckModeAbandon` (default) or `AckModeDeadLetter` (dead-letter on the first failure); no complete-on-failure mode | per message |
+| Event Hub self-hosted consumer | `azureeventhub` — `consumer.go` `Consumer.receiveAndDispatch` | skip-and-continue¹ in a running process | skip-and-continue¹ | skip-and-continue¹ | redeliver on restart — panics out of `Run`; not checkpointed | none (`OnFailure` only observes; `Checkpoint` is caller-owned) | per event (the caller's `Checkpoint` runs after each success; a batch stops at its first failure) |
+| Cosmos DB self-hosted worker | `azurecosmos` — `worker.go` `Worker.pollAndDispatch` | redeliver (token not advanced; the same page is re-read after `ErrorBackoff`, indefinitely) | redeliver | redeliver (the code-named topic has no handler) | redeliver on restart — panics out of `Run` | none (`OnFailure` only observes; `Checkpoint` is caller-owned) | per page (continuation token; fan-in) |
+
+¹ `receiveAndDispatch` stops at the first failure without checkpointing and returns `nil`, and `Run`
+receives again. The SDK-backed receiver (`NewPartitionReceiver`) does not rewind: azeventhubs
+v2.0.2's `PartitionClient.ReceiveEvents` moves its read position past the whole received batch. So in
+a running process the failed event is not re-read, the rest of its batch is never dispatched, and the
+next successful event's `Checkpoint` moves the durable position past both. The failed event is
+redelivered only if the process restarts from the durable checkpoint before that happens. The type's
+doc comment ("the failed event redelivers on resume") covers only that restart case.
+`TestConsumer_StopsAtFirstFailureInBatch` tests one cycle, not the next.
+
+² The binding fails the invocation. Whether the platform then redelivers depends on the trigger's
+retry configuration (`gcpfunctions`' own doc says "subject to the trigger's retry policy"), which this
+repo cannot verify. In particular, how the Functions host checkpoints an Event Hub batch after a
+failed invocation is unverified.
+
+Not listed: the request-response bindings (`httpbinding`, `awslambda.HTTPHandler`,
+`azurefunctions.Handler`, `grpcbinding`, `gcpfunctions.RegisterHTTP`). There a failure result is the
+caller's response, so settlement is n/a. The Functions Kafka and Blob triggers and Pub/Sub pull are not
+implemented (see the rows above).
+
+### Divergences from the .NET 1.0 settlement contract
+
+Same default as .NET (a failure result or no result is redelivered): the SQS trigger and poller, SNS,
+EventBridge, S3, DynamoDB Streams, Pub/Sub, the Storage Queue / Service Bus / Event Grid triggers, the
+Service Bus worker, and RabbitMQ (including the single bounded requeue). The differences:
+
+- **No at-most-once override on most bindings.** .NET gives every binding an opt-out
+  (`RaiseOnFailureStatus = false`, an `AckMode`, `BatchFailureMode`). Here only RabbitMQ has one:
+  `NoRequeue` nacks without requeue, so the message is dead-lettered, or dropped when no dead-letter
+  exchange is configured. The Service Bus worker's `AckModeDeadLetter` quarantines a message; it does
+  not acknowledge it. This is not implemented, not a design decision.
+- **Unmatched topic on `awskafka` (MSK) and the Functions Event Hub trigger.** .NET acknowledges an
+  unrouted (no-result) outcome on these, because they have no per-record dead-letter path. Here the
+  router always sets `not-found`, so these bindings redeliver: MSK retries the partition from that
+  offset, and the Event Hub trigger fails the whole batch. This port has no "unrouted = no result"
+  outcome. (.NET's third such exception, the Functions Kafka trigger, has no counterpart here.)
+- **Self-hosted Kafka (`kafka.Consumer`).** The default matches .NET: at-most-once, with unmatched
+  topics committed past. There is no at-least-once mode to match .NET's `CommitOnlyOnSuccess = true`;
+  `OnFailure` is the only lever.
+- **Self-hosted Event Hub (`azureeventhub.Consumer`).** .NET defaults to at-most-once and offers
+  `CatchHandlerExceptions = false` for at-least-once. This consumer is written to be at-least-once but
+  skips in a running process (footnote ¹). Unlike .NET, it also never dispatches the rest of the
+  failed event's batch. There is no knob either way.
+- **Cosmos DB change feed (`CosmosHandler`, `azurecosmos.Worker`).** In .NET a returned result does
+  not apply (fan-in, with no result; only a throw redelivers). Here the batch is one result-bearing
+  invocation, so a failure result, no result, or a code-named topic with no handler redelivers the
+  whole batch. The worker re-reads it indefinitely, with no skip option to match .NET's
+  `CatchHandlerExceptions = true`.
+- **Kinesis (`awskinesis`).** .NET is fan-in with handler-driven checkpoints. Here each record is
+  routed by stream name, and processing stops at the first failure. Both redeliver, but the unit
+  differs.
+- **Timer (`TimerHandler`).** The outcome is the same: the failure is visible and never redelivered.
+  There is no option to accept a failure result, as .NET's `RaiseOnFailureStatus = false` does.
+- **Lambda direct invoke, async (`awslambda.EnvelopeHandler`).** A failure result, no result and an
+  unmatched topic are all acknowledged under `InvocationType: Event` (for example from
+  `awslambdaclient` in `Event` mode). .NET's breakdown has no counterpart.
+- **Middleware panic on a self-hosted worker.** .NET's Service Bus and RabbitMQ workers
+  abandon or nack a throwing message and carry on. Here the panic escapes `Run`. The in-flight message
+  is redelivered by the broker, or from the uncommitted position after a restart.
 
 ## Deliberately out of scope (a "no", not a gap)
 
