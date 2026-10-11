@@ -12,13 +12,15 @@
 //   - Body: the record's image unmarshalled from DynamoDB AttributeValue format into plain JSON
 //     (NewImage, else OldImage, else Keys - the most complete state available), so handlers
 //     deserialize ordinary structs; empty when the record carries no image.
-//   - Headers: envelope metadata under dynamodb-prefixed keys. There is no _benzeneHeaders
+//   - Headers: envelope metadata under dynamodb-prefixed keys. There is no benzene-headers
 //     convention - these events originate from table writes, not a Benzene publisher, so there is
 //     no producer side to embed wire headers.
 //   - Batching: records are ordered CDC within a shard, so they are processed sequentially and
 //     processing STOPS at the first failure, whose SequenceNumber is reported as the partial batch
 //     failure - Lambda checkpoints there and redelivers the rest. Deliberately not awssqs's
-//     concurrent fan-out.
+//     concurrent fan-out. This is the "stream" settlement shape (transport-bindings.md §1,
+//     obligation 8) defaulting to redeliver; WithSettlement offers the at-most-once
+//     (skip-and-continue) override and unmatched-topic-as-ignored.
 package awsdynamodb
 
 import (
@@ -71,14 +73,41 @@ type batchItemFailure struct {
 	ItemIdentifier string `json:"itemIdentifier"`
 }
 
+// Option configures Handler.
+type Option func(*options)
+
+type options struct {
+	settlement envelope.Settlement
+}
+
+// WithSettlement sets how Handler settles a record whose invocation failed (transport-bindings.md §1,
+// obligation 8). The default - the zero envelope.Settlement - stops at the first failed record and
+// reports it, so Lambda redelivers the shard from there; envelope.AtMostOnce acknowledges a failed
+// record (and a poison record that cannot be decoded) and carries on - skip-and-continue - and
+// IgnoreUnmatchedTopics acknowledges a record whose topic no handler serves.
+func WithSettlement(settlement envelope.Settlement) Option {
+	return func(o *options) { o.settlement = settlement }
+}
+
+func newOptions(opts []Option) options {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
+}
+
 // Handler adapts builder into an awslambda.HandlerFunc for a Lambda triggered by a DynamoDB stream
-// event source mapping. Each record gets its own pipeline invocation - its own DI scope, via
-// envelope.Dispatch. Records are processed in order and processing stops at the first unsuccessful
-// one, reporting that record's SequenceNumber as the sole batch item failure so Lambda redelivers
-// from there without silently skipping it (an ordered CDC stream must not be checkpointed past a
-// record that did not succeed). A malformed outer event is the one thing returned as a Go error -
-// the sanctioned Lambda Runtime API error shape - so the whole batch is retried.
-func Handler(builder *benzene.ApplicationBuilder) awslambda.HandlerFunc {
+// event source mapping. Each record gets its own pipeline invocation - its own DI scope. Records are
+// processed in order and processing stops at the first one the settlement does not acknowledge (by
+// default, the first unsuccessful one), reporting that record's SequenceNumber as the sole batch
+// item failure so Lambda redelivers from there without silently skipping it - an ordered CDC stream
+// must not be checkpointed past a record that did not succeed. The unit of settlement is the shard
+// position: one failure redelivers that record and every record after it in the shard. A malformed
+// outer event is the one thing returned as a Go error - the sanctioned Lambda Runtime API error
+// shape - so the whole batch is retried.
+func Handler(builder *benzene.ApplicationBuilder, opts ...Option) awslambda.HandlerFunc {
+	settlement := newOptions(opts).settlement
 	return func(ctx context.Context, event json.RawMessage) (json.RawMessage, error) {
 		var evt dynamoDBEvent
 		if err := json.Unmarshal(event, &evt); err != nil {
@@ -89,10 +118,14 @@ func Handler(builder *benzene.ApplicationBuilder) awslambda.HandlerFunc {
 			req, err := resolveRequest(record)
 			if err != nil {
 				// A record whose image cannot be unmarshalled is a poison record: stop here and
-				// report it for redelivery rather than checkpointing past it.
+				// report it for redelivery rather than checkpointing past it - unless the service
+				// chose at-most-once.
+				if settlement.Delivery == envelope.AtMostOnce {
+					continue
+				}
 				return failAt(record), nil
 			}
-			if _, successful := envelope.DispatchResult(ctx, builder.Pipeline, builder.Container, req); !successful {
+			if outcome := settlement.Dispatch(ctx, builder.Pipeline, builder.Container, req); !outcome.Acknowledge {
 				return failAt(record), nil
 			}
 		}

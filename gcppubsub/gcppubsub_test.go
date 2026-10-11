@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/envelope"
 	"github.com/daniellepelley/benzene-go/wire"
 )
 
@@ -234,5 +235,23 @@ func TestResolveRequest_HonoursTheConfiguredTopicKey(t *testing.T) {
 	}
 	if _, ok := req.Headers["x-my-topic"]; ok {
 		t.Error("the configured topic key should be stripped from headers")
+	}
+}
+
+func TestHandler_Settlement(t *testing.T) {
+	failing := pushEnvelope(t, map[string]string{"topic": "greet"}, `{"name":""}`)
+	unmatched := pushEnvelope(t, map[string]string{"topic": "someone:elses"}, `{}`)
+
+	atMostOnce := Handler(newTestBuilder(t), WithSettlement(envelope.Settlement{Delivery: envelope.AtMostOnce}))
+	if rec := push(t, atMostOnce, failing); rec.Code != http.StatusNoContent {
+		t.Errorf("at-most-once failure status = %d, want 204 (acknowledged)", rec.Code)
+	}
+
+	ignoring := Handler(newTestBuilder(t), WithSettlement(envelope.Settlement{IgnoreUnmatchedTopics: true}))
+	if rec := push(t, ignoring, unmatched); rec.Code != http.StatusNoContent {
+		t.Errorf("unmatched topic with IgnoreUnmatchedTopics status = %d, want 204", rec.Code)
+	}
+	if rec := push(t, ignoring, failing); rec.Code != http.StatusInternalServerError {
+		t.Errorf("a handler failure with IgnoreUnmatchedTopics status = %d, want 500 (still redelivered)", rec.Code)
 	}
 }

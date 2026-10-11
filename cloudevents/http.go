@@ -15,6 +15,29 @@ import (
 // body. Anything else with a ce-specversion header is binary mode.
 const StructuredContentType = "application/cloudevents+json"
 
+// Option configures Handler.
+type Option func(*options)
+
+type options struct {
+	settlement envelope.Settlement
+}
+
+// WithSettlement sets how Handler settles an event whose invocation failed (transport-bindings.md §1,
+// obligation 8). The default - the zero envelope.Settlement - answers 500 so the sender retries it
+// per its policy; envelope.AtMostOnce acknowledges it (204) whatever the outcome, and
+// IgnoreUnmatchedTopics acknowledges an event whose type no handler serves.
+func WithSettlement(settlement envelope.Settlement) Option {
+	return func(o *options) { o.settlement = settlement }
+}
+
+func newOptions(opts []Option) options {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
+}
+
 // Handler adapts builder into the http.Handler a CloudEvents-over-HTTP sender pushes to - an
 // Azure Event Grid subscription (CloudEvents schema), a Knative trigger, an AWS EventBridge
 // API destination, or any other source speaking the CloudEvents HTTP protocol binding. Both
@@ -22,12 +45,13 @@ const StructuredContentType = "application/cloudevents+json"
 // headers with the data as the body). Batched mode (application/cloudevents-batch+json) is
 // not implemented and answers 415.
 //
-// Each event gets its own pipeline invocation via envelope.Dispatch - topic from the event's
-// `type` (see ToRequest for the full mapping). The response is the queue bindings' ack/nack
-// contract: 204 for a success status; 500 with the wire error payload for a non-success one,
-// which CloudEvents-speaking senders treat as "retry per your policy"; 400 for a request
-// that isn't a valid CloudEvent at all.
-func Handler(builder *benzene.ApplicationBuilder) http.Handler {
+// Each event gets its own pipeline invocation - topic from the event's `type` (see ToRequest for
+// the full mapping). The response is the queue bindings' ack/nack contract, settled per event: 204
+// for an event the settlement acknowledges (by default, a successful one); 500 with the wire error
+// payload for one it does not, which CloudEvents-speaking senders treat as "retry per your policy";
+// 400 for a request that isn't a valid CloudEvent at all.
+func Handler(builder *benzene.ApplicationBuilder, opts ...Option) http.Handler {
+	settlement := newOptions(opts).settlement
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -45,11 +69,11 @@ func Handler(builder *benzene.ApplicationBuilder) http.Handler {
 			return
 		}
 
-		resp, successful := envelope.DispatchResult(r.Context(), builder.Pipeline, builder.Container, ToRequest(event))
-		if !successful {
+		outcome := settlement.Dispatch(r.Context(), builder.Pipeline, builder.Container, ToRequest(event))
+		if !outcome.Acknowledge {
 			w.Header().Set("content-type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
-			io.WriteString(w, resp.Body)
+			io.WriteString(w, outcome.Response.Body)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)

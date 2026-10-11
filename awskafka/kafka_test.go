@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/envelope"
 )
 
 // record builds one Kafka record for the given topic/partition/offset with a base64-encoded value.
@@ -194,5 +195,41 @@ func TestHandler_MalformedEventReturnsGoError(t *testing.T) {
 	app := buildApp(func(*benzene.Registry) {})
 	if _, err := Handler(app)(context.Background(), json.RawMessage(`not json`)); err == nil {
 		t.Error("Handler() with a malformed event = nil error, want a Go error")
+	}
+}
+
+func TestHandler_AtMostOnceSkipsFailedAndPoisonRecords(t *testing.T) {
+	seen := 0
+	app := buildApp(func(r *benzene.Registry) {
+		benzene.MustRegister(r, benzene.NewTopic("orders"), func(_ context.Context, m map[string]any) benzene.Result[struct{}] {
+			seen++
+			if m["fail"] == true {
+				return benzene.ServiceUnavailable[struct{}]("downstream down")
+			}
+			return benzene.Ok(struct{}{})
+		})
+	})
+	poison := record("orders", 0, 2, "")
+	poison.Value = "!!!not-base64!!!"
+
+	out, err := Handler(app, WithSettlement(envelope.Settlement{Delivery: envelope.AtMostOnce}))(context.Background(), kafkaEventJSON(map[string][]kafkaRecord{
+		"orders-0": {record("orders", 0, 1, `{"fail":true}`), poison, record("orders", 0, 3, `{"id":"c"}`)},
+	}))
+	if err != nil {
+		t.Fatalf("Handler() error = %v", err)
+	}
+	if failures := decodeBatch(t, out).BatchItemFailures; len(failures) != 0 || seen != 2 {
+		t.Errorf("BatchItemFailures = %+v after %d records, want none after 2 (skip-and-continue)", failures, seen)
+	}
+}
+
+func TestHandler_IgnoreUnmatchedTopicsAcknowledgesAnUnroutedRecord(t *testing.T) {
+	out, err := Handler(buildApp(func(*benzene.Registry) {}), WithSettlement(envelope.Settlement{IgnoreUnmatchedTopics: true}))(
+		context.Background(), kafkaEventJSON(map[string][]kafkaRecord{"orders-0": {record("orders", 0, 1, `{}`)}}))
+	if err != nil {
+		t.Fatalf("Handler() error = %v", err)
+	}
+	if failures := decodeBatch(t, out).BatchItemFailures; len(failures) != 0 {
+		t.Errorf("BatchItemFailures = %+v, want none: an unmatched topic is acknowledged on request", failures)
 	}
 }

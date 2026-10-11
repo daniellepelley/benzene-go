@@ -26,23 +26,35 @@
 // *kafka.Reader and *kafka.Writer satisfy as-is, so this package's own tests run against
 // fakes, no live broker needed.
 //
-// Failure semantics: the spec describes "no response channel — result mapping is
-// acknowledge/log only", and Kafka has no broker-side per-message redelivery or dead-letter
-// queue - unlike SQS (batchItemFailures), SNS (async-invoke retry), or Pub/Sub (nack) there
-// is no platform machinery to hand a failed message to; there is only the consumer group's
-// offset. Consumer therefore commits every dispatched message - success or not - and reports
-// each non-success dispatch to the OnFailure hook first (this port's log/dead-letter
-// extension point, playing the reference implementation's ILogger role explicitly rather
-// than folding it into the framework). Not committing would be the only alternative, and
-// that replays the same poison message forever, stalling the partition. Transport-level
-// failures (fetch, commit) are different: they return from Run, offsets uncommitted, so a
-// restarted consumer resumes with at-least-once delivery.
+// Settlement (transport-bindings.md §1, obligation 8): Kafka is a partition-ordered stream with no
+// broker-side per-message redelivery or dead-letter queue - unlike SQS (batchItemFailures), SNS
+// (async-invoke retry) or Pub/Sub (nack) there is no platform machinery to hand a failed message
+// to; there is only the consumer group's offset, which is positional, so committing a later message
+// commits past an earlier one. That leaves two honest choices, and Consumer.Settlement picks one:
+//
+//   - Skip-and-continue - the default (DefaultDelivery, envelope.AtMostOnce), matching
+//     Benzene.Kafka.Core's default: every dispatched message is committed, success or not, after
+//     the OnFailure hook has seen a failure (this port's log/dead-letter extension point, playing
+//     the reference implementation's ILogger role explicitly). A failed message is NOT redelivered,
+//     so the partition keeps moving; wire OnFailure to a dead-letter publish if a failure must not
+//     be lost. The spec allows this default for a stream binding, and this is the documentation
+//     it requires.
+//   - At-least-once - envelope.AtLeastOnce: a failed message is left uncommitted and re-dispatched
+//     in place after ErrorBackoff until it succeeds, so it is never skipped; the partition waits
+//     behind it (a poison message stalls it until the handler or the data is fixed). Matches
+//     Benzene.Kafka.Core's CommitOnlyOnSuccess = true.
+//
+// Either way the unit of settlement is one message in partition order, committed (or not) before
+// the next is fetched, and IgnoreUnmatchedTopics commits past a message whose topic no handler
+// serves. Transport-level failures (fetch, commit) are different: they return from Run, offsets
+// uncommitted, so a restarted consumer resumes with at-least-once delivery.
 package kafka
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/envelope"
@@ -60,27 +72,49 @@ type MessageSource interface {
 	CommitMessages(ctx context.Context, msgs ...kafkago.Message) error
 }
 
+// DefaultDelivery is what a zero Consumer.Settlement does with a failed message: skip-and-continue
+// (commit past it), the default the spec allows a stream binding - see the package doc.
+const DefaultDelivery = envelope.AtMostOnce
+
 // Consumer runs a Benzene pipeline over a Kafka consumer group. Each fetched message gets its
-// own pipeline invocation - its own DI scope, via envelope.Dispatch - and is committed after
-// dispatch (see the package doc for why failures commit too).
+// own pipeline invocation - its own DI scope - and is committed once its Settlement acknowledges it
+// (see the package doc for the two delivery modes).
 type Consumer struct {
 	Source  MessageSource
 	Builder *benzene.ApplicationBuilder
 
-	// OnFailure, when non-nil, is called for each message whose dispatch result is not a
-	// success status, before that message's offset is committed. This is where a dead-letter
-	// publish or failure log belongs. A nil OnFailure means non-success results are simply
-	// committed past - configure one unless the pipeline's own middleware already records
-	// failures.
+	// Settlement decides what a failed message does (transport-bindings.md §1, obligation 8). The
+	// zero value is DefaultDelivery, skip-and-continue: the message is committed past.
+	// envelope.AtLeastOnce instead leaves it uncommitted and re-dispatches it after ErrorBackoff
+	// until it succeeds. IgnoreUnmatchedTopics commits past a message whose topic no handler serves
+	// even under AtLeastOnce.
+	Settlement envelope.Settlement
+
+	// ErrorBackoff is how long an AtLeastOnce Consumer waits before re-dispatching a failed message,
+	// so a failing handler does not become a hot loop. Default 1s when 0.
+	ErrorBackoff time.Duration
+
+	// OnFailure, when non-nil, is called for each dispatch whose result is not a success - under
+	// AtLeastOnce, for every failed attempt - before the message is committed or retried. This is
+	// where a dead-letter publish or failure log belongs. A nil OnFailure means a skipped failure
+	// leaves no trace - configure one unless the pipeline's own middleware already records failures.
 	OnFailure func(ctx context.Context, msg kafkago.Message, resp wire.Response)
+
+	// sleep is the backoff primitive, injectable for tests. nil means sleepContext.
+	sleep func(ctx context.Context, d time.Duration)
 }
 
 // Run fetches, dispatches, and commits messages until ctx is cancelled (returns nil - the
-// clean shutdown) or the source fails (returns the fetch/commit error, offsets of any
-// undispatched messages uncommitted, so a restarted consumer resumes at-least-once). Note
-// this is the loop's contract with its *owner*, not a per-message error channel - a message
-// that fails to dispatch never stops the loop (see the package doc).
+// clean shutdown, leaving any message an AtLeastOnce Consumer is still retrying uncommitted) or
+// the source fails (returns the fetch/commit error, offsets of any undispatched messages
+// uncommitted, so a restarted consumer resumes at-least-once). Note this is the loop's contract with
+// its *owner*, not a per-message error channel - a message that fails to dispatch never stops the
+// loop (see the package doc).
 func (c *Consumer) Run(ctx context.Context) error {
+	settlement := c.Settlement
+	if settlement.Delivery == envelope.BindingDefault {
+		settlement.Delivery = DefaultDelivery
+	}
 	for {
 		msg, err := c.Source.FetchMessage(ctx)
 		if err != nil {
@@ -90,9 +124,19 @@ func (c *Consumer) Run(ctx context.Context) error {
 			return fmt.Errorf("kafka: fetch failed: %w", err)
 		}
 
-		resp, successful := envelope.DispatchResult(ctx, c.Builder.Pipeline, c.Builder.Container, resolveRequest(msg))
-		if !successful && c.OnFailure != nil {
-			c.OnFailure(ctx, msg, resp)
+		for {
+			outcome := settlement.Dispatch(ctx, c.Builder.Pipeline, c.Builder.Container, resolveRequest(msg))
+			if !outcome.Successful && c.OnFailure != nil {
+				c.OnFailure(ctx, msg, outcome.Response)
+			}
+			if outcome.Acknowledge {
+				break
+			}
+			// At-least-once: Kafka has no redelivery of its own, so the consumer redelivers in place.
+			c.sleepFor(ctx, c.errorBackoff())
+			if ctx.Err() != nil {
+				return nil
+			}
 		}
 
 		if err := c.Source.CommitMessages(ctx, msg); err != nil {
@@ -101,6 +145,31 @@ func (c *Consumer) Run(ctx context.Context) error {
 			}
 			return fmt.Errorf("kafka: commit failed: %w", err)
 		}
+	}
+}
+
+func (c *Consumer) errorBackoff() time.Duration {
+	if c.ErrorBackoff == 0 {
+		return time.Second
+	}
+	return c.ErrorBackoff
+}
+
+func (c *Consumer) sleepFor(ctx context.Context, d time.Duration) {
+	if c.sleep != nil {
+		c.sleep(ctx, d)
+		return
+	}
+	sleepContext(ctx, d)
+}
+
+// sleepContext sleeps for d or until ctx is cancelled, whichever comes first.
+func sleepContext(ctx context.Context, d time.Duration) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
 	}
 }
 

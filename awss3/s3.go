@@ -25,7 +25,9 @@
 //     .NET binding's fire-and-forget "mark handled and swallow the failure": silently dropping a
 //     failed event would violate this port's no-silent-drop rule. Records are processed in order and
 //     processing stops at the first failure; the async retry reprocesses the whole event, so
-//     handlers must be idempotent (S3 delivery is at-least-once).
+//     handlers must be idempotent (S3 delivery is at-least-once). WithSettlement(envelope.Settlement
+//     {Delivery: envelope.AtMostOnce}) is the at-most-once override; the binding's shape is
+//     "one-shot" (conformance settlementDefaults).
 package awss3
 
 import (
@@ -80,13 +82,40 @@ type s3Notification struct {
 	ETag       string `json:"etag"`
 }
 
+// Option configures Handler.
+type Option func(*options)
+
+type options struct {
+	settlement envelope.Settlement
+}
+
+// WithSettlement sets how Handler settles an event whose invocation failed (transport-bindings.md §1,
+// obligation 8). The default - the zero envelope.Settlement - fails the invocation at the first
+// failed record, so AWS's async-invoke retry reprocesses the whole event; envelope.AtMostOnce
+// acknowledges a failed record and carries on with the next, and IgnoreUnmatchedTopics acknowledges
+// a record whose topic no handler serves.
+func WithSettlement(settlement envelope.Settlement) Option {
+	return func(o *options) { o.settlement = settlement }
+}
+
+func newOptions(opts []Option) options {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
+}
+
 // Handler adapts builder into an awslambda.HandlerFunc for a Lambda invoked by S3 event
-// notifications. Each record gets its own pipeline invocation (its own DI scope, via
-// envelope.Dispatch). Records are processed in order; the first unsuccessful one returns a Go error
-// so AWS's async-invoke retry reprocesses the event rather than the failure being silently dropped.
-// A malformed outer event is likewise a Go error - the sanctioned Lambda Runtime API error shape.
-// On success no response body is written (S3 notifications are fire-and-forget).
-func Handler(builder *benzene.ApplicationBuilder) awslambda.HandlerFunc {
+// notifications. Each record gets its own pipeline invocation (its own DI scope). Records are
+// processed in order; the first one the settlement does not acknowledge (by default, the first
+// unsuccessful one) returns a Go error so AWS's async-invoke retry reprocesses the event rather than
+// the failure being silently dropped. The unit of settlement is therefore the invocation: a retry
+// re-runs every record in the event, the ones that already succeeded included. A malformed outer
+// event is likewise a Go error - the sanctioned Lambda Runtime API error shape. On success no
+// response body is written (S3 notifications are fire-and-forget).
+func Handler(builder *benzene.ApplicationBuilder, opts ...Option) awslambda.HandlerFunc {
+	settlement := newOptions(opts).settlement
 	return func(ctx context.Context, event json.RawMessage) (json.RawMessage, error) {
 		var evt s3Event
 		if err := json.Unmarshal(event, &evt); err != nil {
@@ -94,9 +123,9 @@ func Handler(builder *benzene.ApplicationBuilder) awslambda.HandlerFunc {
 		}
 
 		for _, record := range evt.Records {
-			if _, successful := envelope.DispatchResult(ctx, builder.Pipeline, builder.Container, resolveRequest(record)); !successful {
-				return nil, fmt.Errorf("awss3: handling S3 event %q for %s/%s was not successful",
-					record.EventName, record.S3.Bucket.Name, record.S3.Object.Key)
+			if outcome := settlement.Dispatch(ctx, builder.Pipeline, builder.Container, resolveRequest(record)); !outcome.Acknowledge {
+				return nil, fmt.Errorf("awss3: handling S3 event %q for %s/%s was not successful (%s)",
+					record.EventName, record.S3.Bucket.Name, record.S3.Object.Key, outcome.Response.StatusCode)
 			}
 		}
 

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/envelope"
 	"github.com/daniellepelley/benzene-go/wire"
 )
 
@@ -185,5 +186,27 @@ func TestParseBinary_MissingRequiredAttributeIsError(t *testing.T) {
 
 	if _, err := ParseBinary(header, nil); err == nil {
 		t.Error("ParseBinary() error = nil, want an error for missing required attributes")
+	}
+}
+
+func TestHandler_Settlement(t *testing.T) {
+	deliver := func(handler http.Handler, eventType, data string) int {
+		body := `{"specversion":"1.0","id":"1","source":"/s","type":"` + eventType + `","data":` + data + `}`
+		req := httptest.NewRequest(http.MethodPost, "/events", strings.NewReader(body))
+		req.Header.Set("Content-Type", StructuredContentType)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if code := deliver(Handler(newTestBuilder(t), WithSettlement(envelope.Settlement{Delivery: envelope.AtMostOnce})), "greet", `{"name":""}`); code != http.StatusNoContent {
+		t.Errorf("at-most-once failure status = %d, want 204 (acknowledged)", code)
+	}
+	ignoring := Handler(newTestBuilder(t), WithSettlement(envelope.Settlement{IgnoreUnmatchedTopics: true}))
+	if code := deliver(ignoring, "someone.elses.event", `{}`); code != http.StatusNoContent {
+		t.Errorf("unmatched type with IgnoreUnmatchedTopics status = %d, want 204", code)
+	}
+	if code := deliver(ignoring, "greet", `{"name":""}`); code != http.StatusInternalServerError {
+		t.Errorf("a handler failure with IgnoreUnmatchedTopics status = %d, want 500", code)
 	}
 }

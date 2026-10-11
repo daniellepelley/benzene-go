@@ -27,9 +27,10 @@ type ReceiverAPI interface {
 	DeadLetterMessage(ctx context.Context, message *azservicebus.ReceivedMessage, options *azservicebus.DeadLetterOptions) error
 }
 
-// AckMode selects how the Worker settles a message whose dispatch was unsuccessful. A successful
-// dispatch always completes the message; this only controls the failure settlement (Complete on
-// success, then Abandon or DeadLetter on failure).
+// AckMode selects how the Worker rejects a message whose dispatch was unsuccessful and which its
+// Settlement does not accept: Abandon (redeliver) or DeadLetter (quarantine). A successful dispatch
+// always completes the message, and so does a failure the Settlement accepts (AtMostOnce, or an
+// unmatched topic with IgnoreUnmatchedTopics).
 type AckMode int
 
 const (
@@ -49,9 +50,10 @@ const (
 
 // Worker is a self-hosted Service Bus consumer (the .NET BenzeneServiceBusWorker): it receives from a
 // queue or subscription and runs each received message through the pipeline in its own DI scope,
-// completing the messages whose dispatch succeeded and abandoning (or dead-lettering, per AckMode) the
-// ones whose dispatch was unsuccessful. An abandoned message reappears for redelivery, so this Worker
-// never completes an unhandled message. It is the standalone alternative to the Azure Functions
+// completing the messages its Settlement acknowledges (by default, the ones whose dispatch succeeded)
+// and abandoning (or dead-lettering, per AckMode) the rest. An abandoned message reappears for
+// redelivery, so by default this Worker never completes an unhandled message. Settlement is per
+// message (the "queue" shape of transport-bindings.md §1, obligation 8). It is the standalone alternative to the Azure Functions
 // Service Bus trigger (azurefunctions.QueueHandler) for a service that owns its own compute.
 type Worker struct {
 	// API is the Service Bus receiver (typically an *azservicebus.Receiver). Required.
@@ -78,8 +80,15 @@ type Worker struct {
 	// They have no effect under AckModeAbandon.
 	DeadLetterReason      string
 	DeadLetterDescription string
-	// OnFailure, when non-nil, is called for each message whose dispatch was unsuccessful (the
-	// message is abandoned or dead-lettered per AckMode regardless). Use it to log or emit a metric.
+	// Settlement decides which messages are completed (transport-bindings.md §1, obligation 8). The
+	// zero value completes only a successful one and rejects the rest per AckMode;
+	// envelope.AtMostOnce completes every message whatever its outcome, and IgnoreUnmatchedTopics
+	// completes one whose topic no handler serves - for a subscription that sees other services'
+	// topics.
+	Settlement envelope.Settlement
+	// OnFailure, when non-nil, is called for each message whose dispatch was unsuccessful - whether it
+	// is then abandoned or dead-lettered per AckMode, or completed under a Settlement that accepts
+	// it. Use it to log or emit a metric.
 	OnFailure func(messageID string, response wire.Response)
 
 	// sleep is the backoff primitive, injectable for tests. nil means sleepContext.
@@ -158,22 +167,26 @@ func (w *Worker) poll(ctx context.Context) error {
 	}
 	for _, message := range messages {
 		req := resolveMessage(message, w.topicKey())
-		response, successful := envelope.DispatchResult(ctx, w.Builder.Pipeline, w.Builder.Container, req)
-		w.settle(ctx, message, response, successful)
+		w.settle(ctx, message, w.Settlement.Dispatch(ctx, w.Builder.Pipeline, w.Builder.Container, req))
 	}
 	return nil
 }
 
-// settle completes a successfully-dispatched message, or abandons/dead-letters an unsuccessful one per
-// AckMode. Settlement runs on a cancellation-detached context so a graceful shutdown (ctx cancelled
-// after a message was handled) still acks the completed work, rather than cancelling the settle and
-// letting Service Bus redeliver already-processed messages - the same settlement-outlives-cancellation
-// choice awssqs.Consumer and the idempotency package make. Abandon/dead-letter settle errors are
-// swallowed: the message's lock simply expires and it redelivers, which is safe under at-least-once.
-func (w *Worker) settle(ctx context.Context, message *azservicebus.ReceivedMessage, response wire.Response, successful bool) {
+// settle completes a message whose outcome the Settlement acknowledges, or abandons/dead-letters it
+// per AckMode. OnFailure sees every unsuccessful dispatch either way. Settlement runs on a
+// cancellation-detached context so a graceful shutdown (ctx cancelled after a message was handled)
+// still acks the completed work, rather than cancelling the settle and letting Service Bus redeliver
+// already-processed messages - the same settlement-outlives-cancellation choice awssqs.Consumer and
+// the idempotency package make. Abandon/dead-letter settle errors are swallowed: the message's lock
+// simply expires and it redelivers, which is safe under at-least-once.
+func (w *Worker) settle(ctx context.Context, message *azservicebus.ReceivedMessage, outcome envelope.Outcome) {
 	settleCtx := context.WithoutCancel(ctx)
 
-	if successful {
+	if !outcome.Successful {
+		w.reportFailure(message, outcome.Response)
+	}
+
+	if outcome.Acknowledge {
 		// A failed complete of already-handled work means Service Bus will redeliver it after the lock
 		// expires - safe (at-least-once), never a drop, but surface it via the hook so the redelivery
 		// is observable rather than silent, matching awssqs's partial-delete-failure reporting.
@@ -182,8 +195,6 @@ func (w *Worker) settle(ctx context.Context, message *azservicebus.ReceivedMessa
 		}
 		return
 	}
-
-	w.reportFailure(message, response)
 
 	if w.AckMode == AckModeDeadLetter {
 		_ = w.API.DeadLetterMessage(settleCtx, message, &azservicebus.DeadLetterOptions{

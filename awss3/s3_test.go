@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/envelope"
 )
 
 // record builds one S3 event-notification record for the given bucket/event/key.
@@ -166,5 +167,34 @@ func TestHandler_MalformedEventReturnsGoError(t *testing.T) {
 	app := buildApp(func(*benzene.Registry) {})
 	if _, err := Handler(app)(context.Background(), json.RawMessage(`not json`)); err == nil {
 		t.Error("Handler() with a malformed event = nil error, want a Go error")
+	}
+}
+
+func TestHandler_AtMostOnceAcknowledgesAFailedRecordAndCarriesOn(t *testing.T) {
+	seen := 0
+	app := buildApp(func(r *benzene.Registry) {
+		benzene.MustRegister(r, benzene.NewTopic("uploads:ObjectCreated:Put"), func(_ context.Context, n s3Notification) benzene.Result[struct{}] {
+			seen++
+			if n.Key == "bad.jpg" {
+				return benzene.ServiceUnavailable[struct{}]("downstream down")
+			}
+			return benzene.Ok(struct{}{})
+		})
+	})
+
+	handler := Handler(app, WithSettlement(envelope.Settlement{Delivery: envelope.AtMostOnce}))
+	_, err := handler(context.Background(), s3Event2(
+		record("uploads", "ObjectCreated:Put", "bad.jpg"),
+		record("uploads", "ObjectCreated:Put", "after.jpg"),
+	))
+	if err != nil || seen != 2 {
+		t.Errorf("Handler() = %v after %d records, want nil after both (at-most-once)", err, seen)
+	}
+}
+
+func TestHandler_IgnoreUnmatchedTopicsAcknowledgesAnUnroutedRecord(t *testing.T) {
+	handler := Handler(buildApp(func(*benzene.Registry) {}), WithSettlement(envelope.Settlement{IgnoreUnmatchedTopics: true}))
+	if _, err := handler(context.Background(), s3Event2(record("uploads", "ObjectCreated:Put", "a.jpg"))); err != nil {
+		t.Errorf("Handler() = %v, want nil: an unmatched topic is acknowledged on request", err)
 	}
 }

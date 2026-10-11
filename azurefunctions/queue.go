@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	benzene "github.com/daniellepelley/benzene-go"
-	"github.com/daniellepelley/benzene-go/envelope"
 	"github.com/daniellepelley/benzene-go/wire"
 )
 
@@ -53,7 +52,12 @@ type queueSuccessResponse struct {
 // A single custom handler hosting several trigger types mounts one handler per function
 // path on a mux, e.g. mux.Handle("/GreetQueue", azurefunctions.QueueHandler(builder,
 // "queueItem")) alongside Handler for the HTTP-triggered functions.
-func QueueHandler(builder *benzene.ApplicationBuilder, dataName string) http.Handler {
+//
+// Settlement is per message (the "queue" shape of transport-bindings.md §1, obligation 8): a
+// failure result, no result, a pipeline error and an unmatched topic all answer 500 by default;
+// WithSettlement offers the at-most-once override and unmatched-topic-as-ignored.
+func QueueHandler(builder *benzene.ApplicationBuilder, dataName string, opts ...Option) http.Handler {
+	settlement := newOptions(opts).settlement
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -67,11 +71,8 @@ func QueueHandler(builder *benzene.ApplicationBuilder, dataName string) http.Han
 			return
 		}
 
-		resp, successful := envelope.DispatchResult(r.Context(), builder.Pipeline, builder.Container, resolveQueueRequest(inv, dataName))
-		if !successful {
-			w.Header().Set("content-type", "application/json")
-			w.WriteHeader(http.StatusInternalServerError)
-			io.WriteString(w, resp.Body)
+		if outcome := settlement.Dispatch(r.Context(), builder.Pipeline, builder.Container, resolveQueueRequest(inv, dataName)); !outcome.Acknowledge {
+			failInvocation(w, outcome.Response)
 			return
 		}
 

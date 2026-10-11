@@ -42,8 +42,9 @@ type Receiver interface {
 }
 
 // Consumer runs a Benzene pipeline over an Event Hubs receiver. Each received event gets its own
-// pipeline invocation - its own DI scope, via envelope.DispatchResult - and, on a successful
-// dispatch, the optional Checkpoint hook is called so the caller can persist progress. It is the
+// pipeline invocation - its own DI scope - and, once its Settlement acknowledges it (by default, on
+// a successful dispatch), the optional Checkpoint hook is called so the caller can persist progress.
+// A failed event is redelivered in place (see "Settlement" in the package doc). It is the
 // self-hosted counterpart of the outbound Client, the Go form of Benzene.Azure.EventHub's
 // BenzeneEventHubWorker, but scoped to receive+dispatch only (the package doc explains why
 // checkpointing is caller-provided rather than owned here).
@@ -66,21 +67,35 @@ type Consumer struct {
 	// misroute on the Event Hub consumer alone.
 	ReservedNames wire.ReservedNames
 
-	// OnFailure, when non-nil, is called for the FIRST event in a received batch whose dispatch
-	// result is not a success status. Event Hubs delivers a partition's events in order and has no
-	// per-event settlement, so - like the ordered-stream siblings awsdynamodb/awskinesis - the
-	// Consumer STOPS at that first failure and does not checkpoint it or any later event in the
-	// batch: the durable checkpoint never advances past an unhandled event, so on resume the failed
-	// event redelivers (at-least-once) rather than being silently skipped. This deliberately diverges
+	// Settlement decides which events are checkpointed past (transport-bindings.md §1, obligation 8).
+	// The zero value is at-least-once: a failed event is not checkpointed and is re-dispatched, with
+	// the rest of its batch, after ErrorBackoff - before anything new is received - so it is never
+	// silently skipped in a running process. envelope.AtMostOnce checkpoints past a failure
+	// (skip-and-continue), and IgnoreUnmatchedTopics past an event whose topic no handler serves.
+	Settlement envelope.Settlement
+
+	// OnFailure, when non-nil, is called for each dispatch whose result is not a success - every
+	// attempt, while a failed event is redelivered in place. Event Hubs delivers a partition's events
+	// in order and has no per-event settlement, so - like the ordered-stream siblings
+	// awsdynamodb/awskinesis - the Consumer does not checkpoint a failed event or move on to a later
+	// one: the durable checkpoint never advances past an unhandled event. This deliberately diverges
 	// from .NET's BenzeneEventHubConfig catch-and-continue default, matching this port's no-silent-
-	// drop rule (the same reason awss3 returns a Go error instead of mirroring .NET's swallow).
+	// drop rule (the same reason awss3 returns a Go error instead of mirroring .NET's swallow);
+	// envelope.AtMostOnce is the opt-in for .NET's behaviour.
 	OnFailure func(ctx context.Context, event ReceivedEvent, resp wire.Response)
 
-	// Checkpoint, when non-nil, is called after an event dispatches successfully so the caller can
-	// persist durable progress (e.g. azeventhubs' ProcessorPartitionClient.UpdateCheckpoint using
-	// event.Checkpoint). A returned error is treated like a transient receive error: Run backs off
-	// and retries, so the events re-deliver (at-least-once) rather than being silently skipped.
+	// Checkpoint, when non-nil, is called after an event is settled (by default, after it dispatched
+	// successfully) so the caller can persist durable progress (e.g. azeventhubs'
+	// ProcessorPartitionClient.UpdateCheckpoint using event.Checkpoint). A returned error is treated
+	// like a transient receive error: Run backs off and carries on with the rest of the batch - the
+	// next event's checkpoint covers the one whose checkpoint failed, since an Event Hubs checkpoint
+	// is a position.
 	Checkpoint func(ctx context.Context, event ReceivedEvent) error
+
+	// pending is the received-but-unsettled remainder of a batch - a failed event and every event
+	// after it - which the next cycle dispatches before receiving anything new. Run's goroutine owns
+	// it, so a Consumer must not run on two goroutines at once.
+	pending []ReceivedEvent
 
 	// sleep is the backoff primitive, injectable for tests. nil means sleepContext.
 	sleep func(ctx context.Context, d time.Duration)
@@ -100,9 +115,10 @@ func (c *Consumer) Validate() error {
 }
 
 // Run receives and dispatches events until ctx is cancelled, then returns ctx.Err(). A receive or
-// checkpoint error is not fatal: Run backs off (ErrorBackoff) and retries, so the loop survives a
-// transient outage. Run one Consumer per goroutine; Event Hubs' at-least-once delivery means
-// handlers must be idempotent.
+// checkpoint error, and an event the Settlement does not acknowledge, are not fatal: Run backs off
+// (ErrorBackoff) and carries on - re-dispatching a failed event before receiving anything new - so
+// the loop survives a transient outage and never skips a failed event. Run one Consumer per
+// goroutine; Event Hubs' at-least-once delivery means handlers must be idempotent.
 func (c *Consumer) Run(ctx context.Context) error {
 	for {
 		if err := ctx.Err(); err != nil {
@@ -117,24 +133,36 @@ func (c *Consumer) Run(ctx context.Context) error {
 	}
 }
 
-// receiveAndDispatch runs one receive/dispatch/checkpoint cycle. It is separated from Run so tests
-// can drive a single deterministic cycle while Run wraps it in the lifecycle loop.
+// errRedeliver reports that a cycle stopped at an event its Settlement did not acknowledge; Run backs
+// off and the next cycle re-dispatches it.
+var errRedeliver = errors.New("azureeventhub: an event failed and will be redelivered")
+
+// receiveAndDispatch runs one receive/dispatch/checkpoint cycle: it dispatches the pending remainder
+// of an earlier batch if there is one, otherwise a freshly received batch. It is separated from Run
+// so tests can drive a single deterministic cycle while Run wraps it in the lifecycle loop.
 func (c *Consumer) receiveAndDispatch(ctx context.Context) error {
-	events, err := c.Receiver.ReceiveEvents(ctx, c.maxBatchSize())
-	if err != nil {
-		return err
+	events := c.pending
+	if len(events) == 0 {
+		received, err := c.Receiver.ReceiveEvents(ctx, c.maxBatchSize())
+		if err != nil {
+			return err
+		}
+		events = received
 	}
-	for _, event := range events {
+	c.pending = nil
+
+	for i, event := range events {
 		req := resolveEvent(event, c.topicKey())
-		resp, successful := envelope.DispatchResult(ctx, c.Builder.Pipeline, c.Builder.Container, req)
-		if !successful {
-			// Ordered-stream stop-at-first-failure (like awsdynamodb/awskinesis): report the failure
-			// and stop, WITHOUT checkpointing this event or processing any later one, so the durable
-			// checkpoint never advances past unhandled work and the failed event redelivers on resume.
-			if c.OnFailure != nil {
-				c.OnFailure(ctx, event, resp)
-			}
-			return nil
+		outcome := c.Settlement.Dispatch(ctx, c.Builder.Pipeline, c.Builder.Container, req)
+		if !outcome.Successful && c.OnFailure != nil {
+			c.OnFailure(ctx, event, outcome.Response)
+		}
+		if !outcome.Acknowledge {
+			// Ordered-stream redelivery: the receiver has already moved past this batch, so hold the
+			// failed event and everything after it - unchecked-pointed - for the next cycle, rather
+			// than receiving again and silently skipping them.
+			c.pending = events[i:]
+			return errRedeliver
 		}
 		if c.Checkpoint != nil {
 			// Checkpoint on a cancellation-detached context so a graceful shutdown between a
@@ -142,6 +170,7 @@ func (c *Consumer) receiveAndDispatch(ctx context.Context) error {
 			// cancelling the checkpoint and redelivering already-processed events - the same
 			// settlement-outlives-cancellation choice awssqs.Consumer and azureservicebus.Worker make.
 			if err := c.Checkpoint(context.WithoutCancel(ctx), event); err != nil {
+				c.pending = events[i+1:]
 				return err
 			}
 		}

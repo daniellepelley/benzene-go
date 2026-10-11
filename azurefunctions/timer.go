@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	benzene "github.com/daniellepelley/benzene-go"
-	"github.com/daniellepelley/benzene-go/envelope"
 )
 
 // timerInvocationRequest is the custom-handler envelope for a Timer trigger: the tick's schedule
@@ -24,15 +23,17 @@ type timerInvocationRequest struct {
 // mirrors that receives the schedule, and a handler with an empty request (struct{}) binds cleanly
 // too. dataName is the trigger binding's function.json "name" (e.g. "myTimer").
 //
-// A tick has no caller to answer, so the outer status is for the service's own logging/monitoring: a
-// successful dispatch answers outer HTTP 200, a non-success outer HTTP 500. A timer trigger has no
-// redelivery (unlike a queue or change feed), so the 500 does not cause a retry - it simply surfaces
-// the failed run to the Functions host's monitoring, keeping the same outer-status convention as the
-// other queue-shaped handlers.
+// A tick has no caller to answer, so it settles like a one-way binding (the "one-shot" shape of
+// transport-bindings.md §1, obligation 8; conformance settlementDefaults "timer"): a successful
+// dispatch answers outer HTTP 200, a non-success one outer HTTP 500, which fails the invocation - so
+// the function's retry policy applies where one is configured (a tick is not queued, so with none
+// the failed run is surfaced to the host's monitoring and the next tick runs on schedule).
+// WithSettlement offers the at-most-once override (a failed run still answers 200).
 //
 // Mount it on the function's local invocation path alongside the other trigger handlers, e.g.
 // mux.Handle("/NightlyCleanup", azurefunctions.TimerHandler(builder, benzene.NewTopic("nightly-cleanup"), "myTimer")).
-func TimerHandler(builder *benzene.ApplicationBuilder, topic benzene.Topic, dataName string) http.Handler {
+func TimerHandler(builder *benzene.ApplicationBuilder, topic benzene.Topic, dataName string, opts ...Option) http.Handler {
+	settlement := newOptions(opts).settlement
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -46,11 +47,8 @@ func TimerHandler(builder *benzene.ApplicationBuilder, topic benzene.Topic, data
 			return
 		}
 
-		resp, successful := envelope.DispatchTopicResult(r.Context(), builder.Pipeline, builder.Container, topic, nil, resolveTimerBody(inv, dataName))
-		if !successful {
-			w.Header().Set("content-type", "application/json")
-			w.WriteHeader(http.StatusInternalServerError)
-			io.WriteString(w, resp.Body)
+		if outcome := settlement.DispatchTopic(r.Context(), builder.Pipeline, builder.Container, topic, nil, resolveTimerBody(inv, dataName)); !outcome.Acknowledge {
+			failInvocation(w, outcome.Response)
 			return
 		}
 

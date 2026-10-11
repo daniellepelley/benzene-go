@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	benzene "github.com/daniellepelley/benzene-go"
-	"github.com/daniellepelley/benzene-go/envelope"
 	"github.com/daniellepelley/benzene-go/wire"
 )
 
@@ -44,7 +43,7 @@ type eventHubInvocationRequest struct {
 // invocation), an Event Hub batch is a batch of independently-topic-routed Benzene messages - each
 // event carries its own topic in its application properties, exactly like a Service Bus message
 // does on QueueHandler. So EventHubHandler dispatches each event in the batch as its own pipeline
-// invocation (its own DI scope, via envelope.DispatchResult), resolving topic/headers/body per
+// invocation (its own DI scope), resolving topic/headers/body per
 // event with the exact same precedence QueueHandler uses for a Service Bus message:
 //
 //  1. a "topic" entry in that event's properties (PropertiesArray[i]) - the remaining string-valued
@@ -72,9 +71,15 @@ type eventHubInvocationRequest struct {
 // (the host does not checkpoint, and the whole batch redelivers) - the same outer-status convention
 // QueueHandler and CosmosHandler use.
 //
+// The unit of settlement is therefore the batch (the "stream" shape of transport-bindings.md §1,
+// obligation 8, defaulting to redeliver): one failure redelivers every event in it. WithSettlement
+// offers the at-most-once override - every event is dispatched and the batch checkpointed whatever
+// the outcomes (skip-and-continue) - and unmatched-topic-as-ignored.
+//
 // Mount it on the function's local invocation path alongside the other trigger handlers, e.g.
 // mux.Handle("/OrderPlaced", azurefunctions.EventHubHandler(builder, "eventHubMessages")).
-func EventHubHandler(builder *benzene.ApplicationBuilder, dataName string) http.Handler {
+func EventHubHandler(builder *benzene.ApplicationBuilder, dataName string, opts ...Option) http.Handler {
+	settlement := newOptions(opts).settlement
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -89,11 +94,8 @@ func EventHubHandler(builder *benzene.ApplicationBuilder, dataName string) http.
 		}
 
 		for _, req := range resolveEventHubBatch(inv, dataName) {
-			resp, successful := envelope.DispatchResult(r.Context(), builder.Pipeline, builder.Container, req)
-			if !successful {
-				w.Header().Set("content-type", "application/json")
-				w.WriteHeader(http.StatusInternalServerError)
-				io.WriteString(w, resp.Body)
+			if outcome := settlement.Dispatch(r.Context(), builder.Pipeline, builder.Container, req); !outcome.Acknowledge {
+				failInvocation(w, outcome.Response)
 				return
 			}
 		}

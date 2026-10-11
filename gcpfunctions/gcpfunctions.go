@@ -45,8 +45,9 @@ func RegisterHTTP(name string, builder *benzene.ApplicationBuilder, routes []htt
 type Option func(*cloudEventConfig)
 
 type cloudEventConfig struct {
-	names     wire.ReservedNames
-	onFailure func(ctx context.Context, e cloudevents.Event, resp wire.Response)
+	names      wire.ReservedNames
+	settlement envelope.Settlement
+	onFailure  func(ctx context.Context, e cloudevents.Event, resp wire.Response)
 }
 
 // WithReservedNames overrides the reserved metadata names (wire-contracts.md §2) this function
@@ -60,10 +61,19 @@ func WithReservedNames(names wire.ReservedNames) Option {
 	return func(c *cloudEventConfig) { c.names = names }
 }
 
+// WithSettlement sets how the function settles a CloudEvent whose dispatch failed
+// (transport-bindings.md §1, obligation 8). The default - the zero envelope.Settlement - returns an
+// error so the platform retries it; envelope.AtMostOnce returns nil whatever the outcome, and
+// IgnoreUnmatchedTopics returns nil for an event whose type no handler serves - for a trigger that
+// delivers other services' events too.
+func WithSettlement(settlement envelope.Settlement) Option {
+	return func(c *cloudEventConfig) { c.settlement = settlement }
+}
+
 // WithOnFailure installs a hook called whenever a delivered CloudEvent's dispatch produces an
-// unsuccessful Benzene result - the same events for which the function returns an error and the
-// platform retries. The hook receives the original event and the wire.Response so it can log or
-// meter the failure; it does not change the outcome (the function still returns an error). It is
+// unsuccessful Benzene result - whether the function then returns an error for the platform to
+// retry (the default) or the settlement accepts the failure. The hook receives the original event
+// and the wire.Response so it can log or meter the failure; it does not change the outcome. It is
 // not called for a successful dispatch.
 func WithOnFailure(hook func(ctx context.Context, e cloudevents.Event, resp wire.Response)) Option {
 	return func(c *cloudEventConfig) { c.onFailure = hook }
@@ -77,7 +87,8 @@ func WithOnFailure(hook func(ctx context.Context, e cloudevents.Event, resp wire
 // returning an error (Eventarc/Pub/Sub redeliver on a returned error, subject to the trigger's
 // retry policy). Accordingly a dispatch whose Benzene result is successful returns nil, and an
 // unsuccessful one returns an error - so a failure is retried by the platform, never silently
-// dropped. Deliveries are at-least-once, so handlers must be idempotent.
+// dropped; WithSettlement offers the at-most-once override and unmatched-topic-as-ignored. The unit
+// of settlement is one event. Deliveries are at-least-once, so handlers must be idempotent.
 func RegisterCloudEvent(name string, builder *benzene.ApplicationBuilder, opts ...Option) {
 	cfg := cloudEventConfig{names: builder.ReservedNames}
 	for _, opt := range opts {
@@ -91,23 +102,24 @@ func RegisterCloudEvent(name string, builder *benzene.ApplicationBuilder, opts .
 // registering with (or being invoked by) the live framework.
 func cloudEventHandler(builder *benzene.ApplicationBuilder, cfg cloudEventConfig) func(context.Context, cloudevents.Event) error {
 	return func(ctx context.Context, e cloudevents.Event) error {
-		return dispatchCloudEvent(ctx, e, builder, cfg.names, cfg.onFailure)
+		return dispatchCloudEvent(ctx, e, builder, cfg)
 	}
 }
 
 // dispatchCloudEvent is the conversion-and-dispatch core RegisterCloudEvent installs, factored
 // out so it is testable directly against a hand-built event.Event. It maps the event onto a
-// wire.Request, dispatches it, returns nil on a successful result, and returns an error (after
-// calling onFailure, if set) on an unsuccessful one. It never panics: a malformed event resolves
-// to a request RouterMiddleware turns into a failure result, i.e. a returned error, not a crash.
-func dispatchCloudEvent(ctx context.Context, e cloudevents.Event, builder *benzene.ApplicationBuilder, names wire.ReservedNames, onFailure func(ctx context.Context, e cloudevents.Event, resp wire.Response)) error {
-	req := requestFromEvent(e, names)
-	resp, successful := envelope.DispatchResult(ctx, builder.Pipeline, builder.Container, req)
-	if !successful {
-		if onFailure != nil {
-			onFailure(ctx, e, resp)
-		}
-		return fmt.Errorf("gcpfunctions: dispatch of CloudEvent type %q failed with status %s", e.Type(), resp.StatusCode)
+// wire.Request, dispatches it, calls onFailure (if set) for an unsuccessful result, and returns an
+// error when the settlement does not acknowledge the outcome - by default, for any unsuccessful
+// result. It never panics: a malformed event resolves to a request RouterMiddleware turns into a
+// failure result, i.e. a returned error, not a crash.
+func dispatchCloudEvent(ctx context.Context, e cloudevents.Event, builder *benzene.ApplicationBuilder, cfg cloudEventConfig) error {
+	req := requestFromEvent(e, cfg.names)
+	outcome := cfg.settlement.Dispatch(ctx, builder.Pipeline, builder.Container, req)
+	if !outcome.Successful && cfg.onFailure != nil {
+		cfg.onFailure(ctx, e, outcome.Response)
+	}
+	if !outcome.Acknowledge {
+		return fmt.Errorf("gcpfunctions: dispatch of CloudEvent type %q failed with status %s", e.Type(), outcome.Response.StatusCode)
 	}
 	return nil
 }

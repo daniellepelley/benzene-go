@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	benzene "github.com/daniellepelley/benzene-go"
-	"github.com/daniellepelley/benzene-go/envelope"
 	"github.com/daniellepelley/benzene-go/wire"
 )
 
@@ -46,7 +45,11 @@ type eventGridInvocationRequest struct {
 //
 // Mount it per function path alongside the other trigger handlers, e.g.
 // mux.Handle("/BlobCreated", azurefunctions.EventGridHandler(builder, "eventGridEvent")).
-func EventGridHandler(builder *benzene.ApplicationBuilder, dataName string) http.Handler {
+//
+// Settlement is per event (the "one-shot" shape of transport-bindings.md §1, obligation 8);
+// WithSettlement offers the at-most-once override and unmatched-topic-as-ignored.
+func EventGridHandler(builder *benzene.ApplicationBuilder, dataName string, opts ...Option) http.Handler {
+	settlement := newOptions(opts).settlement
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -60,11 +63,8 @@ func EventGridHandler(builder *benzene.ApplicationBuilder, dataName string) http
 			return
 		}
 
-		resp, successful := envelope.DispatchResult(r.Context(), builder.Pipeline, builder.Container, resolveEventGridRequest(inv, dataName))
-		if !successful {
-			w.Header().Set("content-type", "application/json")
-			w.WriteHeader(http.StatusInternalServerError)
-			io.WriteString(w, resp.Body)
+		if outcome := settlement.Dispatch(r.Context(), builder.Pipeline, builder.Container, resolveEventGridRequest(inv, dataName)); !outcome.Acknowledge {
+			failInvocation(w, outcome.Response)
 			return
 		}
 

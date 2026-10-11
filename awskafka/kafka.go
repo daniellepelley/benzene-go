@@ -26,7 +26,9 @@
 //     partition from. Partitions are independent (a failure in one does not stop another). This is
 //     the object-shaped batchItemFailures the Kafka/MSK mapping reads (unlike the string
 //     itemIdentifier of SQS/Kinesis/DynamoDB), requiring FunctionResponseTypes:
-//     ["ReportBatchItemFailures"] on the mapping.
+//     ["ReportBatchItemFailures"] on the mapping. This is the "stream" settlement shape
+//     (transport-bindings.md §1, obligation 8) defaulting to redeliver; WithSettlement offers the
+//     at-most-once (skip-and-continue) override and unmatched-topic-as-ignored.
 package awskafka
 
 import (
@@ -82,14 +84,41 @@ type itemIdentifier struct {
 	Offset    int64  `json:"offset"`
 }
 
+// Option configures Handler.
+type Option func(*options)
+
+type options struct {
+	settlement envelope.Settlement
+}
+
+// WithSettlement sets how Handler settles a record whose invocation failed (transport-bindings.md §1,
+// obligation 8). The default - the zero envelope.Settlement - stops at the first failed record and
+// reports it, so Lambda redelivers that partition from there; envelope.AtMostOnce acknowledges a failed
+// record (and a poison record that cannot be decoded) and carries on - skip-and-continue - and
+// IgnoreUnmatchedTopics acknowledges a record whose topic no handler serves.
+func WithSettlement(settlement envelope.Settlement) Option {
+	return func(o *options) { o.settlement = settlement }
+}
+
+func newOptions(opts []Option) options {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
+}
+
 // Handler adapts builder into an awslambda.HandlerFunc for a Lambda triggered by an MSK/Kafka event
-// source mapping. Each record gets its own pipeline invocation (its own DI scope, via
-// envelope.Dispatch). Within a topic-partition, records are processed in offset order and processing
-// stops at the first unsuccessful one, reporting {partition, offset} so AWS resumes that partition
-// from there; every partition is processed (a failure in one does not stop the others). A malformed
-// outer event is the one thing returned as a Go error - the sanctioned Lambda Runtime API error
-// shape - so the whole batch is retried.
-func Handler(builder *benzene.ApplicationBuilder) awslambda.HandlerFunc {
+// source mapping. Each record gets its own pipeline invocation (its own DI scope). Within a
+// topic-partition, records are processed in offset order and processing stops at the first one the
+// settlement does not acknowledge (by default, the first unsuccessful one), reporting
+// {partition, offset} so AWS resumes that partition from there; every partition is processed (a
+// failure in one does not stop the others). The unit of settlement is the partition position: one
+// failure redelivers that record and every later one in its partition. A malformed outer event is
+// the one thing returned as a Go error - the sanctioned Lambda Runtime API error shape - so the
+// whole batch is retried.
+func Handler(builder *benzene.ApplicationBuilder, opts ...Option) awslambda.HandlerFunc {
+	settlement := newOptions(opts).settlement
 	return func(ctx context.Context, event json.RawMessage) (json.RawMessage, error) {
 		var evt kafkaEvent
 		if err := json.Unmarshal(event, &evt); err != nil {
@@ -103,11 +132,15 @@ func Handler(builder *benzene.ApplicationBuilder) awslambda.HandlerFunc {
 				req, err := resolveRequest(record)
 				if err != nil {
 					// A record whose value cannot be base64-decoded is a poison record: stop this
-					// partition and report its offset for redelivery rather than skipping past it.
+					// partition and report its offset for redelivery rather than skipping past it -
+					// unless the service chose at-most-once.
+					if settlement.Delivery == envelope.AtMostOnce {
+						continue
+					}
 					failures = append(failures, failAt(partitionKey, record.Offset))
 					break
 				}
-				if _, successful := envelope.DispatchResult(ctx, builder.Pipeline, builder.Container, req); !successful {
+				if outcome := settlement.Dispatch(ctx, builder.Pipeline, builder.Container, req); !outcome.Acknowledge {
 					failures = append(failures, failAt(partitionKey, record.Offset))
 					break
 				}

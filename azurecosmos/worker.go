@@ -37,10 +37,11 @@ type ChangeFeedReader interface {
 
 // Worker runs a Benzene pipeline over a Cosmos DB change feed. It polls the change feed through a
 // ChangeFeedReader and dispatches each non-empty batch of changed documents as ONE fan-in pipeline
-// invocation (its own DI scope, via envelope.DispatchTopicResult) to Topic - not one invocation per
-// document. On a successful dispatch the optional Checkpoint hook is called with the new continuation
-// token so the caller can persist durable progress; on an unsuccessful dispatch the token is not
-// advanced, so the batch is re-read (redelivered). It is the self-hosted counterpart of the
+// invocation (its own DI scope) to Topic - not one invocation per document. Once its Settlement
+// acknowledges the batch (by default, on a successful dispatch) the optional Checkpoint hook is
+// called with the new continuation token so the caller can persist durable progress; otherwise the
+// token is not advanced, so the batch is re-read (redelivered). The unit of settlement is the page
+// (the "stream" shape of transport-bindings.md §1, obligation 8, defaulting to redeliver). It is the self-hosted counterpart of the
 // zero-dependency azurefunctions.CosmosHandler (the package doc explains why the lease container /
 // checkpointing is caller-provided rather than owned here).
 type Worker struct {
@@ -74,10 +75,16 @@ type Worker struct {
 	// hot loop. Default 1s when 0.
 	ErrorBackoff time.Duration
 
+	// Settlement decides which batches the continuation token advances past (transport-bindings.md
+	// §1, obligation 8). The zero value is at-least-once: a failed batch is re-read, indefinitely,
+	// after ErrorBackoff. envelope.AtMostOnce advances (and checkpoints) past a failed batch -
+	// skip-and-continue - and IgnoreUnmatchedTopics past one whose Topic has no handler.
+	Settlement envelope.Settlement
+
 	// OnFailure, when non-nil, is called for a batch whose dispatch result is not a success status.
-	// The continuation token is NOT advanced (the batch redelivers on the next poll and on restart), so
-	// - like the ordered-stream sibling azureeventhub.Consumer - this is stop-at-batch-failure: the
-	// durable position never moves past unhandled work. Use it to log or emit a metric; the change feed
+	// By default the continuation token is NOT advanced (the batch redelivers on the next poll and on
+	// restart), so - like the ordered-stream sibling azureeventhub.Consumer - this is
+	// stop-at-batch-failure: the durable position never moves past unhandled work. Use it to log or emit a metric; the change feed
 	// has no broker-side nack, so a failure is "not checkpointed", not an explicit reject.
 	OnFailure func(ctx context.Context, page ChangeFeedPage, resp wire.Response)
 
@@ -160,9 +167,9 @@ func (w *Worker) Run(ctx context.Context) error {
 // again immediately). It is separated from Run so tests can drive a single deterministic cycle while
 // Run wraps it in the lifecycle loop and owns the token across iterations.
 //
-// The token advances only on progress the position may safely move past: a successful dispatch (then
-// Checkpoint persists it) and a caught-up empty page. A reader error, an unsuccessful dispatch, and a
-// checkpoint error all return the UNCHANGED token, so the same batch is re-read - the durable
+// The token advances only on progress the position may safely move past: a dispatch the Settlement
+// acknowledges (then Checkpoint persists it) and a caught-up empty page. A reader error, an
+// unacknowledged dispatch, and a checkpoint error all return the UNCHANGED token, so the same batch is re-read - the durable
 // position never advances past unhandled work.
 func (w *Worker) pollAndDispatch(ctx context.Context, continuation string) (next string, backoff time.Duration) {
 	page, err := w.Reader.ReadNext(ctx, continuation, w.maxBatchSize())
@@ -177,13 +184,13 @@ func (w *Worker) pollAndDispatch(ctx context.Context, continuation string) (next
 	}
 
 	headers, body := buildBatch(page.Documents)
-	resp, successful := envelope.DispatchTopicResult(ctx, w.Builder.Pipeline, w.Builder.Container, w.Topic, headers, body)
-	if !successful {
-		// Stop-at-batch-failure: report and back off WITHOUT advancing the token, so the same batch is
-		// re-read on the next poll (and, absent a checkpoint, on restart) rather than being skipped.
-		if w.OnFailure != nil {
-			w.OnFailure(ctx, page, resp)
-		}
+	outcome := w.Settlement.DispatchTopic(ctx, w.Builder.Pipeline, w.Builder.Container, w.Topic, headers, body)
+	if !outcome.Successful && w.OnFailure != nil {
+		w.OnFailure(ctx, page, outcome.Response)
+	}
+	if !outcome.Acknowledge {
+		// Stop-at-batch-failure: back off WITHOUT advancing the token, so the same batch is re-read
+		// on the next poll (and, absent a checkpoint, on restart) rather than being skipped.
 		return continuation, w.errorBackoff()
 	}
 

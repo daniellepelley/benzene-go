@@ -57,21 +57,46 @@ type ruleEvent struct {
 	Detail     json.RawMessage `json:"detail"`
 }
 
-// Handler adapts builder into an awslambda.HandlerFunc for a Lambda invoked by an
-// EventBridge rule. The event runs through the pipeline with its own DI scope, via
-// envelope.Dispatch. A non-success dispatch result returns a Go error - triggering AWS's own
-// async-invoke retry - since EventBridge-to-Lambda has no partial-failure response shape to
-// report to, the same posture as awssns.
-func Handler(builder *benzene.ApplicationBuilder) awslambda.HandlerFunc {
+// Option configures Handler.
+type Option func(*options)
+
+type options struct {
+	settlement envelope.Settlement
+}
+
+// WithSettlement sets how Handler settles an event whose invocation failed (transport-bindings.md §1,
+// obligation 8). The default - the zero envelope.Settlement - fails the invocation, so AWS's
+// async-invoke retry and then its dead-letter queue take over; envelope.AtMostOnce completes the
+// invocation whatever the outcome, and IgnoreUnmatchedTopics completes it for an event whose
+// detail-type no handler serves - for a rule that matches other services' events too.
+func WithSettlement(settlement envelope.Settlement) Option {
+	return func(o *options) { o.settlement = settlement }
+}
+
+func newOptions(opts []Option) options {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
+}
+
+// Handler adapts builder into an awslambda.HandlerFunc for a Lambda invoked by an EventBridge rule.
+// The event runs through the pipeline with its own DI scope. An event the settlement does not
+// acknowledge (by default, an unsuccessful one) returns a Go error - triggering AWS's own
+// async-invoke retry - since EventBridge-to-Lambda has no partial-failure response shape to report
+// to, the same posture as awssns. The unit of settlement is the invocation (one event; the
+// "one-shot" shape of transport-bindings.md §1, obligation 8).
+func Handler(builder *benzene.ApplicationBuilder, opts ...Option) awslambda.HandlerFunc {
+	settlement := newOptions(opts).settlement
 	return func(ctx context.Context, event json.RawMessage) (json.RawMessage, error) {
 		var rule ruleEvent
 		if err := json.Unmarshal(event, &rule); err != nil {
 			return nil, fmt.Errorf("awseventbridge: malformed EventBridge event: %w", err)
 		}
 
-		resp, successful := envelope.DispatchResult(ctx, builder.Pipeline, builder.Container, resolveRequest(rule))
-		if !successful {
-			return nil, fmt.Errorf("awseventbridge: event %s failed: %s", rule.ID, resp.StatusCode)
+		if outcome := settlement.Dispatch(ctx, builder.Pipeline, builder.Container, resolveRequest(rule)); !outcome.Acknowledge {
+			return nil, fmt.Errorf("awseventbridge: event %s failed: %s", rule.ID, outcome.Response.StatusCode)
 		}
 		return json.Marshal(struct{}{})
 	}

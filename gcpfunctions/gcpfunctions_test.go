@@ -12,6 +12,7 @@ import (
 	"github.com/cloudevents/sdk-go/v2/event"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/envelope"
 	"github.com/daniellepelley/benzene-go/httpbinding"
 	"github.com/daniellepelley/benzene-go/wire"
 )
@@ -67,7 +68,7 @@ func TestDispatchCloudEvent_SuccessReturnsNilAndDispatches(t *testing.T) {
 	called := false
 	onFailure := func(context.Context, cloudevents.Event, wire.Response) { called = true }
 
-	if err := dispatchCloudEvent(context.Background(), e, builder, builder.ReservedNames, onFailure); err != nil {
+	if err := dispatchCloudEvent(context.Background(), e, builder, cloudEventConfig{names: builder.ReservedNames, onFailure: onFailure}); err != nil {
 		t.Fatalf("dispatchCloudEvent() error = %v, want nil", err)
 	}
 	if called {
@@ -88,7 +89,7 @@ func TestDispatchCloudEvent_UnsuccessfulResultReturnsErrorAndCallsOnFailure(t *t
 		gotResp = resp
 	}
 
-	err := dispatchCloudEvent(context.Background(), e, builder, builder.ReservedNames, onFailure)
+	err := dispatchCloudEvent(context.Background(), e, builder, cloudEventConfig{names: builder.ReservedNames, onFailure: onFailure})
 	if err == nil {
 		t.Fatal("dispatchCloudEvent() error = nil, want non-nil for an unsuccessful result")
 	}
@@ -107,7 +108,7 @@ func TestDispatchCloudEvent_NilOnFailureIsSafe(t *testing.T) {
 	builder := newTestBuilder(t, wire.ReservedNames{})
 	e := newGreetEvent(t, "") // fails, no hook installed
 
-	if err := dispatchCloudEvent(context.Background(), e, builder, builder.ReservedNames, nil); err == nil {
+	if err := dispatchCloudEvent(context.Background(), e, builder, cloudEventConfig{names: builder.ReservedNames}); err == nil {
 		t.Fatal("dispatchCloudEvent() error = nil, want non-nil for an unsuccessful result")
 	}
 }
@@ -124,7 +125,7 @@ func TestDispatchCloudEvent_EmptyTypeFallsBackToReservedTopicKey(t *testing.T) {
 		t.Fatalf("SetData() error = %v", err)
 	}
 
-	if err := dispatchCloudEvent(context.Background(), e, builder, builder.ReservedNames, nil); err != nil {
+	if err := dispatchCloudEvent(context.Background(), e, builder, cloudEventConfig{names: builder.ReservedNames}); err != nil {
 		t.Fatalf("dispatchCloudEvent() error = %v, want nil (topic resolved from the reserved key)", err)
 	}
 }
@@ -135,7 +136,7 @@ func TestDispatchCloudEvent_EmptyTypeAndNoFallbackIsAFailureNotAPanic(t *testing
 	e.SetID("evt-3")
 	e.SetSource("/producer")
 
-	if err := dispatchCloudEvent(context.Background(), e, builder, builder.ReservedNames, nil); err == nil {
+	if err := dispatchCloudEvent(context.Background(), e, builder, cloudEventConfig{names: builder.ReservedNames}); err == nil {
 		t.Fatal("dispatchCloudEvent() error = nil, want non-nil for an unresolvable topic")
 	}
 }
@@ -277,4 +278,28 @@ func TestRegistration_DoesNotPanic(t *testing.T) {
 		WithReservedNames(wire.ReservedNames{TopicKey: "benzenetopic"}),
 		WithOnFailure(func(context.Context, cloudevents.Event, wire.Response) {}),
 	)
+}
+
+func TestDispatchCloudEvent_Settlement(t *testing.T) {
+	builder := newTestBuilder(t, wire.ReservedNames{})
+	failed := newGreetEvent(t, "") // empty name -> BadRequest from the handler
+	unmatched := newGreetEvent(t, "x")
+	unmatched.SetType("someone.elses.event")
+
+	cfg := cloudEventConfig{names: builder.ReservedNames}
+	WithSettlement(envelope.Settlement{Delivery: envelope.AtMostOnce})(&cfg)
+	reported := 0
+	cfg.onFailure = func(context.Context, cloudevents.Event, wire.Response) { reported++ }
+	if err := dispatchCloudEvent(context.Background(), failed, builder, cfg); err != nil || reported != 1 {
+		t.Errorf("at-most-once = %v with %d failure(s) reported, want nil and the failure still reported", err, reported)
+	}
+
+	cfg = cloudEventConfig{names: builder.ReservedNames}
+	WithSettlement(envelope.Settlement{IgnoreUnmatchedTopics: true})(&cfg)
+	if err := dispatchCloudEvent(context.Background(), unmatched, builder, cfg); err != nil {
+		t.Errorf("unmatched type with IgnoreUnmatchedTopics = %v, want nil", err)
+	}
+	if err := dispatchCloudEvent(context.Background(), failed, builder, cfg); err == nil {
+		t.Error("a handler failure with IgnoreUnmatchedTopics = nil, want an error for the platform to retry")
+	}
 }

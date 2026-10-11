@@ -27,9 +27,11 @@ type ReceiveDeleteAPI interface {
 
 // Consumer is a self-hosted SQS poller (Benzene.Aws.Sqs's SqsConsumer): it long-polls a queue and
 // runs each received message through the pipeline in its own DI scope, deleting only the messages
-// whose dispatch succeeded. A message whose dispatch is unsuccessful is left on the queue, so it
-// reappears after its visibility timeout and SQS's own redrive policy (maxReceiveCount -> DLQ)
-// eventually takes over - this consumer never deletes an unhandled message. It is the standalone
+// its Settlement acknowledges - by default, the ones whose dispatch succeeded. A message whose
+// dispatch is unsuccessful is left on the queue, so it reappears after its visibility timeout and
+// SQS's own redrive policy (maxReceiveCount -> DLQ) eventually takes over - by default this consumer
+// never deletes an unhandled message. Settlement is per message (the "queue" shape of
+// transport-bindings.md §1, obligation 8). It is the standalone
 // alternative to the Lambda-trigger Handler for a service that owns its own compute (a container,
 // an EC2 worker) rather than being invoked by an event source mapping.
 type Consumer struct {
@@ -59,9 +61,14 @@ type Consumer struct {
 	// topic attribute. Leave it zero to inherit the Builder's reserved names (so topic resolution
 	// matches the sibling Lambda Handler out of the box); set it only to differ from the Builder.
 	ReservedNames wire.ReservedNames
-	// OnFailure, when non-nil, is called for each message whose dispatch was unsuccessful (the
-	// message is left on the queue for redelivery regardless). Use it to log or emit a metric; SQS
-	// has no broker-side nack, so a failure is "not deleted", not an explicit reject.
+	// Settlement decides which messages are deleted (transport-bindings.md §1, obligation 8). The
+	// zero value deletes only a successful one; envelope.AtMostOnce deletes every message whatever
+	// its outcome, and IgnoreUnmatchedTopics deletes one whose topic no handler serves.
+	Settlement envelope.Settlement
+	// OnFailure, when non-nil, is called for each message whose dispatch was unsuccessful - whether
+	// the Settlement leaves it on the queue for redelivery (the default) or deletes it anyway. Use
+	// it to log or emit a metric; SQS has no broker-side nack, so a failure is "not deleted", not an
+	// explicit reject.
 	OnFailure func(messageID string, response wire.Response)
 
 	// sleep is the backoff primitive, injectable for tests. nil means sleepContext.
@@ -155,16 +162,15 @@ func (c *Consumer) poll(ctx context.Context) error {
 	var toDelete []types.DeleteMessageBatchRequestEntry
 	for _, message := range out.Messages {
 		req := resolveMessage(message, c.topicKey())
-		response, successful := envelope.DispatchResult(ctx, c.Builder.Pipeline, c.Builder.Container, req)
-		if successful {
+		outcome := c.Settlement.Dispatch(ctx, c.Builder.Pipeline, c.Builder.Container, req)
+		if !outcome.Successful && c.OnFailure != nil {
+			c.OnFailure(aws.ToString(message.MessageId), outcome.Response)
+		}
+		if outcome.Acknowledge {
 			toDelete = append(toDelete, types.DeleteMessageBatchRequestEntry{
 				Id:            message.MessageId,
 				ReceiptHandle: message.ReceiptHandle,
 			})
-			continue
-		}
-		if c.OnFailure != nil {
-			c.OnFailure(aws.ToString(message.MessageId), response)
 		}
 	}
 

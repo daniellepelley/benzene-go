@@ -60,8 +60,9 @@ type DeliverySource interface {
 }
 
 // Consumer runs a Benzene pipeline over a RabbitMQ queue. Each delivery gets its own pipeline
-// invocation - its own DI scope, via envelope.DispatchResult - and is acked on success or nacked on
-// failure (see the package doc for the requeue/poison-message contract). It is the self-hosted
+// invocation - its own DI scope - and is acked when its Settlement acknowledges it (by default, on
+// success) or nacked otherwise (see the package doc for the requeue/poison-message contract).
+// Settlement is per delivery (the "queue" shape of transport-bindings.md §1, obligation 8). It is the self-hosted
 // counterpart of the outbound Client, and the RabbitMQ sibling of kafka.Consumer.
 type Consumer struct {
 	// Source opens the delivery stream (typically an *amqp091.Channel).
@@ -81,6 +82,12 @@ type Consumer struct {
 	// already-redelivered failure is dropped/dead-lettered (the one-retry poison bound).
 	NoRequeue bool
 
+	// Settlement decides which deliveries are acked (transport-bindings.md §1, obligation 8). The
+	// zero value acks only a successful one and nacks the rest per NoRequeue; envelope.AtMostOnce
+	// acks every delivery whatever its outcome (unlike NoRequeue, which still rejects it), and
+	// IgnoreUnmatchedTopics acks one whose topic no handler serves.
+	Settlement envelope.Settlement
+
 	// ReservedNames overrides the reserved metadata names (wire-contracts.md §2) used to read the
 	// topic header. An empty TopicKey inherits the Builder's reserved names (so a service that
 	// renamed the key on its builder gets the same key here without extra wiring); set TopicKey to
@@ -88,7 +95,7 @@ type Consumer struct {
 	ReservedNames wire.ReservedNames
 
 	// OnFailure, when non-nil, is called for each delivery whose dispatch result is not a success
-	// status, before that delivery is nacked. This is where a failure log or metric belongs. A nil
+	// status, before that delivery is settled (nacked, or acked under a Settlement that accepts it). This is where a failure log or metric belongs. A nil
 	// OnFailure means unsuccessful deliveries are simply nacked (requeued/dead-lettered per
 	// NoRequeue) with no notification.
 	OnFailure func(ctx context.Context, delivery amqp.Delivery, resp wire.Response)
@@ -139,17 +146,17 @@ func (c *Consumer) Run(ctx context.Context) error {
 	}
 }
 
-// handle dispatches one delivery in its own DI scope and settles it: ack on a successful result,
-// otherwise fire OnFailure and nack (requeued unless NoRequeue or the delivery was already
-// redelivered). Settlement errors are best-effort - see the package doc.
+// handle dispatches one delivery in its own DI scope and settles it: OnFailure for a failed result,
+// then ack when the Settlement acknowledges the outcome, otherwise nack (requeued unless NoRequeue or
+// the delivery was already redelivered). Settlement errors are best-effort - see the package doc.
 func (c *Consumer) handle(ctx context.Context, delivery amqp.Delivery) {
-	resp, successful := envelope.DispatchResult(ctx, c.Builder.Pipeline, c.Builder.Container, c.resolveRequest(delivery))
-	if successful {
+	outcome := c.Settlement.Dispatch(ctx, c.Builder.Pipeline, c.Builder.Container, c.resolveRequest(delivery))
+	if !outcome.Successful && c.OnFailure != nil {
+		c.OnFailure(ctx, delivery, outcome.Response)
+	}
+	if outcome.Acknowledge {
 		_ = delivery.Ack(false)
 		return
-	}
-	if c.OnFailure != nil {
-		c.OnFailure(ctx, delivery, resp)
 	}
 	// Requeue by default, but only once: an already-redelivered failure is dropped/dead-lettered so
 	// a poison message can't hot-loop (matching Benzene.RabbitMq's bounded requeue).

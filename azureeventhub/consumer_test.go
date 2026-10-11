@@ -128,11 +128,14 @@ func TestConsumer_FailureInvokesOnFailureAndDoesNotCheckpoint(t *testing.T) {
 				Checkpoint: func(_ context.Context, _ ReceivedEvent) error { checkpointCalls++; return nil },
 			}
 
-			if err := consumer.receiveAndDispatch(context.Background()); err != nil {
-				t.Fatalf("receiveAndDispatch() error = %v", err)
+			if err := consumer.receiveAndDispatch(context.Background()); !errors.Is(err, errRedeliver) {
+				t.Fatalf("receiveAndDispatch() error = %v, want errRedeliver", err)
 			}
 			if len(failed) != 1 {
 				t.Fatalf("OnFailure called %d times, want 1", len(failed))
+			}
+			if len(consumer.pending) != 1 {
+				t.Errorf("pending = %d events, want the failed one held for redelivery", len(consumer.pending))
 			}
 			if failed[0].StatusCode != string(tt.wantStatus) {
 				t.Errorf("failed StatusCode = %q, want %q", failed[0].StatusCode, tt.wantStatus)
@@ -158,8 +161,8 @@ func TestConsumer_StopsAtFirstFailureInBatch(t *testing.T) {
 		Checkpoint: func(_ context.Context, e ReceivedEvent) error { checkpointed = append(checkpointed, e); return nil },
 	}
 
-	if err := consumer.receiveAndDispatch(context.Background()); err != nil {
-		t.Fatalf("receiveAndDispatch() error = %v", err)
+	if err := consumer.receiveAndDispatch(context.Background()); !errors.Is(err, errRedeliver) {
+		t.Fatalf("receiveAndDispatch() error = %v, want errRedeliver", err)
 	}
 	if len(failed) != 1 {
 		t.Errorf("OnFailure called %d times, want 1 (stop at the first failure)", len(failed))

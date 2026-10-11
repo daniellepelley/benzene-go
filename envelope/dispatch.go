@@ -45,16 +45,24 @@ func DispatchResult(ctx context.Context, pipeline *benzene.Pipeline, container *
 // into a versioned handler by explicit programmatic dispatch. The wire.Response and success flag
 // are produced identically to DispatchResult.
 func DispatchTopicResult(ctx context.Context, pipeline *benzene.Pipeline, container *benzene.Container, topic benzene.Topic, headers map[string]string, body string) (wire.Response, bool) {
+	resp, successful, _ := dispatch(ctx, pipeline, container, topic, headers, body)
+	return resp, successful
+}
+
+// dispatch runs one invocation and reports its response envelope, its success flag, and whether
+// it ended as an unmatched topic (benzene.IsUnmatchedTopic) - the three facts a one-way binding
+// settles on.
+func dispatch(ctx context.Context, pipeline *benzene.Pipeline, container *benzene.Container, topic benzene.Topic, headers map[string]string, body string) (resp wire.Response, successful, unmatched bool) {
 	scope := container.NewScope()
 	ic := benzene.NewInvocationContext(topic, headers, json.RawMessage(body), scope)
 
 	if err := pipeline.Run(ctx, ic); err != nil {
-		return withResponseHeaders(errorResponse(benzene.ServiceUnavailable[any](err.Error())), ic), false
+		return withResponseHeaders(errorResponse(benzene.ServiceUnavailable[any](err.Error())), ic), false, false
 	}
 	if ic.Result == nil {
-		return withResponseHeaders(errorResponse(benzene.UnexpectedError[any]("pipeline completed without producing a result")), ic), false
+		return withResponseHeaders(errorResponse(benzene.UnexpectedError[any]("pipeline completed without producing a result")), ic), false, false
 	}
-	return withResponseHeaders(toResponse(ic.Result), ic), resultSuccessful(ic.Result)
+	return withResponseHeaders(toResponse(ic.Result), ic), resultSuccessful(ic.Result), benzene.IsUnmatchedTopic(ic.Result)
 }
 
 // resultSuccessful reads the result's success flag off the type-erased ResultInfo (via the

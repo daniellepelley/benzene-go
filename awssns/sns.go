@@ -44,12 +44,38 @@ type snsMessageAttribute struct {
 	Value string `json:"Value"`
 }
 
+// Option configures Handler.
+type Option func(*options)
+
+type options struct {
+	settlement envelope.Settlement
+}
+
+// WithSettlement sets how Handler settles a notification whose invocation failed (transport-bindings.md §1,
+// obligation 8). The default - the zero envelope.Settlement - fails the invocation, so AWS's
+// async-invoke retry and then its dead-letter queue take over; envelope.AtMostOnce completes the
+// invocation whatever the outcome, and IgnoreUnmatchedTopics completes it for a notification whose
+// topic no handler serves - for a subscription that sees other services' topics.
+func WithSettlement(settlement envelope.Settlement) Option {
+	return func(o *options) { o.settlement = settlement }
+}
+
+func newOptions(opts []Option) options {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
+}
+
 // Handler adapts builder into an awslambda.HandlerFunc for a Lambda subscribed directly to an
-// SNS topic. Every notification runs through the pipeline with its own DI scope, via
-// envelope.Dispatch. If any notification's dispatch result is not a success status, Handler
-// returns a Go error summarizing which - triggering AWS's own async-invoke retry - rather than
-// a partial-failure response body, since SNS has no such mechanism to report one to.
-func Handler(builder *benzene.ApplicationBuilder) awslambda.HandlerFunc {
+// SNS topic. Every notification runs through the pipeline with its own DI scope. If the settlement
+// does not acknowledge a notification (by default, any unsuccessful one), Handler returns a Go error
+// summarizing which - triggering AWS's own async-invoke retry - rather than a partial-failure
+// response body, since SNS has no such mechanism to report one to. The unit of settlement is the
+// invocation (the "one-shot" shape of transport-bindings.md §1, obligation 8).
+func Handler(builder *benzene.ApplicationBuilder, opts ...Option) awslambda.HandlerFunc {
+	settlement := newOptions(opts).settlement
 	return func(ctx context.Context, event json.RawMessage) (json.RawMessage, error) {
 		var snsEvt snsEvent
 		if err := json.Unmarshal(event, &snsEvt); err != nil {
@@ -59,9 +85,8 @@ func Handler(builder *benzene.ApplicationBuilder) awslambda.HandlerFunc {
 		var failures []string
 		for _, record := range snsEvt.Records {
 			req := resolveRequest(record.Sns, builder.ReservedNames.Topic())
-			resp, successful := envelope.DispatchResult(ctx, builder.Pipeline, builder.Container, req)
-			if !successful {
-				failures = append(failures, fmt.Sprintf("%s: %s", record.Sns.MessageID, resp.StatusCode))
+			if outcome := settlement.Dispatch(ctx, builder.Pipeline, builder.Container, req); !outcome.Acknowledge {
+				failures = append(failures, fmt.Sprintf("%s: %s", record.Sns.MessageID, outcome.Response.StatusCode))
 			}
 		}
 

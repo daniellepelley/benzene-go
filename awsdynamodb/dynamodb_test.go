@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/envelope"
 )
 
 func TestTableName(t *testing.T) {
@@ -240,5 +241,41 @@ func TestFailAt_FallsBackToEventIDWithoutSequenceNumber(t *testing.T) {
 	}
 	if len(resp.BatchItemFailures) != 1 || resp.BatchItemFailures[0].ItemIdentifier != "evt-unused" {
 		t.Errorf("BatchItemFailures = %+v, want the event id fallback [evt-unused]", resp.BatchItemFailures)
+	}
+}
+
+func TestHandler_AtMostOnceSkipsFailedAndPoisonRecords(t *testing.T) {
+	inserts := 0
+	app := buildApp(func(r *benzene.Registry) {
+		benzene.MustRegister(r, benzene.NewTopic("orders:INSERT"), func(context.Context, map[string]any) benzene.Result[struct{}] {
+			inserts++
+			return benzene.Ok(struct{}{})
+		})
+		benzene.MustRegister(r, benzene.NewTopic("orders:MODIFY"), func(context.Context, map[string]any) benzene.Result[struct{}] {
+			return benzene.ServiceUnavailable[struct{}]("downstream down")
+		})
+	})
+
+	out, err := Handler(app, WithSettlement(envelope.Settlement{Delivery: envelope.AtMostOnce}))(context.Background(), streamEvent(
+		record("MODIFY", ordersArn, "seq-1", `{"NewImage":{"id":{"S":"a"}}}`),
+		record("INSERT", ordersArn, "seq-2", `{"NewImage":{"bad":{"N":"not-a-number"}}}`),
+		record("INSERT", ordersArn, "seq-3", `{"NewImage":{"id":{"S":"c"}}}`),
+	))
+	if err != nil {
+		t.Fatalf("Handler() error = %v", err)
+	}
+	if failures := decodeBatch(t, out).BatchItemFailures; len(failures) != 0 || inserts != 1 {
+		t.Errorf("BatchItemFailures = %+v after %d inserts, want none after 1 (skip-and-continue)", failures, inserts)
+	}
+}
+
+func TestHandler_IgnoreUnmatchedTopicsAcknowledgesAnUnroutedRecord(t *testing.T) {
+	out, err := Handler(buildApp(func(*benzene.Registry) {}), WithSettlement(envelope.Settlement{IgnoreUnmatchedTopics: true}))(
+		context.Background(), streamEvent(record("INSERT", ordersArn, "seq-1", `{"NewImage":{"id":{"S":"a"}}}`)))
+	if err != nil {
+		t.Fatalf("Handler() error = %v", err)
+	}
+	if failures := decodeBatch(t, out).BatchItemFailures; len(failures) != 0 {
+		t.Errorf("BatchItemFailures = %+v, want none: an unmatched topic is acknowledged on request", failures)
 	}
 }

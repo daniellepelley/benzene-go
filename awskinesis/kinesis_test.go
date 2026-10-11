@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/envelope"
 )
 
 func TestStreamName(t *testing.T) {
@@ -235,5 +236,41 @@ func TestRecordHelperEncodesData(t *testing.T) {
 	}
 	if !reflect.DeepEqual(r.Kinesis.PartitionKey, "pk-1") {
 		t.Errorf("partition key = %q", r.Kinesis.PartitionKey)
+	}
+}
+
+func TestHandler_AtMostOnceSkipsFailedAndPoisonRecords(t *testing.T) {
+	seen := 0
+	app := buildApp(func(r *benzene.Registry) {
+		benzene.MustRegister(r, benzene.NewTopic("orders"), func(_ context.Context, m map[string]any) benzene.Result[struct{}] {
+			seen++
+			if m["fail"] == true {
+				return benzene.ServiceUnavailable[struct{}]("downstream down")
+			}
+			return benzene.Ok(struct{}{})
+		})
+	})
+	poison := record("seq-2", "-")
+	poison.Kinesis = &kinesisRecordData{SequenceNumber: "seq-2", Data: "!!!not-base64!!!"}
+
+	out, err := Handler(app, WithSettlement(envelope.Settlement{Delivery: envelope.AtMostOnce}))(context.Background(), streamEvent(
+		record("seq-1", `{"fail":true}`), poison, record("seq-3", `{"id":"c"}`),
+	))
+	if err != nil {
+		t.Fatalf("Handler() error = %v", err)
+	}
+	if failures := decodeBatch(t, out).BatchItemFailures; len(failures) != 0 || seen != 2 {
+		t.Errorf("BatchItemFailures = %+v after %d records, want none after 2 (skip-and-continue)", failures, seen)
+	}
+}
+
+func TestHandler_IgnoreUnmatchedTopicsAcknowledgesAnUnroutedRecord(t *testing.T) {
+	out, err := Handler(buildApp(func(*benzene.Registry) {}), WithSettlement(envelope.Settlement{IgnoreUnmatchedTopics: true}))(
+		context.Background(), streamEvent(record("seq-1", `{"id":"a"}`)))
+	if err != nil {
+		t.Fatalf("Handler() error = %v", err)
+	}
+	if failures := decodeBatch(t, out).BatchItemFailures; len(failures) != 0 {
+		t.Errorf("BatchItemFailures = %+v, want none: an unmatched topic is acknowledged on request", failures)
 	}
 }

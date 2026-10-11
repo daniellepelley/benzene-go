@@ -47,11 +47,37 @@ type batchItemFailure struct {
 	ItemIdentifier string `json:"itemIdentifier"`
 }
 
+// Option configures Handler.
+type Option func(*options)
+
+type options struct {
+	settlement envelope.Settlement
+}
+
+// WithSettlement sets how Handler settles a message whose invocation failed (transport-bindings.md §1,
+// obligation 8). The default - the zero envelope.Settlement - reports it as a batch item failure, so
+// SQS redelivers it after its visibility timeout and the queue's redrive policy eventually
+// dead-letters it; envelope.AtMostOnce acknowledges it whatever the outcome, and
+// IgnoreUnmatchedTopics acknowledges a message whose topic no handler serves.
+func WithSettlement(settlement envelope.Settlement) Option {
+	return func(o *options) { o.settlement = settlement }
+}
+
+func newOptions(opts []Option) options {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
+}
+
 // Handler adapts builder into an awslambda.HandlerFunc for a Lambda triggered by an SQS event
-// source mapping. Each record in the batch gets its own pipeline invocation - its own DI scope,
-// via envelope.Dispatch - so one record's handler can't see another's state. A record whose
-// dispatch result is not a success status is reported back as a batch item failure.
-func Handler(builder *benzene.ApplicationBuilder) awslambda.HandlerFunc {
+// source mapping. Each record in the batch gets its own pipeline invocation - its own DI scope - so
+// one record's handler can't see another's state. A record the settlement does not acknowledge (by
+// default, one whose result is unsuccessful) is reported back as a batch item failure: settlement is
+// per message (the "queue" shape of transport-bindings.md §1, obligation 8).
+func Handler(builder *benzene.ApplicationBuilder, opts ...Option) awslambda.HandlerFunc {
+	settlement := newOptions(opts).settlement
 	return func(ctx context.Context, event json.RawMessage) (json.RawMessage, error) {
 		var sqsEvt sqsEvent
 		if err := json.Unmarshal(event, &sqsEvt); err != nil {
@@ -61,8 +87,7 @@ func Handler(builder *benzene.ApplicationBuilder) awslambda.HandlerFunc {
 		var failures []batchItemFailure
 		for _, record := range sqsEvt.Records {
 			req := resolveRequest(record, builder.ReservedNames.Topic())
-			_, successful := envelope.DispatchResult(ctx, builder.Pipeline, builder.Container, req)
-			if !successful {
+			if outcome := settlement.Dispatch(ctx, builder.Pipeline, builder.Container, req); !outcome.Acknowledge {
 				failures = append(failures, batchItemFailure{ItemIdentifier: record.MessageID})
 			}
 		}

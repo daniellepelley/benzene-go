@@ -39,4 +39,17 @@
 // durable progress is persisted by the caller's own store. A Consumer built without a Checkpoint
 // hook simply re-reads from wherever its Receiver resumes; because delivery is at-least-once
 // regardless, handlers must be idempotent.
+//
+// # Settlement
+//
+// The Consumer is the "stream" shape of transport-bindings.md §1, obligation 8, defaulting to
+// redeliver. The unit of settlement is one event, in partition order: an event the Consumer's
+// Settlement acknowledges is checkpointed, and one it does not - by default, a failure result, no
+// result or a pipeline error - is redelivered in place. A partition receiver has already moved past
+// the whole received batch, so the Consumer itself holds the failed event and the rest of its batch
+// and re-dispatches them, after ErrorBackoff, before receiving anything new: the failed event blocks
+// its partition until it succeeds (a poison event stalls it until the handler or the data is fixed,
+// or the process restarts from the durable checkpoint, which never passed it).
+// envelope.AtMostOnce is the skip-and-continue override - a failed event is checkpointed past - and
+// IgnoreUnmatchedTopics checkpoints past an event whose topic no handler serves.
 package azureeventhub

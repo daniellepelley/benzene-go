@@ -17,9 +17,12 @@
 // subscription's retry policy and eventually dead-lettered if one is configured, the Pub/Sub
 // counterpart of awssqs's batch item failure and awssns's returned Go error.
 //
-// The outbound half (publishing) is deliberately absent: Pub/Sub's Publish API needs
-// OAuth-signed calls, i.e. the cloud.google.com/go/pubsub SDK - a dependency decision this
-// repo hasn't taken (see ROADMAP.md). When it is, it gets its own module like awssqs/awssns.
+// Settlement is per message (the "queue" shape of transport-bindings.md §1, obligation 8): a
+// failure result, no result, a pipeline error and an unmatched topic are all nacked by default;
+// WithSettlement offers the at-most-once override and unmatched-topic-as-ignored.
+//
+// The outbound half (publishing) needs OAuth-signed calls, i.e. the cloud.google.com/go/pubsub
+// SDK, so it ships in its own module, gcppubsubclient, like awssqs/awssns.
 package gcppubsub
 
 import (
@@ -45,14 +48,39 @@ type pushMessage struct {
 	Attributes map[string]string `json:"attributes"`
 }
 
+// Option configures Handler.
+type Option func(*options)
+
+type options struct {
+	settlement envelope.Settlement
+}
+
+// WithSettlement sets how Handler settles a message whose invocation failed (transport-bindings.md §1,
+// obligation 8). The default - the zero envelope.Settlement - nacks it (500) so Pub/Sub redelivers
+// it per the subscription's retry policy; envelope.AtMostOnce acknowledges it (204) whatever the
+// outcome, and IgnoreUnmatchedTopics acknowledges a message whose topic no handler serves - for a
+// subscription that sees other services' topics.
+func WithSettlement(settlement envelope.Settlement) Option {
+	return func(o *options) { o.settlement = settlement }
+}
+
+func newOptions(opts []Option) options {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
+}
+
 // Handler adapts builder into the http.Handler a push subscription's endpoint URL points at.
-// Each delivery gets its own pipeline invocation - its own DI scope, via envelope.Dispatch.
-// Pub/Sub acknowledges on 102/200/201/202/204 and redelivers on anything else; this handler
-// answers 204 for a success status, 500 (with the wire error payload as the body, for log
-// inspection) for a non-success one, and 400 for a delivery that isn't a valid push envelope
-// at all - also a nack, so a misconfigured subscription surfaces as redelivery/dead-letter
+// Each delivery gets its own pipeline invocation - its own DI scope. Pub/Sub acknowledges on
+// 102/200/201/202/204 and redelivers on anything else; this handler answers 204 for a message the
+// settlement acknowledges (by default, a successful one), 500 (with the wire error payload as the
+// body, for log inspection) for one it does not, and 400 for a delivery that isn't a valid push
+// envelope at all - also a nack, so a misconfigured subscription surfaces as redelivery/dead-letter
 // traffic rather than silent loss.
-func Handler(builder *benzene.ApplicationBuilder) http.Handler {
+func Handler(builder *benzene.ApplicationBuilder, opts ...Option) http.Handler {
+	settlement := newOptions(opts).settlement
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -72,11 +100,11 @@ func Handler(builder *benzene.ApplicationBuilder) http.Handler {
 			return
 		}
 
-		resp, successful := envelope.DispatchResult(r.Context(), builder.Pipeline, builder.Container, resolveRequest(push.Message, string(data), builder.ReservedNames.Topic()))
-		if !successful {
+		outcome := settlement.Dispatch(r.Context(), builder.Pipeline, builder.Container, resolveRequest(push.Message, string(data), builder.ReservedNames.Topic()))
+		if !outcome.Acknowledge {
 			w.Header().Set("content-type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
-			io.WriteString(w, resp.Body)
+			io.WriteString(w, outcome.Response.Body)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)

@@ -7,7 +7,6 @@ import (
 	"strconv"
 
 	benzene "github.com/daniellepelley/benzene-go"
-	"github.com/daniellepelley/benzene-go/envelope"
 )
 
 // cosmosInvocationRequest is the custom-handler envelope for a Cosmos DB Change Feed trigger. The
@@ -37,9 +36,15 @@ type cosmosInvocationRequest struct {
 // checkpoint, so the handler must be idempotent across a redelivered batch, same as the self-
 // hosted worker).
 //
+// The unit of settlement is the batch (the "stream" shape of transport-bindings.md §1, obligation 8,
+// defaulting to redeliver). WithSettlement offers the at-most-once override (the batch is
+// checkpointed whatever the outcome - skip-and-continue) and unmatched-topic-as-ignored (for a
+// code-named topic with no handler).
+//
 // Mount it on the function's local invocation path alongside the other trigger handlers, e.g.
 // mux.Handle("/OrdersChanged", azurefunctions.CosmosHandler(builder, benzene.NewTopic("orders:changed"), "documents")).
-func CosmosHandler(builder *benzene.ApplicationBuilder, topic benzene.Topic, dataName string) http.Handler {
+func CosmosHandler(builder *benzene.ApplicationBuilder, topic benzene.Topic, dataName string, opts ...Option) http.Handler {
+	settlement := newOptions(opts).settlement
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -54,11 +59,8 @@ func CosmosHandler(builder *benzene.ApplicationBuilder, topic benzene.Topic, dat
 		}
 
 		headers, batch := resolveCosmosBatch(inv, dataName)
-		resp, successful := envelope.DispatchTopicResult(r.Context(), builder.Pipeline, builder.Container, topic, headers, batch)
-		if !successful {
-			w.Header().Set("content-type", "application/json")
-			w.WriteHeader(http.StatusInternalServerError)
-			io.WriteString(w, resp.Body)
+		if outcome := settlement.DispatchTopic(r.Context(), builder.Pipeline, builder.Container, topic, headers, batch); !outcome.Acknowledge {
+			failInvocation(w, outcome.Response)
 			return
 		}
 
