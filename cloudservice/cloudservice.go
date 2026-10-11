@@ -17,11 +17,12 @@
 // §1): {"name":"cloud-service","missing":[...]} - so benzene:spec, and a registration of the same
 // document, say which requirements this wiring knows it does not meet.
 //
-// Deliberately in scope: the synchronous HTTP surface + a wiring self-check. Out of scope for now
-// (documented in ROADMAP): the outbound mesh feeds (register/heartbeat/traces to a collector) - run
-// a mesh.Announcer over Service.Contract and mesh.TraceMiddleware with a PushExporter, as
-// mesh-helloworld does; this builder does not own their goroutine lifecycle. The Report records
-// those feeds as not wired, so R6 stays unsatisfied for a New-only build.
+// Deliberately in scope: the whole Cloud Service Profile (R1-R5, R7) + a wiring self-check. Out of
+// scope (documented in ROADMAP): the meshed-service claim (mesh.md §7.1) - M1, the outbound mesh
+// feeds (register/heartbeat/traces to a collector: run a mesh.Announcer over Service.Contract and
+// mesh.TraceMiddleware with a PushExporter, as mesh-helloworld does; this builder does not own their
+// goroutine lifecycle), and M2, trace-context propagation. The Report's Mesh section records both as
+// not wired for a New-only build; neither ever appears in the document's profile.missing.
 package cloudservice
 
 import (
@@ -112,9 +113,9 @@ func WithProduces(outbound *contract.OutboundRegistry) Option {
 func WithConsumes(outbound *contract.OutboundRegistry) Option { return WithProduces(outbound) }
 
 // WithoutDescriptor disables the self-description surface: the reserved benzene:spec topic and its
-// GET /benzene/spec route (R5, and the self-description half of R6) are not mounted. Use it for a
-// deployment that must not expose its contract (profile §4 exposure control); the Report then marks
-// those requirements unsatisfied by choice. Service.Contract is still derived.
+// GET /benzene/spec route (R5) are not mounted. Use it for a deployment that must not expose its
+// contract (profile §4 exposure control); the Report then marks R5 unsatisfied by choice.
+// Service.Contract is still derived.
 func WithoutDescriptor() Option { return func(c *config) { c.descriptor = false } }
 
 // New assembles a Cloud Service named serviceName from registry (with its handlers already

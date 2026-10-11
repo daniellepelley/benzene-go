@@ -129,7 +129,8 @@ type Placement struct {
 
 // Profile is a conformance-profile self-assessment (contract-document.md §1): Name is the profile
 // ("cloud-service" for the Cloud Service Profile) and Missing the requirement ids the service's own
-// wiring knows it does not meet. It reflects wiring, not runtime health.
+// wiring knows it does not meet - for cloud-service, ids from R1-R5 and R7 only
+// (cloud-service-profile.md §5), omitted when none. It reflects wiring, not runtime health.
 type Profile struct {
 	Name    string   `json:"name"`
 	Missing []string `json:"missing,omitempty"`

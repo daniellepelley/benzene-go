@@ -227,13 +227,13 @@ func TestDerive_DeploymentFieldsAreCarriedAndOutsideBothHashes(t *testing.T) {
 	placed, err := Derive(registry, NewOutboundRegistry(), Info{
 		Service:   "s",
 		Placement: &Placement{Cloud: "aws", Region: "eu-west-1"},
-		Profile:   &Profile{Name: "cloud-service", Missing: []string{"R6"}},
+		Profile:   &Profile{Name: "cloud-service", Missing: []string{"R3"}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(placed)
-	for _, want := range []string{`"placement":{"cloud":"aws","region":"eu-west-1"}`, `"profile":{"name":"cloud-service","missing":["R6"]}`} {
+	for _, want := range []string{`"placement":{"cloud":"aws","region":"eu-west-1"}`, `"profile":{"name":"cloud-service","missing":["R3"]}`} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("%s lacks %s", raw, want)
 		}

@@ -61,9 +61,10 @@ type AnnouncerOptions struct {
 	OnSendFailure func(topic string, result benzene.Result[json.RawMessage])
 }
 
-// Announcer is the service side of registration and heartbeats (mesh.md §2, §5, the Cloud Service
-// Profile's R6): it registers the service's Contract Document with a collector over any Sender and
-// heartbeats the registered document's registrationHash with the service's aggregate health.
+// Announcer is the service side of registration and heartbeats (mesh.md §2, §5 - part of the
+// meshed-service claim's M1, §7.1): it registers the service's Contract Document with a collector
+// over any Sender and heartbeats the registered document's registrationHash with the service's
+// aggregate health.
 //
 // Both feeds are best-effort. A failed registration or heartbeat is reported by the bool the method
 // returns and otherwise dropped - an unreachable collector reduces the mesh, never the service - and

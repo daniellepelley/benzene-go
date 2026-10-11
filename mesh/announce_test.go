@@ -103,7 +103,7 @@ func TestAnnouncer_RegistersTheContractDocument(t *testing.T) {
 	doc := derivedDocument(t, outbound, contract.Info{
 		Service: "orders", ServiceVersion: "1.4.2", VersionScheme: "semver",
 		Placement: &Placement{Cloud: "self-hosted"},
-		Profile:   &contract.Profile{Name: "cloud-service", Missing: []string{"R8"}},
+		Profile:   &contract.Profile{Name: "cloud-service", Missing: []string{"R3"}},
 	})
 	sender := &collectorSender{}
 	announcer := NewAnnouncer(sender, doc, AnnouncerOptions{InstanceID: "orders-1"})

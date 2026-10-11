@@ -67,8 +67,13 @@ func TestNew_ServesReservedSurfaceAndAppRoutes(t *testing.T) {
 	if svc.Contract.Service != "greeter" || svc.Contract.ServiceVersion != "1.0.0" || svc.Contract.RegistrationHash == "" || svc.Contract.Runtime != "go" {
 		t.Errorf("contract = %+v, want service greeter/1.0.0 on go with a hash", svc.Contract)
 	}
-	if p := svc.Contract.Profile; p == nil || p.Name != "cloud-service" || strings.Join(p.Missing, ",") != "R6,R8" {
-		t.Errorf("profile = %+v, want cloud-service missing R6 and R8", p)
+	// New wires the whole profile, so profile.missing is omitted - and the meshed-service M1/M2,
+	// which New does not wire, are never listed there.
+	if p := svc.Contract.Profile; p == nil || p.Name != "cloud-service" || p.Missing != nil {
+		t.Errorf("profile = %+v, want cloud-service with no missing", p)
+	}
+	if raw, _ := json.Marshal(svc.Contract.Profile); string(raw) != `{"name":"cloud-service"}` {
+		t.Errorf("profile JSON = %s, want missing omitted", raw)
 	}
 
 	// R3: health over HTTP.
@@ -114,14 +119,16 @@ func TestNew_ServesReservedSurfaceAndAppRoutes(t *testing.T) {
 		t.Errorf("POST /greet = %d %s, want 200 with 'hi Bo'", rec.Code, rec.Body)
 	}
 
-	// New wires the synchronous HTTP surface (R1-R5, R7) but deliberately not R6's outbound feeds or
-	// R8, so the honest report is NOT fully satisfied - it names exactly what remains.
-	if svc.Report.Satisfied() {
-		t.Error("report.Satisfied() = true, want false - New alone does not wire R6 feeds or R8")
+	// New wires the whole profile (R1-R5, R7) but deliberately not the meshed-service claim's M1
+	// feeds or M2 propagation: the profile is satisfied, the mesh section names exactly what remains.
+	if !svc.Report.Satisfied() || len(svc.Report.Unsatisfied()) != 0 {
+		t.Errorf("profile Satisfied() = false (unsatisfied %+v), want the whole profile wired", svc.Report.Unsatisfied())
 	}
-	unsat := requirementIDs(svc.Report.Unsatisfied())
-	if !unsat["R6"] || !unsat["R8"] || unsat["R5"] {
-		t.Errorf("Unsatisfied() = %+v, want R6 and R8 (R5 satisfied - descriptor is on)", svc.Report.Unsatisfied())
+	if svc.Report.Mesh.Satisfied() || svc.Report.Meshed() {
+		t.Error("Mesh.Satisfied()/Meshed() = true, want false - New alone does not wire M1 feeds or M2")
+	}
+	if got := requirementIDs(svc.Report.Mesh.Unsatisfied()); len(got) != 2 || !got["M1"] || !got["M2"] {
+		t.Errorf("Mesh.Unsatisfied() = %+v, want M1 and M2", svc.Report.Mesh.Unsatisfied())
 	}
 }
 
@@ -147,7 +154,7 @@ func TestNew_DerivationErrorsFailBeforeServing(t *testing.T) {
 	}
 }
 
-func TestNew_WithoutDescriptorDisablesR5R6(t *testing.T) {
+func TestNew_WithoutDescriptorDisablesR5(t *testing.T) {
 	svc := mustNew(t, "greeter", newRegistry(t), WithoutDescriptor())
 
 	// /benzene/spec is not mounted -> falls through to the app router as an unrouted GET -> 404.
@@ -161,13 +168,16 @@ func TestNew_WithoutDescriptorDisablesR5R6(t *testing.T) {
 		}
 	}
 
-	// With the self-description off, R5 joins R6 and R8 as unsatisfied - and the derived document says so.
-	if p := svc.Contract.Profile; strings.Join(p.Missing, ",") != "R5,R6,R8" {
-		t.Errorf("profile missing = %v, want R5, R6, R8", p.Missing)
+	// With the self-description off, R5 is the one unsatisfied profile requirement - and the derived
+	// document says so, with no meshed-service id beside it.
+	if p := svc.Contract.Profile; strings.Join(p.Missing, ",") != "R5" {
+		t.Errorf("profile missing = %v, want [R5]", p.Missing)
 	}
-	unsat := requirementIDs(svc.Report.Unsatisfied())
-	if !unsat["R5"] || !unsat["R6"] || !unsat["R8"] {
-		t.Errorf("Unsatisfied() = %+v, want R5, R6, R8 when the descriptor is disabled", svc.Report.Unsatisfied())
+	if svc.Report.Satisfied() {
+		t.Error("Satisfied() = true, want false when the descriptor is disabled")
+	}
+	if unsat := requirementIDs(svc.Report.Unsatisfied()); len(unsat) != 1 || !unsat["R5"] {
+		t.Errorf("Unsatisfied() = %+v, want only R5 when the descriptor is disabled", svc.Report.Unsatisfied())
 	}
 }
 
@@ -238,12 +248,20 @@ func TestNew_WithProducesDeclaresEventsAndSendsElseDegrades(t *testing.T) {
 func TestProfileReport_StringForNewBuild(t *testing.T) {
 	svc := mustNew(t, "greeter", newRegistry(t))
 	s := svc.Report.String()
-	// Descriptor on: R1-R5 and R7 wired, R6 and R8 not - 6 of 8.
-	if !strings.Contains(s, "6/8 requirements wired") || !strings.Contains(s, "R4") {
-		t.Errorf("report String() = %q, want a 6/8 header and the R-numbered list", s)
+	// Descriptor on: R1-R5 and R7 all wired (6 of 6); the meshed-service M1 and M2 not (0 of 2).
+	if !strings.Contains(s, "Cloud Service Profile: 6/6 requirements wired") || !strings.Contains(s, "R4") {
+		t.Errorf("report String() = %q, want a 6/6 profile header and the R-numbered list", s)
 	}
-	if requirementByID(svc.Report, "R6").Satisfied || requirementByID(svc.Report, "R8").Satisfied {
-		t.Error("R6 and R8 must be unsatisfied for a New-only build")
+	if !strings.Contains(s, "Meshed service (mesh §7.1): 0/2 requirements wired") || !strings.Contains(s, "M2") {
+		t.Errorf("report String() = %q, want a 0/2 meshed-service header and the M-numbered list", s)
+	}
+	// The profile's ids are R1-R5 and R7; R6 and R8 are retired and never reused.
+	var ids []string
+	for _, req := range svc.Report.Requirements {
+		ids = append(ids, req.ID)
+	}
+	if strings.Join(ids, ",") != "R1,R2,R3,R4,R5,R7" {
+		t.Errorf("profile requirement ids = %v, want R1-R5, R7", ids)
 	}
 	// R4 is the envelope endpoint (not R2 - R2 is the registry-handlers requirement).
 	if !strings.Contains(requirementByID(svc.Report, "R4").Detail, "/benzene/invoke") {
@@ -252,19 +270,27 @@ func TestProfileReport_StringForNewBuild(t *testing.T) {
 }
 
 func TestProfileReport_AllSatisfied(t *testing.T) {
-	// Exercise the fully-satisfied path (New alone never reaches it, since R6/R8 are the app's to wire).
-	report := ProfileReport{Requirements: []Requirement{
-		{ID: "R1", Name: "a", Satisfied: true, Detail: "d"},
-		{ID: "R2", Name: "b", Satisfied: true, Detail: "d"},
-	}}
-	if !report.Satisfied() {
-		t.Error("Satisfied() = false, want true when every requirement is wired")
+	// Exercise the fully-meshed path (New alone never reaches it, since M1/M2 are the app's to wire).
+	report := ProfileReport{
+		Requirements: []Requirement{
+			{ID: "R1", Name: "a", Satisfied: true, Detail: "d"},
+			{ID: "R2", Name: "b", Satisfied: true, Detail: "d"},
+		},
+		Mesh: MeshedReport{Requirements: []Requirement{{ID: "M1", Name: "c", Satisfied: true, Detail: "d"}}},
 	}
-	if len(report.Unsatisfied()) != 0 {
-		t.Errorf("Unsatisfied() = %+v, want empty", report.Unsatisfied())
+	if !report.Satisfied() || !report.Mesh.Satisfied() || !report.Meshed() {
+		t.Error("Satisfied()/Mesh.Satisfied()/Meshed() = false, want true when every requirement is wired")
 	}
-	if !strings.Contains(report.String(), "2/2 requirements wired") {
-		t.Errorf("String() = %q, want a 2/2 header", report.String())
+	if len(report.Unsatisfied()) != 0 || len(report.Mesh.Unsatisfied()) != 0 {
+		t.Errorf("Unsatisfied() = %+v / %+v, want empty", report.Unsatisfied(), report.Mesh.Unsatisfied())
+	}
+	if !strings.Contains(report.String(), "2/2 requirements wired") || !strings.Contains(report.String(), "1/1 requirements wired") {
+		t.Errorf("String() = %q, want 2/2 and 1/1 headers", report.String())
+	}
+	// A wired mesh does not make an unwired profile meshed.
+	report.Requirements[1].Satisfied = false
+	if report.Meshed() {
+		t.Error("Meshed() = true with R2 unwired, want false - a meshed service is a Cloud Service first")
 	}
 }
 

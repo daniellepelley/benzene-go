@@ -88,16 +88,25 @@ func or2(v, fallback string) string {
 	return v
 }
 
-// verdictOf returns the verdict for requirement id in the report.
+// verdictOf returns the verdict for requirement id in the report - a profile requirement or a
+// meshed-service one.
 func verdictOf(t *testing.T, report *Report, id string) Requirement {
 	t.Helper()
-	for _, req := range report.Requirements {
+	for _, req := range append(append([]Requirement{}, report.Requirements...), report.Mesh...) {
 		if req.ID == id {
 			return req
 		}
 	}
 	t.Fatalf("requirement %s not found in report", id)
 	return Requirement{}
+}
+
+func ids(reqs []Requirement) string {
+	var out []string
+	for _, req := range reqs {
+		out = append(out, req.ID)
+	}
+	return strings.Join(out, ",")
 }
 
 func assertVerdict(t *testing.T, report *Report, id string, want Verdict) {
@@ -107,27 +116,38 @@ func assertVerdict(t *testing.T, report *Report, id string, want Verdict) {
 	}
 }
 
-func TestRun_FullyConformantIsSatisfiedExceptStructurallyUnobservable(t *testing.T) {
+func TestRun_FullyConformantProfileIsSatisfiedAndMeshIsReportedApart(t *testing.T) {
 	svc := &fakeService{}
 	report := Run(context.Background(), nil, svc.start(t))
 
-	for _, id := range []string{"R1", "R2", "R3", "R4", "R5", "R6", "R7"} {
+	// The profile is R1-R5 and R7 - R6 and R8 are retired ids, never reused - and every one of them
+	// is observable from outside, so a conformant service is fully conformant.
+	if got := ids(report.Requirements); got != "R1,R2,R3,R4,R5,R7" {
+		t.Errorf("profile requirement ids = %s, want R1,R2,R3,R4,R5,R7", got)
+	}
+	for _, id := range []string{"R1", "R2", "R3", "R4", "R5", "R7"} {
 		assertVerdict(t, report, id, Satisfied)
 	}
-	// R8 is never observable by a single-service probe; with the default traceparent probe on and
-	// R4/R6 both passing, its reason carries the labeled weak non-breakage note.
-	assertVerdict(t, report, "R8", Inconclusive)
-	if !strings.Contains(verdictOf(t, report, "R8").Reason, "weak bonus signal") {
-		t.Errorf("R8 reason = %q, want the weak-bonus-signal note", verdictOf(t, report, "R8").Reason)
+	if !report.IsFullyConformant() {
+		t.Errorf("IsFullyConformant() = false, want true for a conformant service: %+v", report.Requirements)
 	}
-	if len(report.Requirements) != 8 {
-		t.Errorf("report has %d requirements, want 8", len(report.Requirements))
+	if got := report.Inconclusive(); len(got) != 0 {
+		t.Errorf("Inconclusive() = %v, want none - the meshed-service claim is not part of it", got)
 	}
-	if report.IsFullyConformant() {
-		t.Error("IsFullyConformant() = true, want false - R8 is inherently inconclusive")
+
+	// The meshed-service claim is reported apart: M1 and M2 are never observable by a single-service
+	// probe. With the default traceparent probe on and both envelope calls passing, M2's reason
+	// carries the labeled weak non-breakage note.
+	if got := ids(report.Mesh); got != "M1,M2" {
+		t.Errorf("mesh requirement ids = %s, want M1,M2", got)
 	}
-	if got := report.Inconclusive(); len(got) != 1 || got[0] != "R8" {
-		t.Errorf("Inconclusive() = %v, want [R8]", got)
+	assertVerdict(t, report, "M1", Inconclusive)
+	assertVerdict(t, report, "M2", Inconclusive)
+	if !strings.Contains(verdictOf(t, report, "M2").Reason, "weak bonus signal") {
+		t.Errorf("M2 reason = %q, want the weak-bonus-signal note", verdictOf(t, report, "M2").Reason)
+	}
+	if !strings.Contains(verdictOf(t, report, "M1").Reason, "which is R5, not M1") {
+		t.Errorf("M1 reason = %q, want the note that the served document is R5's evidence", verdictOf(t, report, "M1").Reason)
 	}
 	if got := report.NotSatisfied(); len(got) != 0 {
 		t.Errorf("NotSatisfied() = %v, want none", got)
@@ -149,10 +169,16 @@ func TestRun_UnreachableServiceIsHonestlyNotSatisfied(t *testing.T) {
 	assertVerdict(t, report, "R3", NotSatisfied)
 	assertVerdict(t, report, "R4", NotSatisfied)
 	assertVerdict(t, report, "R5", NotSatisfied)
-	assertVerdict(t, report, "R6", NotSatisfied)
 	assertVerdict(t, report, "R2", Inconclusive) // no contract document to read requests from
-	assertVerdict(t, report, "R7", NotSatisfied) // default paths, but R3-R6 failed there
-	assertVerdict(t, report, "R8", Inconclusive)
+	assertVerdict(t, report, "R7", NotSatisfied) // default paths, but R3-R5 failed there
+	if got := report.NotSatisfied(); strings.Join(got, ",") != "R1,R3,R4,R5,R7" {
+		t.Errorf("NotSatisfied() = %v, want [R1 R3 R4 R5 R7]", got)
+	}
+	assertVerdict(t, report, "M1", Inconclusive)
+	assertVerdict(t, report, "M2", Inconclusive)
+	if strings.Contains(verdictOf(t, report, "M1").Reason, "which is R5") {
+		t.Errorf("M1 reason = %q, want no served-document note when benzene:spec was unreachable", verdictOf(t, report, "M1").Reason)
+	}
 }
 
 func TestRun_MalformedBaseURLIsNotSatisfiedNotPanic(t *testing.T) {
@@ -201,26 +227,38 @@ func TestRun_Spec(t *testing.T) {
 	})
 }
 
-func TestRun_SelfDescription(t *testing.T) {
-	t.Run("a document without a service field fails R6 and leaves R2 inconclusive", func(t *testing.T) {
+// R5's topic half: the service answers the reserved benzene:spec topic with its contract document on
+// every transport - observed here over the envelope endpoint.
+func TestRun_SpecTopic(t *testing.T) {
+	t.Run("a document without a service field fails R5 and leaves R2 inconclusive", func(t *testing.T) {
 		report := Run(context.Background(), nil, (&fakeService{specTopicBody: `{"statusCode":"200","headers":{},"body":"{\"requests\":[]}"}`}).start(t))
-		assertVerdict(t, report, "R6", NotSatisfied)
+		assertVerdict(t, report, "R5", NotSatisfied)
 		assertVerdict(t, report, "R2", Inconclusive)
 	})
-	t.Run("a document with zero requests satisfies R6 but leaves R2 inconclusive", func(t *testing.T) {
+	t.Run("a document with zero requests satisfies R5 but leaves R2 inconclusive", func(t *testing.T) {
 		report := Run(context.Background(), nil, (&fakeService{specTopicBody: `{"statusCode":"200","headers":{},"body":"{\"service\":\"orders\",\"requests\":[]}"}`}).start(t))
-		assertVerdict(t, report, "R6", Satisfied)
+		assertVerdict(t, report, "R5", Satisfied)
 		assertVerdict(t, report, "R2", Inconclusive)
+		if report.IsFullyConformant() {
+			t.Error("IsFullyConformant() = true with R2 inconclusive, want false")
+		}
 	})
-	t.Run("non-200 on the benzene:spec topic fails R6", func(t *testing.T) {
+	t.Run("non-200 on the benzene:spec topic fails R5 even with GET /benzene/spec serving", func(t *testing.T) {
 		report := Run(context.Background(), nil, (&fakeService{specTopicStatus: 404}).start(t))
-		assertVerdict(t, report, "R6", NotSatisfied)
+		req := verdictOf(t, report, "R5")
+		if req.Verdict != NotSatisfied || !strings.Contains(req.Reason, "returned 404") || !strings.Contains(req.Reason, "HTTP: GET /benzene/spec returned 200") {
+			t.Errorf("R5 = %+v, want NotSatisfied naming the topic's 404 beside the passing GET", req)
+		}
+		assertVerdict(t, report, "R7", NotSatisfied)
+		if !strings.Contains(verdictOf(t, report, "M2").Reason, "even the weak non-breakage signal is absent") {
+			t.Errorf("M2 reason = %q, want the bonus-absent note", verdictOf(t, report, "M2").Reason)
+		}
 	})
-	t.Run("a benzene:spec envelope that is not the {statusCode,headers,body} shape fails R6", func(t *testing.T) {
+	t.Run("a benzene:spec envelope that is not the {statusCode,headers,body} shape fails R5", func(t *testing.T) {
 		report := Run(context.Background(), nil, (&fakeService{specTopicBody: `{"not":"an envelope"}`}).start(t))
-		req := verdictOf(t, report, "R6")
+		req := verdictOf(t, report, "R5")
 		if req.Verdict != NotSatisfied || !strings.Contains(req.Reason, "envelope shape") {
-			t.Errorf("R6 = %+v, want NotSatisfied about the envelope shape", req)
+			t.Errorf("R5 = %+v, want NotSatisfied about the envelope shape", req)
 		}
 	})
 }
@@ -232,16 +270,19 @@ func TestRun_NonDefaultPathsMakeR7Inconclusive(t *testing.T) {
 	assertVerdict(t, report, "R3", Satisfied)
 	// ...but R7 can no longer tell what the service's own default is.
 	assertVerdict(t, report, "R7", Inconclusive)
+	if got := report.Inconclusive(); strings.Join(got, ",") != "R7" {
+		t.Errorf("Inconclusive() = %v, want [R7]", got)
+	}
 }
 
 func TestRun_CustomInvokeAndSpecPathsAreUsed(t *testing.T) {
 	svc := &fakeService{invokePath: "/api/invoke", specPath: "/api/spec"}
 	report := Run(context.Background(), nil, svc.start(t),
 		WithInvokePath("/api/invoke"), WithSpecPath("/api/spec"))
-	// The probe used the overrides, so invoke, spec, and benzene:spec (also on the invoke path) still check out.
+	// The probe used the overrides, so invoke and both halves of R5 (benzene:spec on the invoke path,
+	// GET on the spec path) still check out.
 	assertVerdict(t, report, "R4", Satisfied)
 	assertVerdict(t, report, "R5", Satisfied)
-	assertVerdict(t, report, "R6", Satisfied)
 	// But R7 can't tell what the service itself defaults to once pointed at non-default paths.
 	assertVerdict(t, report, "R7", Inconclusive)
 }
@@ -249,9 +290,9 @@ func TestRun_CustomInvokeAndSpecPathsAreUsed(t *testing.T) {
 func TestRun_WithoutTraceParentProbe(t *testing.T) {
 	svc := &fakeService{}
 	report := Run(context.Background(), nil, svc.start(t), WithoutTraceParentProbe())
-	r8 := verdictOf(t, report, "R8")
-	if r8.Verdict != Inconclusive || strings.Contains(r8.Reason, "bonus") {
-		t.Errorf("R8 = %+v, want plain Inconclusive with no bonus note when the traceparent probe is off", r8)
+	m2 := verdictOf(t, report, "M2")
+	if m2.Verdict != Inconclusive || strings.Contains(m2.Reason, "bonus") {
+		t.Errorf("M2 = %+v, want plain Inconclusive with no bonus note when the traceparent probe is off", m2)
 	}
 	if svc.sawInvoke && svc.lastTraceparent != "" {
 		t.Errorf("traceparent = %q, want none when WithoutTraceParentProbe is set", svc.lastTraceparent)
@@ -261,9 +302,9 @@ func TestRun_WithoutTraceParentProbe(t *testing.T) {
 func TestRun_TraceParentBonusAbsentWhenACallFails(t *testing.T) {
 	// traceparent probe is on (default) but invoke fails, so even the weak non-breakage signal is gone.
 	report := Run(context.Background(), nil, (&fakeService{invokeStatus: 500}).start(t))
-	r8 := verdictOf(t, report, "R8")
-	if !strings.Contains(r8.Reason, "even the weak non-breakage signal is absent") {
-		t.Errorf("R8 reason = %q, want the bonus-absent note", r8.Reason)
+	m2 := verdictOf(t, report, "M2")
+	if !strings.Contains(m2.Reason, "even the weak non-breakage signal is absent") {
+		t.Errorf("M2 reason = %q, want the bonus-absent note", m2.Reason)
 	}
 }
 

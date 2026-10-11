@@ -7,51 +7,71 @@ import (
 	"github.com/daniellepelley/benzene-go/contract"
 )
 
-// Requirement is one Cloud Service Profile requirement (R1-R8 of
-// docs/specification/cloud-service-profile.md §2) and whether New's wiring provides it.
+// Requirement is one requirement - a Cloud Service Profile requirement (R1-R5, R7 of
+// docs/specification/cloud-service-profile.md §2) or a meshed-service requirement (M1, M2 of
+// docs/specification/mesh.md §7.1) - and whether New's wiring provides it.
 type Requirement struct {
-	ID        string // "R1".."R8"
+	ID        string // "R1".."R5", "R7"; or "M1", "M2" in the Mesh report
 	Name      string
 	Satisfied bool
 	Detail    string
 }
 
-// ProfileReport is the wiring self-check: which of the profile's R1-R8 requirements New actually
-// wired. It is derived from the builder configuration, not from probing a running service (that is
-// cloudserviceprobe's job, from outside) - so it answers "how far did this builder get me?", cheaply,
-// at startup, and honestly.
+// ProfileReport is the wiring self-check: which of the Cloud Service Profile's requirements (R1-R5,
+// R7) New actually wired, and - separately, in Mesh - how far the wiring gets towards the
+// meshed-service claim (M1, M2). It is derived from the builder configuration, not from probing a
+// running service (that is cloudserviceprobe's job, from outside) - so it answers "how far did this
+// builder get me?", cheaply, at startup, and honestly.
 //
-// New wires the synchronous HTTP surface (R1-R5, R7) and R6's self-description on benzene:spec. It
-// deliberately does NOT wire R6's three feeds (registration, heartbeats, traces) or R8 (trace-context
-// propagation): those need a
-// mesh collector + push-exporter lifecycle and outbound client decorators the app owns. So for a
-// New-only assembly Satisfied() is false by design, and Unsatisfied() is the exact to-do list an
-// operator must complete (add the mesh feeds and trace propagation) to be fully profile-conformant.
-// This mirrors .NET's CloudServiceProfileReport evaluating the wiring against all of R1-R8, rather
-// than quietly reporting the HTTP surface as if it were the whole profile. New carries the report on
-// the Contract Document as its profile (Profile).
+// New wires the whole profile: the synchronous HTTP surface and the derived Contract Document on
+// benzene:spec (R1-R5, R7), so Satisfied() is true for a New-only assembly unless WithoutDescriptor
+// takes R5 away. New carries the profile half on the Contract Document as its profile field
+// (Profile); M1 and M2 are never listed there - they are not profile requirements.
+//
+// Being meshed is a separate claim (mesh.md §7.1): the profile plus M1 (registration, heartbeats,
+// traces to a collector) and M2 (trace-context propagation). New deliberately wires neither - they
+// need a collector, a push-exporter lifecycle and outbound client decorators the app owns - so
+// Mesh.Satisfied() is false for a New-only build and Mesh.Unsatisfied() is the to-do list.
 type ProfileReport struct {
+	// Requirements holds the Cloud Service Profile requirements, R1-R5 and R7, in order.
+	Requirements []Requirement
+	// Mesh is the meshed-service claim's requirements, M1 and M2, reported apart from the profile.
+	Mesh MeshedReport
+}
+
+// MeshedReport is the meshed-service half of the wiring self-check: M1 (service-side feeds) and M2
+// (trace-context propagation) of mesh.md §7.1, formerly the profile's R6 and R8.
+type MeshedReport struct {
+	// Requirements holds M1 and M2, in order.
 	Requirements []Requirement
 }
 
-// Satisfied reports whether every profile requirement (R1-R8) is wired. It is false for a New-only
-// assembly (R6's feeds and R8 are not this builder's to wire) - see Unsatisfied for what
-// remains.
-func (r ProfileReport) Satisfied() bool {
-	for _, req := range r.Requirements {
-		if !req.Satisfied {
-			return false
-		}
-	}
-	return true
-}
+// Satisfied reports whether every profile requirement (R1-R5, R7) is wired. It says nothing about
+// the meshed-service claim - see Meshed and Mesh for that.
+func (r ProfileReport) Satisfied() bool { return allSatisfied(r.Requirements) }
+
+// Unsatisfied lists the profile requirements (R1-R5, R7) not wired - the to-do list for profile
+// conformance, and exactly the Contract Document's profile.missing. Empty means the wiring covers
+// the whole profile. M1 and M2 are never listed here; see Mesh.Unsatisfied.
+func (r ProfileReport) Unsatisfied() []Requirement { return unsatisfied(r.Requirements) }
+
+// Meshed reports whether the wiring makes the meshed-service claim: the whole profile plus M1 and
+// M2 (mesh.md §7.1). Always false for a New-only build.
+func (r ProfileReport) Meshed() bool { return r.Satisfied() && r.Mesh.Satisfied() }
+
+// Satisfied reports whether M1 and M2 are both wired.
+func (m MeshedReport) Satisfied() bool { return allSatisfied(m.Requirements) }
+
+// Unsatisfied lists the meshed-service requirements (M1, M2) not wired.
+func (m MeshedReport) Unsatisfied() []Requirement { return unsatisfied(m.Requirements) }
 
 // ProfileName is the Cloud Service Profile's name in a Contract Document's profile field.
 const ProfileName = "cloud-service"
 
 // Profile returns the report as the Contract Document's profile self-assessment
-// (contract-document.md §1): the profile's name and the ids of the requirements not wired, Missing
-// omitted when none.
+// (contract-document.md §1, cloud-service-profile.md §5): the profile's name and the ids of the
+// profile requirements (R1-R5, R7) not wired, Missing omitted when none. The meshed-service
+// requirements are not part of it.
 func (r ProfileReport) Profile() *contract.Profile {
 	profile := &contract.Profile{Name: ProfileName}
 	for _, req := range r.Unsatisfied() {
@@ -60,11 +80,44 @@ func (r ProfileReport) Profile() *contract.Profile {
 	return profile
 }
 
-// Unsatisfied lists the requirements not wired - the to-do list for full profile conformance. Empty
-// means the wiring covers all of R1-R8.
-func (r ProfileReport) Unsatisfied() []Requirement {
+// String renders a one-line-per-requirement summary for logging at startup: the profile, then the
+// meshed-service claim.
+func (r ProfileReport) String() string {
+	var b strings.Builder
+	writeSection(&b, "Cloud Service Profile", r.Requirements)
+	writeSection(&b, "Meshed service (mesh §7.1)", r.Mesh.Requirements)
+	return b.String()
+}
+
+func writeSection(b *strings.Builder, title string, reqs []Requirement) {
+	satisfied := 0
+	for _, req := range reqs {
+		if req.Satisfied {
+			satisfied++
+		}
+	}
+	fmt.Fprintf(b, "%s: %d/%d requirements wired by this builder\n", title, satisfied, len(reqs))
+	for _, req := range reqs {
+		mark := "x"
+		if req.Satisfied {
+			mark = "ok"
+		}
+		fmt.Fprintf(b, "  [%2s] %-3s %-28s - %s\n", mark, req.ID, req.Name, req.Detail)
+	}
+}
+
+func allSatisfied(reqs []Requirement) bool {
+	for _, req := range reqs {
+		if !req.Satisfied {
+			return false
+		}
+	}
+	return true
+}
+
+func unsatisfied(reqs []Requirement) []Requirement {
 	var out []Requirement
-	for _, req := range r.Requirements {
+	for _, req := range reqs {
 		if !req.Satisfied {
 			out = append(out, req)
 		}
@@ -72,49 +125,26 @@ func (r ProfileReport) Unsatisfied() []Requirement {
 	return out
 }
 
-// String renders a one-line-per-requirement summary for logging at startup.
-func (r ProfileReport) String() string {
-	satisfied := 0
-	for _, req := range r.Requirements {
-		if req.Satisfied {
-			satisfied++
-		}
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "Cloud Service Profile: %d/%d requirements wired by this builder\n", satisfied, len(r.Requirements))
-	for _, req := range r.Requirements {
-		mark := "x"
-		if req.Satisfied {
-			mark = "ok"
-		}
-		fmt.Fprintf(&b, "  [%2s] %-3s %-28s - %s\n", mark, req.ID, req.Name, req.Detail)
-	}
-	return b.String()
-}
-
-// buildReport evaluates R1-R8 against the builder configuration.
+// buildReport evaluates R1-R5 and R7, and the meshed-service M1 and M2, against the builder
+// configuration.
 func buildReport(cfg config) ProfileReport {
-	specDetail := "registry-derived Contract Document on benzene:spec, served at /benzene/spec through the pipeline"
+	specDetail := "registry-derived Contract Document on benzene:spec (every transport), served at /benzene/spec through the pipeline"
 	if !cfg.descriptor {
 		specDetail = "disabled by WithoutDescriptor (profile §4 exposure control)"
 	}
 
-	r6Detail := "self-description on benzene:spec wired, but the three feeds (register, heartbeats, " +
-		"traces) are not wired by this builder - run a mesh.Announcer over Service.Contract and " +
-		"mesh.TraceMiddleware with a PushExporter"
-	if !cfg.descriptor {
-		r6Detail = "not wired: self-description disabled (WithoutDescriptor), and register/heartbeat/traces " +
-			"are not this builder's responsibility"
+	return ProfileReport{
+		Requirements: []Requirement{
+			{ID: "R1", Name: "hosted middleware pipeline", Satisfied: true, Detail: "traffic runs through the pipeline behind the HTTP binding"},
+			{ID: "R2", Name: "message handlers via registry", Satisfied: true, Detail: "application topics served by RouterMiddleware over the registry"},
+			{ID: "R3", Name: "health checks", Satisfied: true, Detail: fmt.Sprintf("%d health check(s) on benzene:healthcheck + /benzene/health", len(cfg.checks))},
+			{ID: "R4", Name: "wire-envelope invocability", Satisfied: true, Detail: "envelope endpoint at /benzene/invoke"},
+			{ID: "R5", Name: "derived spec", Satisfied: cfg.descriptor, Detail: specDetail},
+			{ID: "R7", Name: "default service-standard paths", Satisfied: true, Detail: "reserved endpoints use the /benzene/* defaults"},
+		},
+		Mesh: MeshedReport{Requirements: []Requirement{
+			{ID: "M1", Name: "mesh service-side feeds", Satisfied: false, Detail: "not wired by this builder - run a mesh.Announcer over Service.Contract (register + heartbeats) and mesh.TraceMiddleware with a PushExporter (traces)"},
+			{ID: "M2", Name: "trace-context propagation", Satisfied: false, Detail: "not wired by this builder - add mesh.TraceMiddleware (inbound join) and the client WithTraceContext (outbound forward)"},
+		}},
 	}
-
-	return ProfileReport{Requirements: []Requirement{
-		{ID: "R1", Name: "hosted middleware pipeline", Satisfied: true, Detail: "traffic runs through the pipeline behind the HTTP binding"},
-		{ID: "R2", Name: "message handlers via registry", Satisfied: true, Detail: "application topics served by RouterMiddleware over the registry"},
-		{ID: "R3", Name: "health checks", Satisfied: true, Detail: fmt.Sprintf("%d health check(s) on benzene:healthcheck + /benzene/health", len(cfg.checks))},
-		{ID: "R4", Name: "wire-envelope invocability", Satisfied: true, Detail: "envelope endpoint at /benzene/invoke"},
-		{ID: "R5", Name: "derived spec", Satisfied: cfg.descriptor, Detail: specDetail},
-		{ID: "R6", Name: "mesh service-side feeds", Satisfied: false, Detail: r6Detail},
-		{ID: "R7", Name: "default service-standard paths", Satisfied: true, Detail: "reserved endpoints use the /benzene/* defaults"},
-		{ID: "R8", Name: "trace-context propagation", Satisfied: false, Detail: "not wired by this builder - add mesh.TraceMiddleware (inbound join) and the client WithTraceContext (outbound forward)"},
-	}}
 }
