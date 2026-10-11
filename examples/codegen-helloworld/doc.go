@@ -1,8 +1,8 @@
 // Command codegen-helloworld (see main.go) dogfoods the client generator in the sibling `codegen`
 // Go module (`codegen/cmd/benzene-codegen`) against a committed Contract Document
-// (contracts/payments.spec.json - vendored verbatim from the .NET reference's
-// Benzene.Descriptor-emitted example, examples/AwsMesh/Orders/contracts/payments.spec.json in
-// daniellepelley/benzene-dotnet) - see docs/codegen-client.md for the full generator guide.
+// (contracts/payments.spec.json - the .NET reference's Benzene.Descriptor-emitted example,
+// examples/AwsMesh/Orders/contracts/payments.spec.json in daniellepelley/benzene-dotnet, re-cut to
+// the spec-0.3.0 shape; see README.md) - see docs/codegen-client.md for the full generator guide.
 //
 // paymentscapture/ is a generated, self-contained topic-scoped client (contract-document.md §5.3)
 // for the payments:capture topic only - the //go:generate directive below regenerates it. Its

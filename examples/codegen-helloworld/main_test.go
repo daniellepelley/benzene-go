@@ -70,10 +70,11 @@ func TestGeneratedClient_SendsTypedPayloadToTheRightTopic(t *testing.T) {
 // re-verified byte-for-byte after every `go generate`, see
 // codegen/gengo/dogfood_committed_test.go, which regenerates this same client from this same
 // source document and diffs it against what's committed here) by the codegen module's own
-// contractdoc.Hash, matching contract-hash-cases.json's algorithm exactly. This module (the
-// dependency-free root module) cannot import the codegen module to recompute it directly - see
-// docs/codegen-client.md - so it is pinned here as a golden value instead.
-const expectedPaymentsCaptureContractHash = "sha256:1520b2c06e9f4095f5cd993cd2a4f5ffe3b71dc0ce64f60d5e895cb269934584"
+// contractdoc.Hash - which is the root module's contract.HashDocument over the §5.3 projection,
+// matching contract-hash-cases.json's algorithm exactly. The projection itself is codegen's, which
+// this module (the dependency-free root module) cannot import - see docs/codegen-client.md - so it
+// is pinned here as a golden value instead.
+const expectedPaymentsCaptureContractHash = "sha256:fdf467cb3b1189d7b1d86a81a77fff73dbb18cc182fb7d09cf561233709409af"
 
 // TestGeneratedClient_ContractHash asserts the committed client's embedded contractHash matches
 // the expected value for the payments:capture topic-scoped projection (contract-document.md §5.3,
@@ -88,8 +89,7 @@ func TestGeneratedClient_ContractHash(t *testing.T) {
 }
 
 // TestGeneratedClient_NoReservedTopicLeaksIn asserts the generated client's requests never
-// mention a benzene:* reserved topic (payments.spec.json's benzene:spec entry must not appear),
-// per contract-document.md §5.1's domain-only default this generator applies.
+// mention a benzene:* reserved topic, per contract-document.md §5.1.
 func TestGeneratedClient_NoReservedTopicLeaksIn(t *testing.T) {
 	for _, topic := range paymentscapture.RequiredTopics {
 		if strings.HasPrefix(topic.ID, "benzene:") {

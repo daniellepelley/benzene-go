@@ -13,7 +13,7 @@ import (
 
 // ContractHash is the contract-document.md §6 contractHash this client was generated
 // from - compare it against the producing service's own hash to detect drift.
-const ContractHash = "sha256:1520b2c06e9f4095f5cd993cd2a4f5ffe3b71dc0ce64f60d5e895cb269934584"
+const ContractHash = "sha256:fdf467cb3b1189d7b1d86a81a77fff73dbb18cc182fb7d09cf561233709409af"
 
 // RequiredTopics is every topic this client sends, for a consumer's own outbound-routing
 // wiring or startup validation.

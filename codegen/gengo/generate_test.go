@@ -49,7 +49,7 @@ func TestGenerateServiceClient_DomainDefault(t *testing.T) {
 		}
 	}
 
-	// Domain-only default: benzene:spec must not appear anywhere in the generated output.
+	// A benzene: entry is never a client method (contract-document.md §5.1).
 	if strings.Contains(clientSrc, "benzene:") || strings.Contains(typesSrc, "benzene:") {
 		t.Error("reserved topic leaked into domain-only generated output")
 	}
@@ -80,14 +80,44 @@ func TestGenerateServiceClient_DomainDefault(t *testing.T) {
 		}
 	}
 
-	// contract-document.md §5.2: the include-list (and so the domain-only default, which is just
-	// its no-include-list case) scopes requests[] ONLY - components is left unnarrowed, so
-	// SpecRequest/RawStringMessage (reachable only from the excluded benzene:spec request) are
-	// still expected here. Only a §5.3 topic-scoped (atomic) projection narrows components - see
-	// TestGenerateAtomicClients_PaymentsCaptureOnly, which asserts their absence there instead.
-	for _, want := range []string{"type SpecRequest struct", "type RawStringMessage struct"} {
+	// contract-document.md §5.2: the include-list scopes requests[] ONLY - components is left
+	// unnarrowed, so a component reached only from the events/sends (OutboundShipmentBook,
+	// OutboundPaymentCaptured) is still generated here. Only a §5.3 topic-scoped (atomic)
+	// projection narrows components - see TestGenerateAtomicClients_PaymentsCaptureOnly.
+	for _, want := range []string{"type OutboundShipmentBook struct", "type OutboundPaymentCaptured struct"} {
 		if !strings.Contains(typesSrc, want) {
 			t.Errorf("types.go missing %q (components is unnarrowed for a service-level client)", want)
+		}
+	}
+
+	// The default client embeds the whole-service contractHash: the value the provider serves.
+	served, _ := contractdoc.Hash(doc)
+	if !strings.Contains(clientSrc, `const ContractHash = "`+served+`"`) {
+		t.Errorf("client.go ContractHash is not the served %s", served)
+	}
+}
+
+func TestGenerateServiceClient_AbsentResponseIsNoPayload(t *testing.T) {
+	doc, err := contractdoc.Parse([]byte(`{"schemaDialect": "openapi-3.0", "service": "s",
+		"requests": [{"topic": "orders:void", "request": {"$ref": "#/components/schemas/VoidOrder"}},
+			{"topic": "orders:any", "request": {"$ref": "#/components/schemas/VoidOrder"}, "response": {}}],
+		"components": {"schemas": {"VoidOrder": {"type": "object", "properties": {"id": {"type": "string"},
+			"previous": {"type": "object", "nullable": true, "allOf": [{"$ref": "#/components/schemas/VoidOrder"}]}}, "required": ["id", "previous"]}}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := GenerateServiceClient(doc, ServiceOptions{ServiceName: "Orders", PackageName: "orders"})
+	if err != nil {
+		t.Fatalf("GenerateServiceClient: %v", err)
+	}
+	src := files[0].Source + files[1].Source
+	for _, want := range []string{
+		"func (c *OrdersClient) VoidOrders(ctx context.Context, req VoidOrder) (benzene.Result[struct{}], error)",
+		"func (c *OrdersClient) AnyOrders(ctx context.Context, req VoidOrder) (benzene.Result[any], error)",
+		"Previous *VoidOrder `json:\"previous,omitempty\"`",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("generated source missing %q\n---\n%s", want, src)
 		}
 	}
 }
@@ -141,8 +171,8 @@ func TestGenerateAtomicClients_PaymentsCaptureOnly(t *testing.T) {
 	if strings.Contains(clientSrc, "payments:get-all") {
 		t.Error("atomic client for payments:capture must not reference payments:get-all")
 	}
-	// The closure from CapturePayment/PaymentDto does not reach Void/SpecRequest/RawStringMessage.
-	for _, notWant := range []string{"type Void struct", "SpecRequest", "RawStringMessage"} {
+	// The closure from CapturePayment/PaymentDto does not reach Void or the outbound types.
+	for _, notWant := range []string{"type Void struct", "OutboundShipmentBook", "OutboundPaymentCaptured"} {
 		if strings.Contains(typesSrc, notWant) {
 			t.Errorf("types.go unexpectedly contains %q (outside this topic's schema closure)", notWant)
 		}

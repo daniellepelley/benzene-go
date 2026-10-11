@@ -1,10 +1,6 @@
 {
-  "openapi": "3.0.1",
-  "info": {
-    "title": "payments-api",
-    "description": "",
-    "version": ""
-  },
+  "schemaDialect": "openapi-3.0",
+  "service": "payments",
   "messageEndpoint": "/benzene/invoke",
   "transports": [
     "api-gateway",
@@ -13,6 +9,8 @@
     "sns",
     "eventbridge"
   ],
+  "contractHash": "sha256:92c63e3a2f76aec2a077a55f79e98fd6e38eb8549d9bba40d799cae7edd320f6",
+  "registrationHash": "sha256:90cc5d6a2b494b05740c52636cd77ca986fa3b6784759ce0c37a1cbea8325c17",
   "requests": [
     {
       "topic": "payments:capture",
@@ -27,11 +25,6 @@
       },
       "response": {
         "$ref": "#/components/schemas/PaymentDto"
-      },
-      "example": {
-        "orderId": "value",
-        "amount": 42.42,
-        "currency": "value"
       }
     },
     {
@@ -50,51 +43,22 @@
         "items": {
           "$ref": "#/components/schemas/PaymentDto"
         }
-      },
-      "example": { }
-    },
-    {
-      "topic": "benzene:spec",
-      "reserved": true,
-      "httpMappings": [
-        {
-          "method": "get",
-          "path": "/benzene/spec"
-        }
-      ],
-      "request": {
-        "$ref": "#/components/schemas/SpecRequest"
-      },
-      "response": {
-        "$ref": "#/components/schemas/RawStringMessage"
-      },
-      "example": {
-        "type": "value",
-        "format": "value"
       }
     }
   ],
   "events": [
     {
-      "topic": "shipping:book",
-      "message": {
-        "$ref": "#/components/schemas/OutboundShipmentBook"
-      },
-      "example": {
-        "orderId": "value",
-        "carrier": "value"
-      }
-    },
-    {
       "topic": "payment:captured",
       "message": {
         "$ref": "#/components/schemas/OutboundPaymentCaptured"
-      },
-      "example": {
-        "orderId": "value",
-        "paymentId": "value",
-        "amount": 42.42,
-        "currency": "value"
+      }
+    }
+  ],
+  "sends": [
+    {
+      "topic": "shipping:book",
+      "request": {
+        "$ref": "#/components/schemas/OutboundShipmentBook"
       }
     }
   ],
@@ -179,30 +143,6 @@
             "nullable": true
           },
           "Status": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "additionalProperties": false
-      },
-      "RawStringMessage": {
-        "type": "object",
-        "properties": {
-          "Content": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "additionalProperties": false
-      },
-      "SpecRequest": {
-        "type": "object",
-        "properties": {
-          "Type": {
-            "type": "string",
-            "nullable": true
-          },
-          "Format": {
             "type": "string",
             "nullable": true
           }

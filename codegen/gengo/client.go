@@ -16,14 +16,6 @@ type ServiceOptions struct {
 	// PackageName is the Go package name for the generated files, used exactly (must be a legal
 	// Go identifier - see ValidateGoIdentifier). Required.
 	PackageName string
-	// TopicScoped selects contractdoc.Hash's topicScoped parameter: true only for a §5.3
-	// single-topic (atomic) client built over a TopicScopedProjection document (see atomic.go);
-	// false (the default) for every other shape, including a service-level client filtered by
-	// an include-list - matching the .NET reference exactly (MessageClientSdkBuilder's
-	// IsTopicScopedForHash is always false; only AtomicClientSdkBuilder's inner options set it
-	// true), since contract-document.md §6.2's whole-service reserved-entry strip applies to any
-	// non-topic-scoped projection regardless of how its requests[] were filtered.
-	TopicScoped bool
 }
 
 // GeneratedFile is one output source file.
@@ -40,6 +32,11 @@ type GeneratedFile struct {
 // contractdoc.TopicScopedProjection for the §5.3 single-topic shape - see GenerateAtomicClients).
 // Two files are returned: "types.go" (one struct per doc.Schemas() entry) and "client.go" (the
 // client type, its constructor, RequiredTopics, and one method pair per request topic).
+//
+// The client's ContractHash is doc's own contractHash (contract-document.md §6): for a default
+// (unscoped) document it equals the hash the provider serves, and for a projection it is the
+// projection's, which a drift check compares with the same projection of the provider's current
+// document (§6.4).
 func GenerateServiceClient(doc *contractdoc.Document, opts ServiceOptions) ([]GeneratedFile, error) {
 	if err := ValidateGoIdentifier(opts.PackageName); err != nil {
 		return nil, fmt.Errorf("gengo: PackageName: %w", err)
@@ -48,7 +45,7 @@ func GenerateServiceClient(doc *contractdoc.Document, opts ServiceOptions) ([]Ge
 		return nil, fmt.Errorf("gengo: ServiceName is required")
 	}
 
-	hash, err := contractdoc.Hash(doc, opts.TopicScoped)
+	hash, err := contractdoc.Hash(doc)
 	if err != nil {
 		return nil, fmt.Errorf("gengo: contract hash: %w", err)
 	}
@@ -148,7 +145,11 @@ func buildClientFile(pkg, serviceName, hash string, requests []map[string]any, c
 		reqSchema, _ := r["request"].(map[string]any)
 		respSchema, _ := r["response"].(map[string]any)
 		reqType := GoTypeName(reqSchema, catalogue)
-		respType := GoTypeName(respSchema, catalogue)
+		// An absent response is a handler that returns no payload (contract-document.md §2).
+		respType := "struct{}"
+		if contractdoc.ResponsePresent(r) {
+			respType = GoTypeName(respSchema, catalogue)
+		}
 		topicExpr := topicLiteral(r)
 
 		fmt.Fprintf(&b, "\n// %s sends %s.\nfunc (c *%s) %s(ctx context.Context, req %s) (benzene.Result[%s], error) {\n\treturn c.%sWithHeaders(ctx, req, nil)\n}\n",

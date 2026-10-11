@@ -9,11 +9,11 @@ import (
 )
 
 const testDoc = `{
-  "openapi": "3.0.1",
-  "info": {"title": "orders-api", "version": "1.0.0"},
+  "schemaDialect": "openapi-3.0",
+  "service": "orders",
   "requests": [
     {"topic": "orders:create", "request": {"$ref": "#/components/schemas/CreateOrder"}, "response": {"$ref": "#/components/schemas/OrderDto"}},
-    {"topic": "benzene:spec", "reserved": true, "request": {"$ref": "#/components/schemas/Void"}, "response": {"$ref": "#/components/schemas/Void"}}
+    {"topic": "benzene:spec", "request": {"$ref": "#/components/schemas/Void"}, "response": {"$ref": "#/components/schemas/Void"}}
   ],
   "events": [],
   "components": {"schemas": {
@@ -51,7 +51,7 @@ func TestRunBuild_ServiceMode(t *testing.T) {
 		t.Errorf("client.go missing constructor:\n%s", clientSrc)
 	}
 	if strings.Contains(string(clientSrc), `"benzene:spec"`) {
-		t.Error("domain-only default must not reference benzene:spec in client.go's methods")
+		t.Error("a benzene: entry must not become a client method")
 	}
 
 	if _, err := os.Stat(filepath.Join(outDir, "types.go")); err != nil {

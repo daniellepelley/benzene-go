@@ -11,13 +11,8 @@ import (
 // (§5.3 topic-scoped) client, mirroring AtomicClientSdkBuilder/ClientSdkOptions.
 type AtomicOptions struct {
 	// Topics is the include-list (contract-document.md §5.2): when non-empty, only these topics
-	// get an atomic client, and a reserved topic named here is admitted regardless of
-	// IncludeReserved. Empty means every domain topic (plus every reserved topic too, if
-	// IncludeReserved).
+	// get an atomic client; empty means every requests[] topic does.
 	Topics []string
-	// IncludeReserved, when Topics is empty, additionally builds an atomic client for every
-	// reserved topic instead of only domain topics.
-	IncludeReserved bool
 }
 
 // AtomicClient is one topic's self-contained generated client (contract-document.md §5.3): its
@@ -41,14 +36,10 @@ type AtomicClient struct {
 }
 
 // GenerateAtomicClients builds one AtomicClient per topic doc's ApplyScope(opts) admits (§5.2),
-// each a full §5.3 topic-scoped projection of doc (schema closure narrowed to just that topic,
-// no events, its own contract hash with reserved entries NOT stripped - see
-// ServiceOptions.TopicScoped's doc comment).
+// each a full §5.3 topic-scoped projection of doc (schema closure narrowed to just that topic, no
+// events or sends, and the projection's own contract hash).
 func GenerateAtomicClients(doc *contractdoc.Document, opts AtomicOptions) ([]AtomicClient, error) {
-	scoped, err := contractdoc.ApplyScope(doc, contractdoc.ScopeOptions{
-		Topics:          opts.Topics,
-		IncludeReserved: opts.IncludeReserved,
-	})
+	scoped, err := contractdoc.ApplyScope(doc, contractdoc.ScopeOptions{Topics: opts.Topics})
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +66,6 @@ func GenerateAtomicClients(doc *contractdoc.Document, opts AtomicOptions) ([]Ato
 		files, err := GenerateServiceClient(topicDoc, ServiceOptions{
 			ServiceName: clientName,
 			PackageName: pkgName,
-			TopicScoped: true,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("gengo: topic %q: %w", topic, err)

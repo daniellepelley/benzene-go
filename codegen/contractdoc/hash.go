@@ -1,98 +1,42 @@
 package contractdoc
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 
-	"github.com/gowebpki/jcs"
+	"github.com/daniellepelley/benzene-go/contract"
 )
 
-// HashPrefix is contractHash's fixed prefix, matching descriptorHash's convention
-// (mesh.md §2.2).
-const HashPrefix = "sha256:"
+// HashPrefix starts both hashes.
+const HashPrefix = contract.HashPrefix
 
-// Normalize implements contract-document.md §6.2's normalize() step over doc's raw JSON tree:
-// strips messageEndpoint/transports, every requests[]/events[] entry's "example", the "reserved"
-// flag itself off every surviving requests[] entry, and - only when topicScoped is false, i.e.
-// hashing a whole-service/service-level document rather than a §5.3 topic-scoped one - drops
-// every requests[] entry §5.1 detects as reserved (flag OR "benzene:" prefix) entirely, not just
-// its flag. Returns a new Document; doc itself is not mutated.
-func Normalize(doc *Document, topicScoped bool) *Document {
-	out := doc.clone()
-	delete(out, "messageEndpoint")
-	delete(out, "transports")
-
-	if requests, ok := out["requests"].([]any); ok {
-		kept := make([]any, 0, len(requests))
-		for _, entry := range requests {
-			request, ok := entry.(map[string]any)
-			if !ok {
-				kept = append(kept, entry)
-				continue
-			}
-			request = shallowCopyEntry(request)
-			delete(request, "example")
-
-			// §6.2 requires reserved-ness to be evaluated (flag OR the "benzene:" prefix, §5.1)
-			// BEFORE the "reserved" flag itself is stripped below.
-			isReserved := IsReserved(request)
-			delete(request, "reserved")
-
-			if isReserved && !topicScoped {
-				continue
-			}
-			kept = append(kept, request)
-		}
-		out["requests"] = kept
+// Hashes computes doc's contractHash and registrationHash (contract-document.md §6) - by the root
+// module's contract.HashDocument, the same code a serving Benzene service hashes its own document
+// with, so the value a generated client embeds and the value a provider serves come from one
+// implementation. The hashes are of doc as it stands: hash a projection (ApplyScope,
+// TopicScopedProjection) to get that projection's hashes.
+func Hashes(doc *Document) (contractHash, registrationHash string, err error) {
+	raw, err := doc.MarshalJSON()
+	if err != nil {
+		return "", "", fmt.Errorf("contractdoc: hash: %w", err)
 	}
-
-	if events, ok := out["events"].([]any); ok {
-		kept := make([]any, 0, len(events))
-		for _, entry := range events {
-			event, ok := entry.(map[string]any)
-			if !ok {
-				kept = append(kept, entry)
-				continue
-			}
-			event = shallowCopyEntry(event)
-			delete(event, "example")
-			kept = append(kept, event)
-		}
-		out["events"] = kept
-	}
-
-	return &Document{Data: out}
+	return contract.HashDocument(raw)
 }
 
-func shallowCopyEntry(m map[string]any) map[string]any {
-	out := make(map[string]any, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
-	return out
+// Hash returns doc's contractHash - the value a generated client embeds (contract-document.md
+// §6.1).
+func Hash(doc *Document) (string, error) {
+	contractHash, _, err := Hashes(doc)
+	return contractHash, err
 }
 
-// Hash computes doc's contractHash (contract-document.md §6.2):
-//
-//	"sha256:" + lowercase-hex(sha256(canonicalJSON(normalize(document))))
-//
-// canonicalJSON is RFC 8785 (JCS), via github.com/gowebpki/jcs. topicScoped selects which of
-// normalize()'s two reserved-entry behaviors applies - see Normalize's doc comment; pass true
-// only for a §5.3 topic-scoped (single-topic) document, false for every other projection
-// (whole-service, or a service-level client filtered by an include-list, §5.2).
-func Hash(doc *Document, topicScoped bool) (string, error) {
-	normalized, err := json.Marshal(Normalize(doc, topicScoped).Data)
+// withHashes returns out with contractHash and registrationHash recomputed over it: a projection
+// carries its own hashes, never the provider's (contract-document.md §5.2, §5.3).
+func withHashes(out map[string]any) (*Document, error) {
+	doc := &Document{Data: out}
+	contractHash, registrationHash, err := Hashes(doc)
 	if err != nil {
-		return "", fmt.Errorf("contractdoc: hash: marshal normalized document: %w", err)
+		return nil, err
 	}
-
-	canonical, err := jcs.Transform(normalized)
-	if err != nil {
-		return "", fmt.Errorf("contractdoc: hash: canonicalize: %w", err)
-	}
-
-	sum := sha256.Sum256(canonical)
-	return HashPrefix + hex.EncodeToString(sum[:]), nil
+	out["contractHash"], out["registrationHash"] = contractHash, registrationHash
+	return doc, nil
 }

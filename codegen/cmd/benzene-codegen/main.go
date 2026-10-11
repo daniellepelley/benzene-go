@@ -8,8 +8,8 @@
 //	benzene-codegen build -file contracts/payments.spec.json -out ./payments -package payments -service Payments
 //	benzene-codegen build -file contracts/payments.spec.json -out ./paymentscapture -mode topic -topics payments:capture
 //
-// Exits non-zero (with a message on stderr) on an unknown flag, an unparseable document, or an
-// unknown topic named in -topics.
+// Exits non-zero (with a message on stderr) on an unknown flag, an unparseable document, a document
+// whose schemaDialect it does not know, or an unknown topic named in -topics.
 package main
 
 import (
@@ -53,7 +53,6 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  -service <name>         service name (mode=service; required there)")
 	fmt.Fprintln(w, "  -package <name>         Go package name (mode=service; required there)")
 	fmt.Fprintln(w, "  -topics <a,b,c>         topic include-list (comma-separated)")
-	fmt.Fprintln(w, "  -include-reserved       admit reserved benzene:* topics with no include-list")
 }
 
 func runBuild(args []string, stdout, stderr io.Writer) int {
@@ -66,7 +65,6 @@ func runBuild(args []string, stdout, stderr io.Writer) int {
 	serviceName := fs.String("service", "", "service name (mode=service)")
 	packageName := fs.String("package", "", "Go package name (mode=service)")
 	topicsFlag := fs.String("topics", "", "comma-separated topic include-list (contract-document.md §5.2)")
-	includeReserved := fs.Bool("include-reserved", false, "admit reserved benzene:* topics when -topics is not given")
 
 	if err := fs.Parse(args); err != nil {
 		// flag.ContinueOnError already printed the error/usage to stderr.
@@ -114,7 +112,7 @@ func runBuild(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 
-		scoped, err := contractdoc.ApplyScope(doc, contractdoc.ScopeOptions{Topics: topics, IncludeReserved: *includeReserved})
+		scoped, err := contractdoc.ApplyScope(doc, contractdoc.ScopeOptions{Topics: topics})
 		if err != nil {
 			fmt.Fprintf(stderr, "benzene-codegen build: %v\n", err)
 			return 1
@@ -133,7 +131,7 @@ func runBuild(args []string, stdout, stderr io.Writer) int {
 		return 0
 
 	case "topic":
-		clients, err := gengo.GenerateAtomicClients(doc, gengo.AtomicOptions{Topics: topics, IncludeReserved: *includeReserved})
+		clients, err := gengo.GenerateAtomicClients(doc, gengo.AtomicOptions{Topics: topics})
 		if err != nil {
 			fmt.Fprintf(stderr, "benzene-codegen build: %v\n", err)
 			return 1

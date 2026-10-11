@@ -16,50 +16,38 @@ func requestTopics(t *testing.T, doc *Document) []string {
 	return topics
 }
 
-func TestApplyScope_DomainOnlyDefault(t *testing.T) {
+func TestApplyScope_NoIncludeListKeepsEveryRequest(t *testing.T) {
 	doc := mustParse(t, minimalDoc)
 	scoped, err := ApplyScope(doc, ScopeOptions{})
 	if err != nil {
 		t.Fatalf("ApplyScope: %v", err)
 	}
-	got := requestTopics(t, scoped)
-	want := []string{"orders:create"}
-	assertStringSlice(t, got, want)
+	assertStringSlice(t, requestTopics(t, scoped), []string{"orders:create", "orders:void"})
 
-	// Everything else passes through unchanged.
-	if len(scoped.Events()) != len(doc.Events()) {
-		t.Error("events should be unchanged by ApplyScope")
+	// Everything else passes through unchanged - but the hashes are the projection's own.
+	if len(scoped.Events()) != len(doc.Events()) || len(scoped.Sends()) != len(doc.Sends()) {
+		t.Error("events and sends should be unchanged by ApplyScope")
 	}
 	if len(scoped.Schemas()) != len(doc.Schemas()) {
 		t.Error("components should be unchanged by ApplyScope")
 	}
+	contractHash, registrationHash, _ := Hashes(scoped)
+	if scoped.Data["contractHash"] != contractHash || scoped.Data["registrationHash"] != registrationHash {
+		t.Errorf("scoped document carries (%v, %v), want its own hashes", scoped.Data["contractHash"], scoped.Data["registrationHash"])
+	}
 }
 
-func TestApplyScope_IncludeReserved(t *testing.T) {
+func TestApplyScope_IncludeListKeepsOnlyNamedRequests(t *testing.T) {
 	doc := mustParse(t, minimalDoc)
-	scoped, err := ApplyScope(doc, ScopeOptions{IncludeReserved: true})
+	scoped, err := ApplyScope(doc, ScopeOptions{Topics: []string{"orders:void"}})
 	if err != nil {
 		t.Fatalf("ApplyScope: %v", err)
 	}
-	assertStringSlice(t, requestTopics(t, scoped), []string{"benzene:healthcheck", "benzene:spec", "orders:create"})
-}
-
-func TestApplyScope_ExplicitTopicListAdmitsReservedWithoutIncludeReserved(t *testing.T) {
-	doc := mustParse(t, minimalDoc)
-	scoped, err := ApplyScope(doc, ScopeOptions{Topics: []string{"benzene:spec"}})
-	if err != nil {
-		t.Fatalf("ApplyScope: %v", err)
+	assertStringSlice(t, requestTopics(t, scoped), []string{"orders:void"})
+	full, _ := Hash(doc)
+	if scoped.Data["contractHash"] == full {
+		t.Error("an include-list projection hashes differently from the whole service")
 	}
-	assertStringSlice(t, requestTopics(t, scoped), []string{"benzene:spec"})
-}
-
-func TestApplyScope_ExplicitListDoesNotImplicitlyAdmitIncludeReservedTopics(t *testing.T) {
-	doc := mustParse(t, minimalDoc)
-	scoped, err := ApplyScope(doc, ScopeOptions{Topics: []string{"orders:create"}, IncludeReserved: true})
-	if err != nil {
-		t.Fatalf("ApplyScope: %v", err)
-	}
-	assertStringSlice(t, requestTopics(t, scoped), []string{"orders:create"})
 }
 
 func TestApplyScope_UnknownTopicFailsLoud(t *testing.T) {
@@ -70,7 +58,7 @@ func TestApplyScope_UnknownTopicFailsLoud(t *testing.T) {
 		t.Fatalf("err = %v, want *UnknownTopicsError", err)
 	}
 	assertStringSlice(t, unknownErr.Unknown, []string{"not-a-topic"})
-	assertStringSlice(t, unknownErr.Valid, []string{"benzene:healthcheck", "benzene:spec", "orders:create"})
+	assertStringSlice(t, unknownErr.Valid, []string{"orders:create", "orders:void"})
 	if unknownErr.Error() == "" {
 		t.Error("Error() should not be empty")
 	}
@@ -83,8 +71,11 @@ func TestTopicScopedProjection(t *testing.T) {
 		t.Fatalf("TopicScopedProjection: %v", err)
 	}
 	assertStringSlice(t, requestTopics(t, scoped), []string{"orders:create"})
-	if len(scoped.Events()) != 0 {
-		t.Errorf("events should be empty in a topic-scoped projection, got %v", scoped.Events())
+	if len(scoped.Events()) != 0 || len(scoped.Sends()) != 0 {
+		t.Errorf("events and sends should be empty in a topic-scoped projection, got %v, %v", scoped.Events(), scoped.Sends())
+	}
+	if h, _ := Hash(scoped); scoped.Data["contractHash"] != h {
+		t.Errorf("projection carries contractHash %v, want its own %s", scoped.Data["contractHash"], h)
 	}
 
 	schemaNames := make([]string, 0, len(scoped.Schemas()))

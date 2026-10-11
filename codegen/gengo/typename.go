@@ -27,16 +27,26 @@ package gengo
 //     shape.
 func GoTypeName(schema map[string]any, catalogue map[string]any) string {
 	if schema == nil {
-		// The reference (CSharpTypeName.GetName) returns "Void" for a null schema, assuming a
-		// "Void" placeholder type is registered in the catalogue - contract-document.md requires
-		// requests[]/events[] request/response/message schemas to always be present, so this is
-		// a defensive fallback, not a path real documents take.
+		// The reference (CSharpTypeName.GetName) returns "Void" for a null schema. Callers handle
+		// the one schema that may be absent - a response - before calling this
+		// (contract-document.md §2), so this is a defensive fallback, not a path real documents
+		// take.
 		return "Void"
 	}
 
 	if ref, ok := schema["$ref"].(string); ok {
 		if name := schemaRefName(ref); name != "" {
 			return FormatGoName(name)
+		}
+	}
+
+	// The nullable wrapper of contract-document.md §4.2 ({"type":"object","nullable":true,
+	// "allOf":[<$ref>]}) is its one member's type; the caller makes a nullable field a pointer.
+	if allOf, ok := schema["allOf"].([]any); ok && len(allOf) == 1 {
+		if member, ok := allOf[0].(map[string]any); ok {
+			if _, isRef := member["$ref"]; isRef {
+				return GoTypeName(member, catalogue)
+			}
 		}
 	}
 

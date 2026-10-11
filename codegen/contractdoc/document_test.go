@@ -1,23 +1,31 @@
 package contractdoc
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 const minimalDoc = `{
-  "openapi": "3.0.1",
-  "info": {"title": "orders-api", "version": "1.0.0"},
+  "schemaDialect": "openapi-3.0",
+  "service": "orders",
   "requests": [
     {"topic": "orders:create", "request": {"$ref": "#/components/schemas/CreateOrder"}, "response": {"$ref": "#/components/schemas/OrderDto"}},
-    {"topic": "benzene:spec", "reserved": true, "request": {"$ref": "#/components/schemas/Void"}, "response": {"$ref": "#/components/schemas/Void"}},
-    {"topic": "benzene:healthcheck", "request": {"$ref": "#/components/schemas/Void"}, "response": {"$ref": "#/components/schemas/Void"}}
+    {"topic": "orders:void", "version": "v2", "request": {"type": "object"}},
+    {"topic": "benzene:healthcheck", "request": {}, "response": {}},
+    "not an entry"
   ],
   "events": [
-    {"topic": "order:created", "message": {"$ref": "#/components/schemas/OrderCreated"}}
+    {"topic": "order:created", "message": {"$ref": "#/components/schemas/OrderCreated"}},
+    {"topic": "benzene:x", "message": {}}
+  ],
+  "sends": [
+    {"topic": "payment:take", "request": {"type": "object"}}
   ],
   "components": {"schemas": {
     "CreateOrder": {"type": "object", "properties": {"customerId": {"type": "string"}}},
     "OrderDto": {"type": "object", "properties": {"id": {"type": "string"}}},
-    "OrderCreated": {"type": "object"},
-    "Void": {"type": "object", "additionalProperties": false}
+    "OrderCreated": {"type": "object"}
   }}
 }`
 
@@ -36,119 +44,63 @@ func TestParse_Malformed(t *testing.T) {
 	}
 }
 
-func TestDocumentAccessors(t *testing.T) {
-	doc := mustParse(t, minimalDoc)
-
-	if got := doc.OpenAPI(); got != "3.0.1" {
-		t.Errorf("OpenAPI() = %q", got)
-	}
-	if got := doc.Info()["title"]; got != "orders-api" {
-		t.Errorf("Info()[title] = %v", got)
-	}
-	if len(doc.Requests()) != 3 {
-		t.Errorf("Requests() len = %d, want 3", len(doc.Requests()))
-	}
-	if len(doc.Events()) != 1 {
-		t.Errorf("Events() len = %d, want 1", len(doc.Events()))
-	}
-	if len(doc.Schemas()) != 4 {
-		t.Errorf("Schemas() len = %d, want 4", len(doc.Schemas()))
-	}
-
-	orderCreate := doc.RequestByTopic("orders:create")
-	if orderCreate == nil {
-		t.Fatal("RequestByTopic(orders:create) = nil")
-	}
-	if RequestTopic(orderCreate) != "orders:create" {
-		t.Errorf("RequestTopic = %q", RequestTopic(orderCreate))
-	}
-	if _, present := RequestVersion(orderCreate); present {
-		t.Error("orders:create should have no version")
-	}
-	if IsReserved(orderCreate) {
-		t.Error("orders:create should not be reserved")
-	}
-
-	if doc.RequestByTopic("nope") != nil {
-		t.Error("RequestByTopic(nope) should be nil")
-	}
-}
-
-func TestReservedDetection(t *testing.T) {
-	doc := mustParse(t, minimalDoc)
-
-	byFlag := doc.RequestByTopic("benzene:spec")
-	if !RequestReservedFlag(byFlag) {
-		t.Error("benzene:spec should carry the reserved flag")
-	}
-	if !IsReserved(byFlag) {
-		t.Error("benzene:spec should be reserved")
-	}
-
-	byPrefixOnly := doc.RequestByTopic("benzene:healthcheck")
-	if RequestReservedFlag(byPrefixOnly) {
-		t.Error("benzene:healthcheck should carry no reserved flag in this fixture")
-	}
-	if !IsReserved(byPrefixOnly) {
-		t.Error("benzene:healthcheck should still be reserved via the benzene: prefix rule")
-	}
-
-	if !IsReservedTopicID("benzene:mesh") {
-		t.Error("benzene:mesh should be a reserved topic id")
-	}
-	if IsReservedTopicID("orders:create") {
-		t.Error("orders:create should not be a reserved topic id")
-	}
-	if IsReservedTopicID("benzen") {
-		t.Error("a prefix-only-partial match must not be treated as reserved")
-	}
-}
-
-func TestSortedTopics(t *testing.T) {
-	doc := mustParse(t, minimalDoc)
-	got := doc.SortedTopics()
-	want := []string{"benzene:healthcheck", "benzene:spec", "orders:create"}
-	if len(got) != len(want) {
-		t.Fatalf("SortedTopics() = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("SortedTopics()[%d] = %q, want %q", i, got[i], want[i])
+func TestParse_RejectsAnUnknownSchemaDialect(t *testing.T) {
+	for _, raw := range []string{`{"schemaDialect": "json-schema-2020-12"}`, `{"openapi": "3.0.1"}`, `{"schemaDialect": 3}`} {
+		_, err := Parse([]byte(raw))
+		var dialectErr *UnknownSchemaDialectError
+		if !errors.As(err, &dialectErr) || !strings.Contains(err.Error(), "openapi-3.0") {
+			t.Errorf("%s: err = %v, want *UnknownSchemaDialectError", raw, err)
 		}
 	}
 }
 
-func TestVersionPresence(t *testing.T) {
-	doc := mustParse(t, `{
-		"requests": [
-			{"topic": "orders:create", "version": "v2", "request": {}, "response": {}},
-			{"topic": "orders:cancel", "request": {}, "response": {}}
-		]
-	}`)
-	versioned := doc.RequestByTopic("orders:create")
-	v, present := RequestVersion(versioned)
-	if !present || v != "v2" {
-		t.Errorf("RequestVersion(orders:create) = (%q, %v), want (v2, true)", v, present)
+func TestDocumentAccessors(t *testing.T) {
+	doc := mustParse(t, minimalDoc)
+
+	if doc.SchemaDialect() != "openapi-3.0" || doc.Service() != "orders" {
+		t.Errorf("SchemaDialect() = %q, Service() = %q", doc.SchemaDialect(), doc.Service())
+	}
+	// benzene: entries, and entries that are not objects, are ignored.
+	if len(doc.Requests()) != 2 || len(doc.Events()) != 1 || len(doc.Sends()) != 1 {
+		t.Errorf("Requests/Events/Sends = %d/%d/%d, want 2/1/1", len(doc.Requests()), len(doc.Events()), len(doc.Sends()))
+	}
+	if len(doc.Schemas()) != 3 {
+		t.Errorf("Schemas() len = %d, want 3", len(doc.Schemas()))
+	}
+	if len((&Document{Data: map[string]any{}}).Schemas()) != 0 {
+		t.Error("Schemas() of a document without components should be empty")
 	}
 
-	unversioned := doc.RequestByTopic("orders:cancel")
-	v, present = RequestVersion(unversioned)
-	if present || v != "" {
-		t.Errorf("RequestVersion(orders:cancel) = (%q, %v), want (\"\", false)", v, present)
+	create := doc.RequestByTopic("orders:create")
+	if create == nil || RequestTopic(create) != "orders:create" || !ResponsePresent(create) {
+		t.Fatalf("RequestByTopic(orders:create) = %v", create)
+	}
+	if _, present := RequestVersion(create); present {
+		t.Error("orders:create should have no version")
+	}
+	void := doc.RequestByTopic("orders:void")
+	if v, present := RequestVersion(void); !present || v != "v2" || ResponsePresent(void) {
+		t.Errorf("orders:void version = (%q, %v), responsePresent = %v", v, present, ResponsePresent(void))
+	}
+	if doc.RequestByTopic("nope") != nil || doc.RequestByTopic("benzene:healthcheck") != nil {
+		t.Error("RequestByTopic must not find an unknown or a benzene: topic")
 	}
 }
 
+func TestSortedTopics_DistinctAndSorted(t *testing.T) {
+	doc := mustParse(t, `{"schemaDialect": "openapi-3.0", "requests": [
+		{"topic": "b", "version": "v1", "request": {}}, {"topic": "b", "version": "v2", "request": {}}, {"topic": "a", "request": {}}]}`)
+	assertStringSlice(t, doc.SortedTopics(), []string{"a", "b"})
+}
+
 func TestMarshalJSON(t *testing.T) {
-	doc := mustParse(t, `{"openapi": "3.0.1"}`)
+	doc := mustParse(t, `{"schemaDialect": "openapi-3.0", "service": "s"}`)
 	raw, err := doc.MarshalJSON()
 	if err != nil {
 		t.Fatalf("MarshalJSON: %v", err)
 	}
 	roundTripped, err := Parse(raw)
-	if err != nil {
-		t.Fatalf("Parse(marshaled): %v", err)
-	}
-	if roundTripped.OpenAPI() != "3.0.1" {
-		t.Errorf("round-tripped openapi = %q", roundTripped.OpenAPI())
+	if err != nil || roundTripped.Service() != "s" {
+		t.Errorf("round trip = %v, %v", roundTripped, err)
 	}
 }

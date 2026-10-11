@@ -6,17 +6,12 @@ import (
 	"strings"
 )
 
-// ScopeOptions is the topic-scoping input of contract-document.md §5.2: an optional include-list
-// (Topics) plus the reserved-topic policy (IncludeReserved) applied when no include-list is
-// given. Mirrors the .NET reference's ClientSdkOptions.Topics/IncludeReservedTopics.
+// ScopeOptions is the topic-scoping input of contract-document.md §5.2: an optional include-list.
+// Mirrors the .NET reference's ClientSdkOptions.Topics.
 type ScopeOptions struct {
-	// Topics is the include-list: when non-empty, only these topics are in scope, overriding
-	// the §5.1 domain-only default entirely - naming a reserved topic here admits it regardless
-	// of IncludeReserved.
+	// Topics is the include-list: when non-empty, only these requests[] topics are in scope;
+	// empty means every one is.
 	Topics []string
-	// IncludeReserved, when Topics is empty, additionally admits every reserved topic
-	// (contract-document.md §5.1) instead of only domain topics. Ignored when Topics is set.
-	IncludeReserved bool
 }
 
 // UnknownTopicsError is returned by ApplyScope/TopicScopedProjection when an include-list (or a
@@ -36,11 +31,10 @@ func (e *UnknownTopicsError) Error() string {
 }
 
 // ApplyScope projects doc's requests[] down to the topics in scope per opts, per
-// contract-document.md §5.2. Every other field (info, events, components, messageEndpoint,
-// transports) is left unchanged - this filters requests[] only, matching the reference
-// implementation's TopicScope.Apply exactly (including that benzene:healthcheck, or any other
-// reserved topic, gets no special case: it is excluded by default like any other reserved topic
-// and admitted only by the ordinary IncludeReserved/Topics rules).
+// contract-document.md §5.2. events[], sends[], components and the other document-level fields
+// pass through unchanged, except contractHash and registrationHash, which are recomputed over the
+// projection (§6.4: an include-list client compares its hash with the same include-list
+// recomputed over the provider's document). A benzene: entry never survives (§5.1).
 func ApplyScope(doc *Document, opts ScopeOptions) (*Document, error) {
 	requests := doc.Requests()
 
@@ -67,27 +61,21 @@ func ApplyScope(doc *Document, opts ScopeOptions) (*Document, error) {
 
 	filtered := make([]map[string]any, 0, len(requests))
 	for _, r := range requests {
-		var inScope bool
-		if included != nil {
-			inScope = included[RequestTopic(r)]
-		} else {
-			inScope = opts.IncludeReserved || !IsReserved(r)
-		}
-		if inScope {
+		if included == nil || included[RequestTopic(r)] {
 			filtered = append(filtered, r)
 		}
 	}
 
 	out := doc.clone()
 	out["requests"] = toAnySlice(filtered)
-	return &Document{Data: out}, nil
+	return withHashes(out)
 }
 
 // TopicScopedProjection builds the topic-scoped (single-topic, self-contained) projection of doc
-// for topic, per contract-document.md §5.3: requests holds exactly that one entry, events is
-// empty, and components.schemas is narrowed to exactly the set that topic's request/response
-// schemas reach (the schema closure, see closure.go). info/messageEndpoint/transports pass
-// through unchanged. Fails loud (UnknownTopicsError) if the document has no such topic - the same
+// for topic, per contract-document.md §5.3: requests holds exactly that one entry, events and
+// sends are empty, components.schemas is narrowed to exactly the set that topic's request/response
+// schemas reach (the schema closure, see closure.go), and contractHash/registrationHash are
+// recomputed over the projection. The other document-level fields pass through unchanged. Fails loud (UnknownTopicsError) if the document has no such topic - the same
 // rule §5.2 applies to an include-list, applied here to a single requested topic.
 func TopicScopedProjection(doc *Document, topic string) (*Document, error) {
 	request := doc.RequestByTopic(topic)
@@ -108,6 +96,7 @@ func TopicScopedProjection(doc *Document, topic string) (*Document, error) {
 	out := doc.clone()
 	out["requests"] = []any{request}
 	out["events"] = []any{}
+	out["sends"] = []any{}
 	out["components"] = map[string]any{"schemas": narrowed}
-	return &Document{Data: out}, nil
+	return withHashes(out)
 }
