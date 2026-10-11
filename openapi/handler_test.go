@@ -11,7 +11,7 @@ import (
 )
 
 func TestHandler_GETServesDocument(t *testing.T) {
-	server := httptest.NewServer(openapi.Handler(newDescriptor(t)))
+	server := httptest.NewServer(openapi.Handler(newDocument(t)))
 	defer server.Close()
 
 	resp, err := http.Get(server.URL)
@@ -38,7 +38,7 @@ func TestHandler_GETServesDocument(t *testing.T) {
 }
 
 func TestHandler_HEADHasNoBody(t *testing.T) {
-	server := httptest.NewServer(openapi.Handler(newDescriptor(t)))
+	server := httptest.NewServer(openapi.Handler(newDocument(t)))
 	defer server.Close()
 
 	req, _ := http.NewRequest(http.MethodHead, server.URL, nil)
@@ -58,7 +58,7 @@ func TestHandler_HEADHasNoBody(t *testing.T) {
 }
 
 func TestHandler_RejectsNonGET(t *testing.T) {
-	server := httptest.NewServer(openapi.Handler(newDescriptor(t)))
+	server := httptest.NewServer(openapi.Handler(newDocument(t)))
 	defer server.Close()
 
 	resp, err := http.Post(server.URL, "application/json", nil)

@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	benzene "github.com/daniellepelley/benzene-go"
-	"github.com/daniellepelley/benzene-go/mesh"
+	"github.com/daniellepelley/benzene-go/contract"
 	"github.com/daniellepelley/benzene-go/openapi"
 )
 
@@ -27,41 +27,54 @@ type createUserResp struct {
 	ID string `json:"id"`
 }
 
-func newDescriptor(t *testing.T) mesh.Descriptor {
+func createUser(_ context.Context, _ createUserReq) benzene.Result[createUserResp] {
+	return benzene.Ok(createUserResp{})
+}
+
+func derive(t *testing.T, registry *benzene.Registry, info contract.Info) contract.Document {
+	t.Helper()
+	doc, err := contract.Derive(registry, contract.NewOutboundRegistry(), info)
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+	return doc
+}
+
+func newDocument(t *testing.T) contract.Document {
 	t.Helper()
 	registry := benzene.NewRegistry()
-	if err := benzene.Register(registry, benzene.NewTopic("user:create"),
-		benzene.Handler[createUserReq, createUserResp](func(_ context.Context, _ createUserReq) benzene.Result[createUserResp] {
-			return benzene.Ok(createUserResp{})
-		})); err != nil {
+	if err := benzene.Register(registry, benzene.NewTopic("user:create"), benzene.Handler[createUserReq, createUserResp](createUser)); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	return mesh.Describe(registry, nil, mesh.ServiceInfo{Service: "users", ServiceVersion: "1.2.3"})
+	return derive(t, registry, contract.Info{Service: "users", ServiceVersion: "1.2.3", Description: "user intake"})
+}
+
+// component returns the named components schema of doc, failing the test when it is absent.
+func component(t *testing.T, doc *openapi.Document, name string) map[string]any {
+	t.Helper()
+	if doc.Components == nil || doc.Components.Schemas[name] == nil {
+		t.Fatalf("no component %q; components = %+v", name, doc.Components)
+	}
+	return doc.Components.Schemas[name]
 }
 
 func TestGenerate_InfoAndTopLevel(t *testing.T) {
-	doc := openapi.Generate(newDescriptor(t))
+	doc := openapi.Generate(newDocument(t))
 
 	if doc.OpenAPI != "3.0.3" {
 		t.Errorf("OpenAPI = %q, want 3.0.3", doc.OpenAPI)
 	}
-	if doc.Info.Title != "users" {
-		t.Errorf("Title = %q, want users (the service name)", doc.Info.Title)
-	}
-	if doc.Info.Version != "1.2.3" {
-		t.Errorf("Version = %q, want 1.2.3 (the service version)", doc.Info.Version)
+	if doc.Info.Title != "users" || doc.Info.Version != "1.2.3" || doc.Info.Description != "user intake" {
+		t.Errorf("Info = %+v, want the document's service, version and description", doc.Info)
 	}
 }
 
-func TestGenerate_TopicBecomesPostOperation(t *testing.T) {
-	doc := openapi.Generate(newDescriptor(t))
+func TestGenerate_RequestBecomesPostOperationReferencingComponents(t *testing.T) {
+	doc := openapi.Generate(newDocument(t))
 
 	item, ok := doc.Paths["/user:create"]
-	if !ok {
-		t.Fatalf("no path /user:create; paths = %v", doc.Paths)
-	}
-	if item.Post == nil {
-		t.Fatal("path has no POST operation")
+	if !ok || item.Post == nil {
+		t.Fatalf("no POST /user:create; paths = %v", doc.Paths)
 	}
 	if item.Post.OperationID != "user_create" {
 		t.Errorf("OperationID = %q, want user_create", item.Post.OperationID)
@@ -70,86 +83,74 @@ func TestGenerate_TopicBecomesPostOperation(t *testing.T) {
 		t.Fatal("expected a required request body")
 	}
 	schema := item.Post.RequestBody.Content["application/json"].Schema
-	props, _ := schema["properties"].(map[string]any)
-	if props == nil {
-		t.Fatalf("request schema has no properties: %v", schema)
+	if schema["$ref"] != "#/components/schemas/createUserReq" {
+		t.Fatalf("request schema = %v, want a $ref to the hoisted createUserReq", schema)
 	}
+	props := component(t, doc, "createUserReq")["properties"].(map[string]any)
 	if got, _ := props["name"].(map[string]any); got["type"] != "string" {
 		t.Errorf("name property = %v, want type string", props["name"])
 	}
 }
 
-func TestGenerate_NullablePointerBecomesOpenAPINullable(t *testing.T) {
-	doc := openapi.Generate(newDescriptor(t))
-	schema := doc.Paths["/user:create"].Post.RequestBody.Content["application/json"].Schema
-	props := schema["properties"].(map[string]any)
+func TestGenerate_SchemasStayInTheOpenAPIDialect(t *testing.T) {
+	doc := openapi.Generate(newDocument(t))
+	props := component(t, doc, "createUserReq")["properties"].(map[string]any)
 
-	nickname, ok := props["nickname"].(map[string]any)
-	if !ok {
-		t.Fatalf("no nickname property: %v", props)
+	// The document is already OpenAPI 3.0: a nullable scalar is {type, nullable: true}.
+	nickname := props["nickname"].(map[string]any)
+	if nickname["type"] != "string" || nickname["nullable"] != true {
+		t.Errorf("nickname = %v, want {type:string, nullable:true}", nickname)
 	}
-	if nickname["type"] != "string" {
-		t.Errorf("nickname type = %v, want string (not a [string,null] array)", nickname["type"])
+	if tags := props["tags"].(map[string]any); tags["type"] != "array" || tags["items"].(map[string]any)["type"] != "string" {
+		t.Errorf("tags = %v, want an array of strings", tags)
 	}
-	if nickname["nullable"] != true {
-		t.Errorf("nickname nullable = %v, want true (OpenAPI 3.0 form)", nickname["nullable"])
-	}
-}
-
-func TestGenerate_NestedSchemasRecurse(t *testing.T) {
-	doc := openapi.Generate(newDescriptor(t))
-	schema := doc.Paths["/user:create"].Post.RequestBody.Content["application/json"].Schema
-	props := schema["properties"].(map[string]any)
-
-	// array items recurse
-	tags := props["tags"].(map[string]any)
-	if tags["type"] != "array" {
-		t.Errorf("tags type = %v, want array", tags["type"])
-	}
-	if items, _ := tags["items"].(map[string]any); items["type"] != "string" {
-		t.Errorf("tags items = %v, want type string", tags["items"])
-	}
-
-	// nested struct's own nullable field is converted too
-	addr := props["address"].(map[string]any)
-	addrProps := addr["properties"].(map[string]any)
-	zip := addrProps["zip"].(map[string]any)
+	zip := component(t, doc, "address")["properties"].(map[string]any)["zip"].(map[string]any)
 	if zip["type"] != "string" || zip["nullable"] != true {
 		t.Errorf("address.zip = %v, want {type:string, nullable:true}", zip)
 	}
 }
 
+func TestGenerate_DoesNotShareTheDocumentsMaps(t *testing.T) {
+	source := newDocument(t)
+	doc := openapi.Generate(source)
+
+	component(t, doc, "createUserReq")["properties"].(map[string]any)["name"].(map[string]any)["type"] = "mutated"
+	doc.Paths["/user:create"].Post.RequestBody.Content["application/json"].Schema["$ref"] = "mutated"
+	if source.Components.Schemas["createUserReq"]["properties"].(map[string]any)["name"].(map[string]any)["type"] != "string" {
+		t.Error("mutating the OpenAPI components changed the Contract Document")
+	}
+	if source.Requests[0].Request["$ref"] != "#/components/schemas/createUserReq" {
+		t.Error("mutating an operation schema changed the Contract Document")
+	}
+}
+
 func TestGenerate_Responses(t *testing.T) {
-	doc := openapi.Generate(newDescriptor(t))
+	doc := openapi.Generate(newDocument(t))
 	responses := doc.Paths["/user:create"].Post.Responses
 
-	// 200 carries the response schema.
 	success, ok := responses["200"]
 	if !ok {
 		t.Fatalf("no 200 response; responses = %v", responses)
 	}
-	respSchema := success.Content["application/json"].Schema
-	if props, _ := respSchema["properties"].(map[string]any); props["id"] == nil {
-		t.Errorf("200 response schema missing id property: %v", respSchema)
+	if ref := success.Content["application/json"].Schema["$ref"]; ref != "#/components/schemas/createUserResp" {
+		t.Errorf("200 response schema = %v, want a $ref to createUserResp", success.Content)
 	}
 
-	// A representative set of failure codes are documented with the error body shape.
 	for _, code := range []string{"400", "401", "403", "404", "409", "429", "500", "503"} {
 		resp, ok := responses[code]
 		if !ok {
 			t.Errorf("missing %s failure response; have %v", code, responses)
 			continue
 		}
-		errSchema := resp.Content["application/json"].Schema
-		props, _ := errSchema["properties"].(map[string]any)
+		props, _ := resp.Content["application/json"].Schema["properties"].(map[string]any)
 		if props["statusCode"] == nil || props["errors"] == nil {
-			t.Errorf("%s response is not the error shape: %v", code, errSchema)
+			t.Errorf("%s response is not the error shape: %v", code, resp.Content)
 		}
 	}
 }
 
 func TestGenerate_MarshalsToValidJSON(t *testing.T) {
-	doc := openapi.Generate(newDescriptor(t))
+	doc := openapi.Generate(newDocument(t))
 	encoded, err := json.Marshal(doc)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -158,40 +159,33 @@ func TestGenerate_MarshalsToValidJSON(t *testing.T) {
 	if err := json.Unmarshal(encoded, &round); err != nil {
 		t.Fatalf("generated document is not valid JSON: %v", err)
 	}
-	if round["openapi"] != "3.0.3" {
-		t.Errorf("round-tripped openapi = %v", round["openapi"])
+	if round["openapi"] != "3.0.3" || round["components"] == nil {
+		t.Errorf("round-tripped = %v", round)
 	}
-	// Determinism: marshaling twice yields byte-identical output (map keys sort).
 	again, _ := json.Marshal(doc)
 	if string(encoded) != string(again) {
 		t.Error("output is not deterministic across marshals")
 	}
 }
 
-func TestGenerate_NullableSurvivesJSONRoundTrippedDescriptor(t *testing.T) {
-	// A descriptor that round-tripped through JSON has its type array as []any, not []string;
-	// splitNullableType must handle that form too.
-	desc := newDescriptor(t)
-	encoded, err := json.Marshal(desc)
+func TestGenerate_ReadsAJSONRoundTrippedDocument(t *testing.T) {
+	encoded, err := json.Marshal(newDocument(t))
 	if err != nil {
-		t.Fatalf("marshal descriptor: %v", err)
+		t.Fatal(err)
 	}
-	var round mesh.Descriptor
+	var round contract.Document
 	if err := json.Unmarshal(encoded, &round); err != nil {
-		t.Fatalf("unmarshal descriptor: %v", err)
+		t.Fatal(err)
 	}
-
 	doc := openapi.Generate(round)
-	schema := doc.Paths["/user:create"].Post.RequestBody.Content["application/json"].Schema
-	nickname := schema["properties"].(map[string]any)["nickname"].(map[string]any)
-	if nickname["type"] != "string" || nickname["nullable"] != true {
-		t.Errorf("nickname after JSON round-trip = %v, want {type:string, nullable:true}", nickname)
+	required := component(t, doc, "createUserReq")["required"].([]any)
+	if len(required) == 0 {
+		t.Errorf("required = %v, want the always-present fields", required)
 	}
 }
 
 func TestGenerate_Options(t *testing.T) {
-	desc := newDescriptor(t)
-	doc := openapi.Generate(desc,
+	doc := openapi.Generate(newDocument(t),
 		openapi.WithTitle("My API"),
 		openapi.WithVersion("9.9.9"),
 		openapi.WithDescription("hello"),
@@ -205,38 +199,24 @@ func TestGenerate_Options(t *testing.T) {
 	}
 }
 
-func TestGenerate_DefaultsForEmptyDescriptor(t *testing.T) {
-	doc := openapi.Generate(mesh.Descriptor{})
-	if doc.Info.Title != "benzene-service" {
-		t.Errorf("Title = %q, want the benzene-service default", doc.Info.Title)
+func TestGenerate_DefaultsForEmptyDocument(t *testing.T) {
+	doc := openapi.Generate(contract.Document{})
+	if doc.Info.Title != "benzene-service" || doc.Info.Version != "0.0.0" {
+		t.Errorf("Info = %+v, want the benzene-service/0.0.0 defaults", doc.Info)
 	}
-	if doc.Info.Version != "0.0.0" {
-		t.Errorf("Version = %q, want the 0.0.0 default", doc.Info.Version)
-	}
-	if len(doc.Paths) != 0 {
-		t.Errorf("Paths = %v, want empty for a topic-less descriptor", doc.Paths)
+	if len(doc.Paths) != 0 || doc.Components != nil {
+		t.Errorf("Paths = %v, Components = %v, want neither for an empty document", doc.Paths, doc.Components)
 	}
 }
 
 func TestGenerate_TopicVersionInDescription(t *testing.T) {
 	registry := benzene.NewRegistry()
-	if err := benzene.Register(registry, benzene.NewTopic("order:create").WithVersion("2"),
-		benzene.Handler[createUserReq, createUserResp](func(_ context.Context, _ createUserReq) benzene.Result[createUserResp] {
-			return benzene.Ok(createUserResp{})
-		})); err != nil {
+	if err := benzene.Register(registry, benzene.NewTopic("order:create").WithVersion("2"), benzene.Handler[createUserReq, createUserResp](createUser)); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	desc := mesh.Describe(registry, nil, mesh.ServiceInfo{Service: "orders"})
-	doc := openapi.Generate(desc)
+	doc := openapi.Generate(derive(t, registry, contract.Info{Service: "orders"}))
 
-	var op *openapi.Operation
-	for _, item := range doc.Paths {
-		op = item.Post
-	}
-	if op == nil {
-		t.Fatal("no operation generated")
-	}
-	if op.Description == "" {
-		t.Errorf("expected a topic-version description, got empty (topic %q)", op.OperationID)
+	if op := doc.Paths["/order:create"].Post; op == nil || op.Description != "Topic version 2" {
+		t.Errorf("operation = %+v, want a topic-version description", op)
 	}
 }

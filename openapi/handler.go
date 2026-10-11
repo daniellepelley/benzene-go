@@ -4,15 +4,15 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/daniellepelley/benzene-go/mesh"
+	"github.com/daniellepelley/benzene-go/contract"
 )
 
-// Handler serves the OpenAPI 3.0 document derived from desc over a plain GET, an OpenAPI view beside
+// Handler serves the OpenAPI 3.0 document generated from doc over a plain GET, an OpenAPI view beside
 // the Contract Document httpbinding.SpecHandler serves. Mount it wherever a service wants
 // to expose its OpenAPI doc (e.g. GET /openapi.json). Non-GET/HEAD requests get 405; the document is
 // generated once at construction, not per request, since the registry is static after startup.
-func Handler(desc mesh.Descriptor, opts ...Option) http.Handler {
-	body, err := json.Marshal(Generate(desc, opts...))
+func Handler(doc contract.Document, opts ...Option) http.Handler {
+	body, err := json.Marshal(Generate(doc, opts...))
 	if err != nil {
 		// The document is composed only of strings, maps, and slices of those, so json.Marshal
 		// cannot fail here; fall back to an empty object rather than panicking a server at startup.

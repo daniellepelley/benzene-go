@@ -1,22 +1,22 @@
-// Package openapi derives an OpenAPI 3.0 document from a Benzene service's registered topics -
-// the Go form of Benzene.Schema.OpenApi. It is zero-dependency: it reuses the request/response
-// JSON Schemas the mesh package already derives from each handler's TReq/TRes types at startup
-// (the one sanctioned use of reflection, never on the dispatch path), so this package adds no
-// reflection of its own - it only reshapes the derived descriptor into the OpenAPI wire format.
+// Package openapi derives an OpenAPI 3.0 document from a Benzene service's Contract Document - the
+// Go form of Benzene.Schema.OpenApi. It is zero-dependency and adds no reflection: the contract
+// package derives the document once at start-up, with its schemas already in the OpenAPI 3.0
+// dialect and its named types in components.schemas, and this package only reshapes it into the
+// OpenAPI wire format - the schemas and their #/components/schemas/ references carry over as they
+// are.
 //
 // The Cloud Service Profile's R5 (a derived spec document) is satisfied by the Contract Document
-// the contract package derives and serves on benzene:spec (GET /benzene/spec). This is an
-// industry-standard view for readers who want OpenAPI: every registered topic
-// becomes a POST operation whose request body is the topic's request schema and whose responses
-// carry the response schema (success) and the Benzene failure vocabulary mapped to HTTP status
-// codes (httpstatus). It is a documentation view of the service's message contracts, not a claim
-// that every topic is reachable over HTTP - a queue-shaped topic is documented the same way, since
-// the value is the request/response shape, not the transport.
+// itself, served on benzene:spec (GET /benzene/spec). This is an industry-standard view for readers
+// who want OpenAPI: every request the service serves becomes a POST operation whose request body is
+// the topic's request schema and whose responses carry the response schema (success) and the
+// Benzene failure vocabulary mapped to HTTP status codes (httpstatus). It is a documentation view
+// of the service's message contracts, not a claim that every topic is reachable over HTTP - a
+// queue-shaped topic is documented the same way, since the value is the request/response shape, not
+// the transport.
 //
 // AsyncAPI generation (the other half of Benzene.Schema.OpenApi) ships in the sibling asyncapi
-// package, which reads the Contract Document: every handled topic is a "receive" operation, and the
-// service's declared events and sends (contract.RegisterEvent, contract.RegisterSend) are "send"
-// operations.
+// package, which reads the same document: every request is a "receive" operation, and the
+// service's declared events and sends are "send" operations.
 package openapi
 
 import (
@@ -25,18 +25,23 @@ import (
 	"strings"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/contract"
 	"github.com/daniellepelley/benzene-go/httpstatus"
-	"github.com/daniellepelley/benzene-go/mesh"
 )
 
 // Document is a minimal OpenAPI 3.0 document: enough of the shape to describe a Benzene service's
-// topics as operations. Schema objects are held as map[string]any (the derived JSON Schema form,
-// converted to OpenAPI 3.0's nullable convention), since the derived schemas are anonymous - the
-// descriptor carries no Go type name to hoist them into components/schemas under a $ref.
+// requests as operations. Schema objects are held as map[string]any, copied from the Contract
+// Document, whose named schemas become Components.Schemas under the same names.
 type Document struct {
-	OpenAPI string              `json:"openapi"`
-	Info    Info                `json:"info"`
-	Paths   map[string]PathItem `json:"paths"`
+	OpenAPI    string              `json:"openapi"`
+	Info       Info                `json:"info"`
+	Paths      map[string]PathItem `json:"paths"`
+	Components *Components         `json:"components,omitempty"`
+}
+
+// Components holds the named schemas the operations' $refs point into (#/components/schemas/...).
+type Components struct {
+	Schemas map[string]map[string]any `json:"schemas,omitempty"`
 }
 
 // Info is the OpenAPI info object: the service's identity.
@@ -87,15 +92,15 @@ type config struct {
 // Option configures Generate.
 type Option func(*config)
 
-// WithTitle overrides the document title (default: the descriptor's service name, or
+// WithTitle overrides the document title (default: the document's service name, or
 // "benzene-service" when that is empty).
 func WithTitle(title string) Option { return func(c *config) { c.title = title } }
 
-// WithVersion overrides the document version (default: the descriptor's service version, or
+// WithVersion overrides the document version (default: the document's service version, or
 // "0.0.0" when that is empty).
 func WithVersion(version string) Option { return func(c *config) { c.version = version } }
 
-// WithDescription sets the info description.
+// WithDescription overrides the info description (default: the document's description).
 func WithDescription(description string) Option {
 	return func(c *config) { c.description = description }
 }
@@ -104,12 +109,14 @@ func WithDescription(description string) Option {
 // "order:create" under the default prefix becomes the path "/order:create".
 func WithPathPrefix(prefix string) Option { return func(c *config) { c.pathPrefix = prefix } }
 
-// Generate builds an OpenAPI 3.0 document from desc (typically mesh.Describe(registry, info)). Each
-// topic becomes a POST operation carrying its request schema and response/error vocabulary. The
-// result marshals to valid OpenAPI 3.0 JSON with encoding/json; map keys marshal sorted, so the
-// output is deterministic for a given descriptor.
-func Generate(desc mesh.Descriptor, opts ...Option) *Document {
-	cfg := config{title: desc.Service, version: desc.ServiceVersion, pathPrefix: "/"}
+// Generate builds an OpenAPI 3.0 document from doc (typically contract.Derive's result, or
+// cloudservice.Service's Contract). Each request becomes a POST operation carrying its request
+// schema and response/error vocabulary; doc's components become the OpenAPI components. The schemas
+// are deep-copied, so Generate never shares or mutates the document's maps. The result marshals to
+// valid OpenAPI 3.0 JSON with encoding/json; map keys marshal sorted, so the output is deterministic
+// for a given document.
+func Generate(doc contract.Document, opts ...Option) *Document {
+	cfg := config{title: doc.Service, version: doc.ServiceVersion, description: doc.Description, pathPrefix: "/"}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
@@ -120,33 +127,39 @@ func Generate(desc mesh.Descriptor, opts ...Option) *Document {
 		cfg.version = "0.0.0"
 	}
 
-	doc := &Document{
+	out := &Document{
 		OpenAPI: "3.0.3",
 		Info:    Info{Title: cfg.title, Version: cfg.version, Description: cfg.description},
-		Paths:   make(map[string]PathItem, len(desc.Topics)),
+		Paths:   make(map[string]PathItem, len(doc.Requests)),
+	}
+	if len(doc.Components.Schemas) > 0 {
+		out.Components = &Components{Schemas: make(map[string]map[string]any, len(doc.Components.Schemas))}
+		for name, schema := range doc.Components.Schemas {
+			out.Components.Schemas[name] = cloneSchema(schema)
+		}
 	}
 	// operationId MUST be unique across the whole document (OpenAPI 3.0). Distinct topic ids can
 	// sanitize to the same id ("user:get" and "user-get" both -> "user_get") while still producing
-	// distinct path keys, so track assigned ids and disambiguate with a suffix in topic order.
-	usedIDs := make(map[string]bool, len(desc.Topics))
-	for _, topic := range desc.Topics {
+	// distinct path keys, so track assigned ids and disambiguate with a suffix in document order.
+	usedIDs := make(map[string]bool, len(doc.Requests))
+	for _, request := range doc.Requests {
+		if contract.IsReserved(request.Topic) {
+			continue // a consumer ignores a reserved entry (contract-document.md §1)
+		}
 		op := &Operation{
-			OperationID: uniqueOperationID(topic.ID, usedIDs),
-			Summary:     "Handle " + topic.ID,
-			Responses:   responsesFor(topic),
+			OperationID: uniqueOperationID(request.Topic, usedIDs),
+			Summary:     "Handle " + request.Topic,
+			Responses:   responsesFor(request),
 		}
-		if topic.Version != "" {
-			op.Description = "Topic version " + topic.Version
+		if request.Version != "" {
+			op.Description = "Topic version " + request.Version
 		}
-		if topic.RequestSchema != nil {
-			op.RequestBody = &RequestBody{
-				Required: true,
-				Content:  map[string]MediaType{"application/json": {Schema: toOpenAPISchema(topic.RequestSchema)}},
-			}
+		if request.Request != nil {
+			op.RequestBody = &RequestBody{Required: true, Content: jsonContent(request.Request)}
 		}
-		doc.Paths[pathFor(cfg.pathPrefix, topic.ID)] = PathItem{Post: op}
+		out.Paths[pathFor(cfg.pathPrefix, request.Topic)] = PathItem{Post: op}
 	}
-	return doc
+	return out
 }
 
 // documentedFailures is the framework failure vocabulary an operation may return, documented as
@@ -182,11 +195,11 @@ func errorSchema() map[string]any {
 // responsesFor builds a topic's responses: 200 (success, the response schema) plus one response per
 // distinct HTTP status code the failure vocabulary maps to, each listing the Benzene statuses that
 // share it so a reader can recover the precise status from the error body's statusCode.
-func responsesFor(topic mesh.TopicDescriptor) map[string]Response {
+func responsesFor(request contract.Request) map[string]Response {
 	responses := map[string]Response{
 		strconv.Itoa(httpstatus.ToHTTP(benzene.StatusOk)): {
 			Description: "Successful invocation.",
-			Content:     successContent(topic),
+			Content:     jsonContent(request.Response),
 		},
 	}
 
@@ -215,94 +228,45 @@ func responsesFor(topic mesh.TopicDescriptor) map[string]Response {
 	return responses
 }
 
-func successContent(topic mesh.TopicDescriptor) map[string]MediaType {
-	if topic.ResponseSchema == nil {
+// jsonContent is an application/json body carrying a copy of schema, or no content when the entry
+// declares none (an absent response: the handler returns no payload).
+func jsonContent(schema contract.Schema) map[string]MediaType {
+	if schema == nil {
 		return nil
 	}
-	return map[string]MediaType{"application/json": {Schema: toOpenAPISchema(topic.ResponseSchema)}}
+	return map[string]MediaType{"application/json": {Schema: cloneSchema(schema)}}
 }
 
-// toOpenAPISchema deep-copies a derived JSON Schema into an OpenAPI 3.0 Schema Object. The derived
-// schemas use only keys OpenAPI shares (type/properties/required/items/additionalProperties/format),
-// with one exception: mesh derives a nullable value as JSON Schema's type array (e.g.
-// ["string","null"]), which OpenAPI 3.0 does not allow - it uses "nullable": true instead. This
-// converts that form and recurses into nested schemas. The copy leaves the descriptor's maps
-// untouched (Generate must be safe to call repeatedly on the same descriptor).
-func toOpenAPISchema(schema map[string]any) map[string]any {
-	out := make(map[string]any, len(schema))
-	for key, value := range schema {
-		switch key {
-		case "type":
-			if types, nullable := splitNullableType(value); nullable {
-				out["type"] = types
-				out["nullable"] = true
-				continue
-			}
-			out["type"] = value
-		case "properties":
-			if props, ok := value.(map[string]any); ok {
-				converted := make(map[string]any, len(props))
-				for name, propSchema := range props {
-					converted[name] = convertNested(propSchema)
-				}
-				out["properties"] = converted
-				continue
-			}
-			out[key] = value
-		case "items", "additionalProperties":
-			out[key] = convertNested(value)
-		default:
-			out[key] = value
+// cloneSchema deep-copies a schema's maps and slices.
+func cloneSchema(schema map[string]any) map[string]any {
+	return cloneValue(schema).(map[string]any)
+}
+
+func cloneValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, child := range t {
+			out[k] = cloneValue(child)
 		}
-	}
-	return out
-}
-
-// convertNested applies toOpenAPISchema to a value that is itself a schema, passing non-schema
-// values (e.g. additionalProperties: true, which mesh never emits but OpenAPI permits) through.
-func convertNested(value any) any {
-	if nested, ok := value.(map[string]any); ok {
-		return toOpenAPISchema(nested)
-	}
-	return value
-}
-
-// splitNullableType detects mesh's nullable type array (["T","null"]) and returns the non-null type
-// plus true; for a plain string type or any other shape it returns the value unchanged and false.
-// It handles both the []string form (a descriptor straight from mesh.Describe) and the []any form (a
-// descriptor that round-tripped through JSON), since either can reach Generate.
-func splitNullableType(value any) (any, bool) {
-	var elems []string
-	switch typed := value.(type) {
-	case []string:
-		elems = typed
+		return out
 	case []any:
-		for _, e := range typed {
-			s, ok := e.(string)
-			if !ok {
-				return value, false
-			}
-			elems = append(elems, s)
+		out := make([]any, len(t))
+		for i, child := range t {
+			out[i] = cloneValue(child)
 		}
-	default:
-		return value, false
+		return out
+	case []string:
+		return append([]string(nil), t...)
 	}
-	if len(elems) != 2 {
-		return value, false
-	}
-	for i, e := range elems {
-		if e == "null" {
-			return elems[1-i], true // return the other (non-null) type
-		}
-	}
-	return value, false
+	return v
 }
 
 // uniqueOperationID returns operationID(topicID), guaranteed non-empty and unique among the ids
 // already in used: an empty base (a topic id with no alphanumerics, e.g. ":") falls back to
 // "operation", and a collision gets a "_2", "_3", ... suffix. This keeps the document valid per
 // OpenAPI 3.0's operationId-uniqueness rule regardless of topic naming. Disambiguation follows the
-// descriptor's topic order, so it is stable for a given descriptor.
+// document's request order, so it is stable for a given document.
 func uniqueOperationID(topicID string, used map[string]bool) string {
 	base := operationID(topicID)
 	if base == "" {
