@@ -2,7 +2,7 @@
 // daniellepelley/Benzene's docs/specification/conformance/ into testdata/. Passing them is what
 // "conformant" means; the vendored README.md alongside them (the canonical one, vendored with the
 // fixtures) defines each fixture and which claim requires it - API shape is explicitly not part of
-// conformance. SPEC_VERSION records which canonical commit the snapshot came from, and
+// conformance. SPEC_VERSION pins the spec release (a spec-x.y.z tag) the snapshot came from, and
 // .github/workflows/conformance-drift-check.yml holds both to it.
 package conformance
 
