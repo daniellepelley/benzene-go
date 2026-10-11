@@ -322,9 +322,12 @@ func laterOf(current, candidate time.Time) time.Time {
 // checkHandlerDrift flags event as contract-drift when event.Service has a registration whose
 // requests do not declare event.Topic(+Version) (mesh.md §4.2 "Undeclared"): requests is the
 // CONSUMER claim, so this is the undeclared-consumer check. A service that never registered has no
-// contract to diverge from, and one whose requests are unknown (absent or degraded) asserts none:
-// neither is flagged. Caller holds s.mu.
+// contract to diverge from, one whose requests are unknown (absent or degraded) asserts none, and a
+// reserved benzene: topic is in no document: none of them is flagged. Caller holds s.mu.
 func (s *store) checkHandlerDrift(event mesh.TraceEvent) {
+	if contract.IsReserved(event.Topic) {
+		return // no document lists a benzene: topic, so one is never undeclared (mesh.md §4.2)
+	}
 	service, ok := s.services[event.Service]
 	if !ok || service.registration == nil || !service.registration.requestsKnown {
 		return
@@ -338,6 +341,9 @@ func (s *store) checkHandlerDrift(event mesh.TraceEvent) {
 // sends do not declare event.Topic(+Version) (mesh.md §4.2 "Undeclared", symmetric to
 // checkHandlerDrift; unknown members are never flagged). Caller holds s.mu.
 func (s *store) checkSenderDrift(caller string, event mesh.TraceEvent) {
+	if contract.IsReserved(event.Topic) {
+		return // a reserved topic is never an undeclared edge (mesh.md §4.2)
+	}
 	service, ok := s.services[caller]
 	if !ok || service.registration == nil || !service.registration.producesKnown {
 		return

@@ -780,3 +780,23 @@ func TestCollector_HeartbeatHashIsComparedWithTheServicesOneRegistration(t *test
 		t.Errorf("service view = %+v, want instance orders-1 at version 1 matching sha256:aaaa", view)
 	}
 }
+
+// TestCollector_ReservedTopicsAreNeverUndeclared: no document lists a benzene: topic, so traffic on
+// one - a benzene:spec or benzene:healthcheck call, served or sent - is never contract-drift
+// (mesh.md §4.2), even for a service whose requests, events and sends are all known.
+func TestCollector_ReservedTopicsAreNeverUndeclared(t *testing.T) {
+	c := newTestCollector(t)
+	registerRaw(t, c, `{"service":"orders","requests":[{"topic":"order:create","request":{}}],"events":[],"sends":[]}`)
+	registerRaw(t, c, `{"service":"payments","requests":[],"events":[],"sends":[]}`)
+
+	invoke[Ack](t, c, mesh.TopicTraces, mesh.TraceBatch{Events: []mesh.TraceEvent{
+		event("trace-1", "span-orders", "", "orders", "order:create", "ok", 1),
+		event("trace-1", "span-spec", "span-orders", "payments", "benzene:spec", "ok", 1),
+		event("trace-2", "span-health", "", "orders", "benzene:healthcheck", "ok", 1),
+	}})
+
+	_, fleet := invoke[FleetView](t, c, mesh.TopicQueryFleet, struct{}{})
+	for _, issue := range fleet.Issues {
+		t.Errorf("a reserved topic raised drift: %+v", issue)
+	}
+}
