@@ -39,7 +39,9 @@ func (e *NameCollisionError) Error() string {
 //   - requests come from registry: one entry per registered (topic, version), its request schema
 //     from TReq and its response from TRes - absent when TRes is the unnamed struct{} (the handler
 //     returns no payload), {} when TRes is an interface such as any;
-//   - events and sends come from outbound (a nil outbound declares neither);
+//   - events and sends come from outbound; a nil outbound leaves them undetermined, so both are
+//     listed empty and named in Degraded (an empty OutboundRegistry asserts "none");
+//   - Runtime is "go"; Placement and Profile come from info;
 //   - every named struct type is hoisted into components under its declared name (SchemaNamer) or
 //     its Go type name; an undeclared generic instance is inlined;
 //   - reserved benzene: topics are never listed;
@@ -61,6 +63,9 @@ func Derive(registry *benzene.Registry, outbound *OutboundRegistry, info Info) (
 		ServiceVersion:  info.ServiceVersion,
 		VersionScheme:   info.VersionScheme,
 		Description:     info.Description,
+		Runtime:         Runtime,
+		Placement:       info.Placement,
+		Profile:         info.Profile,
 		MessageEndpoint: info.MessageEndpoint,
 		Transports:      append([]string(nil), info.Transports...),
 		Requests:        []Request{},
@@ -94,7 +99,9 @@ func Derive(registry *benzene.Registry, outbound *OutboundRegistry, info Info) (
 		uses = append(uses, use{topic.String(), []Schema{entry.Request, entry.Response}})
 	}
 
-	if outbound != nil {
+	if outbound == nil {
+		doc.Degraded = []string{MemberEvents, MemberSends}
+	} else {
 		for _, topic := range outbound.Events() {
 			if IsReserved(topic.ID) {
 				continue

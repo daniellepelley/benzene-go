@@ -181,10 +181,65 @@ func TestDerive_EmptyDocumentHasEmptyLists(t *testing.T) {
 			t.Errorf("%s lacks %s", raw, want)
 		}
 	}
-	for _, absent := range []string{"serviceVersion", "transports", "messageEndpoint", "description"} {
+	for _, absent := range []string{"serviceVersion", "transports", "messageEndpoint", "description", "placement", "profile"} {
 		if strings.Contains(string(raw), absent) {
 			t.Errorf("%s carries an empty %s", raw, absent)
 		}
+	}
+	if !strings.Contains(string(raw), `"runtime":"go"`) {
+		t.Errorf("%s lacks the runtime", raw)
+	}
+}
+
+func TestDerive_DegradedNamesTheMembersANilOutboundLeavesUndetermined(t *testing.T) {
+	doc, err := Derive(benzene.NewRegistry(), nil, Info{Service: "s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(doc.Degraded, ",") != "events,sends" {
+		t.Errorf("Degraded = %v, want events and sends", doc.Degraded)
+	}
+
+	declared, err := Derive(benzene.NewRegistry(), NewOutboundRegistry(), Info{Service: "s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if declared.Degraded != nil {
+		t.Errorf("an empty OutboundRegistry asserts none, yet Degraded = %v", declared.Degraded)
+	}
+	raw, _ := json.Marshal(declared)
+	if strings.Contains(string(raw), "degraded") {
+		t.Errorf("%s carries an empty degraded", raw)
+	}
+	// Degraded, like every deployment-side field, is outside both hashes.
+	if doc.ContractHash != declared.ContractHash || doc.RegistrationHash != declared.RegistrationHash {
+		t.Error("Degraded changed a hash")
+	}
+}
+
+func TestDerive_DeploymentFieldsAreCarriedAndOutsideBothHashes(t *testing.T) {
+	registry := benzene.NewRegistry()
+	must(t, benzene.Register(registry, benzene.NewTopic("orders:item"), handler[Item, struct{}]))
+	bare, err := Derive(registry, NewOutboundRegistry(), Info{Service: "s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	placed, err := Derive(registry, NewOutboundRegistry(), Info{
+		Service:   "s",
+		Placement: &Placement{Cloud: "aws", Region: "eu-west-1"},
+		Profile:   &Profile{Name: "cloud-service", Missing: []string{"R6"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(placed)
+	for _, want := range []string{`"placement":{"cloud":"aws","region":"eu-west-1"}`, `"profile":{"name":"cloud-service","missing":["R6"]}`} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("%s lacks %s", raw, want)
+		}
+	}
+	if bare.ContractHash != placed.ContractHash || bare.RegistrationHash != placed.RegistrationHash {
+		t.Error("placement or profile changed a hash")
 	}
 }
 

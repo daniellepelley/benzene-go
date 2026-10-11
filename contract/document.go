@@ -4,10 +4,10 @@
 // to topics others define), hashed two ways (contractHash, registrationHash), and served on the
 // reserved benzene:spec topic by Middleware.
 //
-// It is the one document every language's client generator reads and the Cloud Service Profile's
-// R5 serves at GET /benzene/spec (httpbinding.SpecHandler, which routes the request through the
-// pipeline like every other topic). The mesh package's ServiceDescriptor at benzene:mesh is a
-// separate, older shape that the next spec release folds into this one.
+// It is the one document every language's client generator reads, the document the Cloud Service
+// Profile's R5 serves at GET /benzene/spec (httpbinding.SpecHandler, which routes the request through
+// the pipeline like every other topic), and the body a mesh-enabled service registers with a
+// collector (mesh.md §2; see the mesh package's Register). One derivation serves all three.
 //
 // Typical wiring:
 //
@@ -47,6 +47,17 @@ const ReservedPrefix = "benzene:"
 // RefPrefix is where every $ref in a Document points: a component of components.schemas.
 const RefPrefix = "#/components/schemas/"
 
+// Runtime is the value Derive puts in Document.Runtime: the implementing port.
+const Runtime = "go"
+
+// The document members Degraded can name (contract-document.md §1): a member the producer could not
+// determine.
+const (
+	MemberRequests = "requests"
+	MemberEvents   = "events"
+	MemberSends    = "sends"
+)
+
 // IsReserved reports whether topic is a reserved Benzene topic (it starts with ReservedPrefix).
 func IsReserved(topic string) bool { return strings.HasPrefix(topic, ReservedPrefix) }
 
@@ -55,12 +66,20 @@ type Schema = map[string]any
 
 // Document is the Contract Document (contract-document.md §1). Derive builds one from a service's
 // registrations; it marshals to the wire shape with encoding/json.
+//
+// Runtime, Placement, Profile and Degraded are the deployment-side fields: outside both hashes, so
+// identity and placement never change them. Degraded names a member (MemberEvents, ...) the producer
+// could not determine; that member is still present and empty, and asserts nothing.
 type Document struct {
 	SchemaDialect    string     `json:"schemaDialect"`
 	Service          string     `json:"service"`
 	ServiceVersion   string     `json:"serviceVersion,omitempty"`
 	VersionScheme    string     `json:"versionScheme,omitempty"`
 	Description      string     `json:"description,omitempty"`
+	Runtime          string     `json:"runtime,omitempty"`
+	Placement        *Placement `json:"placement,omitempty"`
+	Profile          *Profile   `json:"profile,omitempty"`
+	Degraded         []string   `json:"degraded,omitempty"`
 	MessageEndpoint  string     `json:"messageEndpoint,omitempty"`
 	Transports       []string   `json:"transports,omitempty"`
 	ContractHash     string     `json:"contractHash"`
@@ -100,6 +119,22 @@ type Send struct {
 	Response Schema `json:"response,omitzero"`
 }
 
+// Placement is where a service runs (contract-document.md §1). Cloud is "aws", "azure", "gcp",
+// "self-hosted" or an explicit override; Region is set only where the platform documents a way to
+// know it - a producer never guesses one.
+type Placement struct {
+	Cloud  string `json:"cloud"`
+	Region string `json:"region,omitempty"`
+}
+
+// Profile is a conformance-profile self-assessment (contract-document.md §1): Name is the profile
+// ("cloud-service" for the Cloud Service Profile) and Missing the requirement ids the service's own
+// wiring knows it does not meet. It reflects wiring, not runtime health.
+type Profile struct {
+	Name    string   `json:"name"`
+	Missing []string `json:"missing,omitempty"`
+}
+
 // HTTPMapping is one HTTP route a topic is reachable on.
 type HTTPMapping struct {
 	Method string `json:"method"`
@@ -137,6 +172,11 @@ type Info struct {
 	MessageEndpoint string
 	// Transports are the transports the service receives messages over ("http", "sqs", ...).
 	Transports []string
+	// Placement is where the service runs, or nil to leave the document without one. Derive does not
+	// detect it; mesh.DetectPlacement reads the platform's documented environment.
+	Placement *Placement
+	// Profile is the conformance-profile self-assessment, or nil (cloudservice.New sets it).
+	Profile *Profile
 	// HTTPRoutes are the service's HTTP routes, attached to the requests they reach as
 	// httpMappings. A route whose topic has no version reaches every version of its topic id (the
 	// version then travels in a header or a {version} path segment); a route to a reserved or
