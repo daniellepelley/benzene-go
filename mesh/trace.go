@@ -66,8 +66,13 @@ func TraceMiddleware(info ServiceInfo, exporter Exporter) benzene.Middleware {
 	return func(ctx context.Context, ic *benzene.InvocationContext, next func(context.Context) error) error {
 		started := time.Now()
 		traceID, parentSpanID := parseTraceparent(ic.Headers["traceparent"])
+		// tracestate belongs to the trace it arrived with: it is adopted only when the traceparent
+		// joined, and dropped with a malformed or absent one (W3C Trace Context §3.3).
+		var traceState string
 		if traceID == "" {
 			traceID = randHex(16)
+		} else {
+			traceState = ic.Headers["tracestate"]
 		}
 		event := TraceEvent{
 			TraceID:       traceID,
@@ -87,7 +92,7 @@ func TraceMiddleware(info ServiceInfo, exporter Exporter) benzene.Middleware {
 		// undeclared-edge drift, never the producer/consumer graph itself, which comes from
 		// the registered Contract Document regardless of whether any call has ever propagated a
 		// trace at all).
-		err := next(contextWithSpan(ctx, Span{TraceID: traceID, SpanID: event.SpanID}))
+		err := next(contextWithSpan(ctx, Span{TraceID: traceID, SpanID: event.SpanID, TraceState: traceState}))
 
 		event.DurationMs = float64(time.Since(started)) / float64(time.Millisecond)
 		if ic.Result != nil {

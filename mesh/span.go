@@ -11,6 +11,10 @@ import "context"
 type Span struct {
 	TraceID string
 	SpanID  string
+	// TraceState is the caller's W3C tracestate, adopted with its traceparent and carried forward
+	// unchanged on every outbound message (wire-contracts.md §2); empty when the caller sent none or
+	// this invocation started a fresh trace.
+	TraceState string
 }
 
 // Traceparent renders the span as a W3C traceparent header value for outbound
