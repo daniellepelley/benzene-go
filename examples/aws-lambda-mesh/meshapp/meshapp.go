@@ -20,9 +20,16 @@
 // reserved_concurrent_executions to 1 - see the README), App builds a FRESH exporter pair for
 // every invocation, with BatchSize 1 so the single trace/issue event from this invocation flushes
 // immediately, and Close()s them (a synchronous, blocking flush) before the handler returns. Only
-// the Pipeline is rebuilt this way - the Registry and the derived Descriptor (schema derivation is
-// startup-only, never on the dispatch path, matching every other package in this repo) are built
-// once at cold start and reused for the life of the execution environment.
+// the Pipeline is rebuilt this way - the Registry and the derived Contract Document (schema
+// derivation is startup-only, never on the dispatch path, matching every other package in this
+// repo) are built once at cold start and reused for the life of the execution environment.
+//
+// # Self-description and registration
+//
+// Each service serves its Contract Document on the reserved benzene:spec topic and registers that
+// same document with the mesh (mesh.Announcer). The services publish and send over SQS/SNS/
+// EventBridge without declaring those events and sends, so the document names both in degraded:
+// the collector treats them as unknown rather than as "sends nothing".
 package meshapp
 
 import (
@@ -38,6 +45,7 @@ import (
 	"github.com/daniellepelley/benzene-go/awslambdaclient"
 	"github.com/daniellepelley/benzene-go/awssns"
 	"github.com/daniellepelley/benzene-go/awssqs"
+	"github.com/daniellepelley/benzene-go/contract"
 	"github.com/daniellepelley/benzene-go/healthcheck"
 	"github.com/daniellepelley/benzene-go/httpbinding"
 	"github.com/daniellepelley/benzene-go/mesh"
@@ -61,21 +69,22 @@ type Config struct {
 	MeshClient *awslambdaclient.Client
 }
 
-// App is one composite service Lambda: its registry + derived descriptor (built once) plus
+// App is one composite service Lambda: its registry + derived Contract Document (built once) plus
 // everything Handler needs to serve a mixed-transport front door and report to the mesh.
 type App struct {
 	name       string
 	registry   *benzene.Registry
 	routes     []httpbinding.Route
-	descriptor mesh.Descriptor
+	contract   contract.Document
 	info       mesh.ServiceInfo
 	meshClient *awslambdaclient.Client
+	announcer  *mesh.Announcer // nil when MeshClient is nil
 	checks     []healthcheck.Check
 }
 
-// New builds the App: registers the domain handler(s), derives the descriptor from the now-final
-// registry, and wires the standard "self" health check - all startup work, done once per cold
-// start.
+// New builds the App: registers the domain handler(s), derives the Contract Document from the
+// now-final registry, and wires the standard "self" health check - all startup work, done once per
+// cold start. A derivation error (a component-name collision) is a wiring mistake: New panics.
 func New(cfg Config) *App {
 	registry := benzene.NewRegistry()
 	routes := []httpbinding.Route{
@@ -85,28 +94,42 @@ func New(cfg Config) *App {
 		routes = append(routes, cfg.Register(registry)...)
 	}
 
-	info := mesh.ServiceInfo{Service: cfg.ServiceName, ServiceVersion: "1.0.0", InstanceID: cfg.ServiceName, Binding: "aws-lambda"}
-	descriptor := mesh.Describe(registry, nil, info)
+	info := mesh.ServiceInfo{Service: cfg.ServiceName, InstanceID: cfg.ServiceName}
+	// A nil OutboundRegistry: the events and sends these services put on SQS/SNS/EventBridge are not
+	// declared, so the document names them in degraded rather than asserting none.
+	placement := mesh.DetectPlacement()
+	doc, err := contract.Derive(registry, nil, contract.Info{
+		Service: cfg.ServiceName, ServiceVersion: "1.0.0", VersionScheme: "semver",
+		Placement: &placement,
+	})
+	if err != nil {
+		panic(err)
+	}
 
 	checks := []healthcheck.Check{healthcheck.NamedCheck("self", func(context.Context) healthcheck.CheckResult {
 		return healthcheck.CheckResult{Status: healthcheck.StatusOk, Type: "self", Data: map[string]any{"service": cfg.ServiceName}}
 	})}
 
-	return &App{
+	app := &App{
 		name:       cfg.ServiceName,
 		registry:   registry,
 		routes:     routes,
-		descriptor: descriptor,
+		contract:   doc,
 		info:       info,
 		meshClient: cfg.MeshClient,
 		checks:     checks,
 	}
+	if cfg.MeshClient != nil {
+		app.announcer = mesh.NewAnnouncer(cfg.MeshClient, doc, mesh.AnnouncerOptions{InstanceID: cfg.ServiceName, Checks: checks})
+	}
+	return app
 }
 
-// Descriptor returns the service's derived self-description, for tests and for Announce.
-func (a *App) Descriptor() mesh.Descriptor { return a.descriptor }
+// Contract returns the service's Contract Document: what benzene:spec serves and Announce
+// registers.
+func (a *App) Contract() contract.Document { return a.contract }
 
-// Announce registers a.Descriptor with the mesh collector, retrying with a short backoff while
+// Announce registers a.Contract with the mesh collector, retrying with a short backoff while
 // the mesh Lambda comes up (matching examples/k8s-mesh-helloworld/cmd/service's announce retry
 // loop, scaled down for Lambda's tighter cold-start budget: 5 attempts instead of 30). A nil
 // MeshClient is a no-op success - fleet reporting simply wasn't configured, which reduces the
@@ -131,32 +154,14 @@ func (a *App) Announce(ctx context.Context) bool {
 }
 
 func (a *App) announceOnce(ctx context.Context) bool {
-	body, err := json.Marshal(a.descriptor)
-	if err != nil {
-		return false
-	}
-	result := a.meshClient.Send(ctx, benzene.NewTopic(mesh.TopicRegister), nil, body)
-	return result.IsSuccessful()
+	return a.announcer.Register(ctx)
 }
 
-// heartbeat sends one health report to the mesh collector. In a real service Health would come
-// from actually running a.checks; a static healthy report keeps the example focused, matching
-// examples/k8s-mesh-helloworld/cmd/service's own heartbeat. A nil MeshClient makes this a no-op.
+// heartbeat sends one health report to the mesh collector - a.checks run, with the registered
+// document's registrationHash (mesh.Announcer.Heartbeat). A nil MeshClient makes this a no-op: the
+// announcer is nil.
 func (a *App) heartbeat(ctx context.Context) {
-	if a.meshClient == nil {
-		return
-	}
-	hb, err := json.Marshal(mesh.Heartbeat{
-		Service:        a.descriptor.Service,
-		InstanceID:     a.descriptor.InstanceID,
-		DescriptorHash: a.descriptor.DescriptorHash,
-		SentAt:         time.Now().UTC(),
-		Health:         healthcheck.Response{IsHealthy: true, HealthChecks: map[string]healthcheck.CheckResult{}},
-	})
-	if err != nil {
-		return
-	}
-	a.meshClient.Send(ctx, benzene.NewTopic(mesh.TopicHeartbeat), nil, hb)
+	a.announcer.Heartbeat(ctx)
 }
 
 // Handler returns the composite awslambda.HandlerFunc: heartbeat the mesh (best-effort), build a
@@ -178,7 +183,7 @@ func (a *App) Handler() awslambda.HandlerFunc {
 		pipeline := benzene.NewPipeline(
 			mesh.TraceMiddleware(a.info, exporter),
 			mesh.IssueMiddleware(a.info, issueExporter),
-			mesh.Middleware(a.descriptor),
+			contract.Middleware(a.contract),
 			healthcheck.Middleware(a.checks),
 			benzene.RouterMiddleware(a.registry),
 		)

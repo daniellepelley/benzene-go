@@ -178,7 +178,7 @@ func TestPushExporter_DrainQueueTakesEverythingQueued(t *testing.T) {
 }
 
 func TestHeartbeat_WireFieldNamesAreCamelCase(t *testing.T) {
-	data, err := json.Marshal(Heartbeat{Service: "orders", InstanceID: "orders-1", DescriptorHash: "sha256:x", SentAt: time.Now().UTC()})
+	data, err := json.Marshal(Heartbeat{Service: "orders", ServiceVersion: "1.4.2", InstanceID: "orders-1", RegistrationHash: "sha256:x", SentAt: time.Now().UTC()})
 	if err != nil {
 		t.Fatalf("json.Marshal() error = %v", err)
 	}
@@ -186,7 +186,7 @@ func TestHeartbeat_WireFieldNamesAreCamelCase(t *testing.T) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
-	for _, key := range []string{"service", "instanceId", "descriptorHash", "sentAt", "health"} {
+	for _, key := range []string{"service", "serviceVersion", "instanceId", "registrationHash", "sentAt", "health"} {
 		if _, ok := raw[key]; !ok {
 			t.Errorf("marshaled heartbeat is missing key %q: %s", key, data)
 		}

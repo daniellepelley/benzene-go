@@ -30,9 +30,9 @@ import (
 
 // newApp is the composition root both main() and the tests boot from. payments/orderPlaced are
 // wrapped in mesh.WithTraceContext by the caller (main), exactly like every other mesh example's
-// downstream client - propagation lets the collector show this service's declared consumer edges
-// as observed (mesh.md §4.2), on top of the graph itself, which comes from the registered
-// ServiceDescriptor.Produces declared below (mesh.md §4) and from nothing else.
+// downstream client - propagation lets the collector show this service's declared provider edges
+// as observed (mesh.md §4.2), on top of the graph itself, which comes from the events and sends
+// declared below, in its registered Contract Document (mesh.md §4), and from nothing else.
 func newApp(payments, orderPlaced client.Sender, meshClient *httpclient.Client) *meshapp.App {
 	return meshapp.New(meshapp.Config{
 		ServiceName: domain.ServiceOrders,

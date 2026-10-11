@@ -46,15 +46,15 @@ func invoke[T any](t *testing.T, c *Collector, topic string, body any) (benzene.
 	return benzene.Status(resp.StatusCode), typed
 }
 
-// testDescriptor builds a real derived descriptor providing topics ("id" or "id@version") and
-// consuming none.
-func testDescriptor(service string, topics ...string) mesh.Descriptor {
-	return testDescriptorProducing(service, topics, nil)
+// testDocument derives a real Contract Document - the register body - serving topics ("id" or
+// "id@version") and sending to none.
+func testDocument(service string, topics ...string) contract.Document {
+	return testDocumentSending(service, topics, nil)
 }
 
-// testDescriptorConsuming builds a real derived descriptor providing topics and, via a real
-// OutboundRegistry, consuming consumes - both "id" or "id@version".
-func testDescriptorProducing(service string, topics, produces []string) mesh.Descriptor {
+// testDocumentSending derives a real Contract Document serving topics and, through a real
+// OutboundRegistry, sending to sends - both "id" or "id@version".
+func testDocumentSending(service string, topics, sends []string) contract.Document {
 	registry := benzene.NewRegistry()
 	for _, spec := range topics {
 		topic := parseTestTopic(spec)
@@ -66,16 +66,20 @@ func testDescriptorProducing(service string, topics, produces []string) mesh.Des
 		}
 	}
 	outbound := contract.NewOutboundRegistry()
-	for _, spec := range produces {
+	for _, spec := range sends {
 		if err := contract.RegisterSend[struct{}](outbound, parseTestTopic(spec)); err != nil {
 			panic(err)
 		}
 	}
-	return mesh.Describe(registry, outbound, mesh.ServiceInfo{
-		Service:   service,
-		Binding:   "http",
-		Placement: mesh.Placement{Cloud: "aws", Region: "eu-west-1"},
+	doc, err := contract.Derive(registry, outbound, contract.Info{
+		Service:    service,
+		Transports: []string{"http"},
+		Placement:  &contract.Placement{Cloud: "aws", Region: "eu-west-1"},
 	})
+	if err != nil {
+		panic(err)
+	}
+	return doc
 }
 
 // parseTestTopic turns "id" or "id@version" into a benzene.Topic.
@@ -88,11 +92,11 @@ func parseTestTopic(spec string) benzene.Topic {
 
 func testHeartbeat(service, instance string, healthy bool, hash string) mesh.Heartbeat {
 	return mesh.Heartbeat{
-		Service:        service,
-		InstanceID:     instance,
-		DescriptorHash: hash,
-		SentAt:         testClock,
-		Health:         healthcheck.Response{IsHealthy: healthy, HealthChecks: map[string]healthcheck.CheckResult{}},
+		Service:          service,
+		InstanceID:       instance,
+		RegistrationHash: hash,
+		SentAt:           testClock,
+		Health:           healthcheck.Response{IsHealthy: healthy, HealthChecks: map[string]healthcheck.CheckResult{}},
 	}
 }
 
@@ -112,7 +116,7 @@ func event(traceID, spanID, parentSpanID, service, topic, status string, duratio
 func TestCollector_RegisterAndFleet(t *testing.T) {
 	c := newTestCollector(t)
 
-	status, ack := invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("orders", "order:create", "order:create@v2", "order:cancel"))
+	status, ack := invoke[Ack](t, c, mesh.TopicRegister, testDocument("orders", "order:create", "order:create@v2", "order:cancel"))
 	if status != benzene.StatusOk || ack.Accepted != 1 {
 		t.Fatalf("register = (%v, %+v), want (Ok, accepted 1)", status, ack)
 	}
@@ -123,8 +127,9 @@ func TestCollector_RegisterAndFleet(t *testing.T) {
 		t.Fatalf("Services = %+v, want the registered service", fleet.Services)
 	}
 	svc := fleet.Services[0]
-	if svc.Service != "orders" || svc.Topics != 3 || svc.Placement.Cloud != "aws" || svc.Binding != "http" {
-		t.Errorf("service row = %+v, want descriptor-derived identity", svc)
+	if svc.Service != "orders" || svc.Topics != 3 || svc.Runtime != "go" || svc.Placement == nil || svc.Placement.Cloud != "aws" ||
+		len(svc.Transports) != 1 || svc.Transports[0] != "http" {
+		t.Errorf("service row = %+v, want the registered document's identity", svc)
 	}
 	if svc.Health != healthUnknown {
 		t.Errorf("Health = %q, want %q with no heartbeats", svc.Health, healthUnknown)
@@ -159,8 +164,8 @@ func TestCollector_RegisterAndFleet(t *testing.T) {
 func TestCollector_ReregistrationReplacesProviderEdges(t *testing.T) {
 	c := newTestCollector(t)
 
-	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("orders", "order:create"))
-	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("orders", "order:cancel"))
+	invoke[Ack](t, c, mesh.TopicRegister, testDocument("orders", "order:create"))
+	invoke[Ack](t, c, mesh.TopicRegister, testDocument("orders", "order:cancel"))
 
 	status, topic := invoke[TopicSummary](t, c, mesh.TopicQueryTopic, TopicQuery{Topic: "order:create"})
 	if status != benzene.StatusOk {
@@ -179,7 +184,8 @@ func TestCollector_Validation(t *testing.T) {
 		topic string
 		body  any
 	}{
-		{name: "register requires a service", topic: mesh.TopicRegister, body: mesh.Descriptor{}},
+		{name: "register requires a service", topic: mesh.TopicRegister, body: contract.Document{}},
+		{name: "register requires a contract document", topic: mesh.TopicRegister, body: []string{"not", "a", "document"}},
 		{name: "heartbeat requires a service", topic: mesh.TopicHeartbeat, body: mesh.Heartbeat{}},
 		{name: "service query requires a service", topic: mesh.TopicQueryService, body: ServiceQuery{}},
 		{name: "topic query requires a topic", topic: mesh.TopicQueryTopic, body: TopicQuery{}},
@@ -217,10 +223,10 @@ func TestCollector_NotFound(t *testing.T) {
 
 func TestCollector_HeartbeatsDriveHealth(t *testing.T) {
 	c := newTestCollector(t)
-	desc := testDescriptor("orders", "order:create")
+	desc := testDocument("orders", "order:create")
 	invoke[Ack](t, c, mesh.TopicRegister, desc)
 
-	invoke[Ack](t, c, mesh.TopicHeartbeat, testHeartbeat("orders", "orders-1", true, desc.DescriptorHash))
+	invoke[Ack](t, c, mesh.TopicHeartbeat, testHeartbeat("orders", "orders-1", true, desc.RegistrationHash))
 	_, fleet := invoke[FleetView](t, c, mesh.TopicQueryFleet, struct{}{})
 	if fleet.Services[0].Health != healthHealthy || fleet.Services[0].Instances != 1 {
 		t.Errorf("service = %+v, want healthy with 1 instance", fleet.Services[0])
@@ -246,7 +252,7 @@ func TestCollector_HeartbeatsDriveHealth(t *testing.T) {
 
 func TestCollector_HashMatchNilWhenEitherSideLacksAHash(t *testing.T) {
 	c := newTestCollector(t)
-	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("orders", "order:create"))
+	invoke[Ack](t, c, mesh.TopicRegister, testDocument("orders", "order:create"))
 	invoke[Ack](t, c, mesh.TopicHeartbeat, testHeartbeat("orders", "orders-1", true, ""))
 
 	_, view := invoke[ServiceView](t, c, mesh.TopicQueryService, ServiceQuery{Service: "orders"})
@@ -259,10 +265,10 @@ func TestCollector_HashMatchNilWhenEitherSideLacksAHash(t *testing.T) {
 func TestCollector_TracesDriveStatsButNotGraphEdges(t *testing.T) {
 	// Per mesh.md §4: trace parentage feeds invocation stats and the §4.2 observed-activity
 	// and drift signals, but it MUST NOT create a graph edge - the declared graph comes from
-	// the descriptor alone. frontdoor here never registers anything, so "greet"'s Providers
+	// the registration alone. frontdoor here never registers anything, so "greet"'s Providers
 	// stays empty despite the parentage, while greeter (which HANDLES greet) is its consumer.
 	c := newTestCollector(t)
-	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("greeter", "greet"))
+	invoke[Ack](t, c, mesh.TopicRegister, testDocument("greeter", "greet"))
 
 	status, ack := invoke[Ack](t, c, mesh.TopicTraces, mesh.TraceBatch{Events: []mesh.TraceEvent{
 		event("trace-1", "span-front", "", "frontdoor", "welcome", "ok", 20),
@@ -328,18 +334,18 @@ func TestCollector_TracesDriveStatsButNotGraphEdges(t *testing.T) {
 }
 
 // TestCollector_DeclaredGraphExistsWithZeroTraffic pins mesh.md §4's central rule: the
-// producer/consumer graph is built from the latest registered ServiceDescriptor alone and MUST
+// producer/consumer graph is built from the latest registered Contract Document alone and MUST
 // be reported in full for a service that has never sent or received a single message.
 func TestCollector_DeclaredGraphExistsWithZeroTraffic(t *testing.T) {
 	c := newTestCollector(t)
-	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("payments", "payments:capture"))
-	invoke[Ack](t, c, mesh.TopicRegister, testDescriptorProducing("orders", []string{"order:create"}, []string{"payments:capture"}))
+	invoke[Ack](t, c, mesh.TopicRegister, testDocument("payments", "payments:capture"))
+	invoke[Ack](t, c, mesh.TopicRegister, testDocumentSending("orders", []string{"order:create"}, []string{"payments:capture"}))
 
 	status, topic := invoke[TopicSummary](t, c, mesh.TopicQueryTopic, TopicQuery{Topic: "payments:capture"})
 	if status != benzene.StatusOk {
 		t.Fatalf("topic query = %v, want Ok", status)
 	}
-	// orders PRODUCES payments:capture (outbound registration); payments HANDLES it, so it
+	// orders SENDS to payments:capture (a declared send); payments HANDLES it, so it
 	// consumes it (mesh.md §4).
 	if len(topic.Providers) != 1 || topic.Providers[0] != "orders" {
 		t.Errorf("Providers = %v, want [orders]", topic.Providers)
@@ -358,10 +364,10 @@ func TestCollector_DeclaredGraphExistsWithZeroTraffic(t *testing.T) {
 // (mesh.md §4).
 func TestCollector_ReregistrationReplacesProducerEdgesToo(t *testing.T) {
 	c := newTestCollector(t)
-	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("payments", "payments:capture"))
-	invoke[Ack](t, c, mesh.TopicRegister, testDescriptorProducing("orders", []string{"order:create"}, []string{"payments:capture"}))
+	invoke[Ack](t, c, mesh.TopicRegister, testDocument("payments", "payments:capture"))
+	invoke[Ack](t, c, mesh.TopicRegister, testDocumentSending("orders", []string{"order:create"}, []string{"payments:capture"}))
 	// Redeploy: orders no longer declares producing payments:capture.
-	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("orders", "order:cancel"))
+	invoke[Ack](t, c, mesh.TopicRegister, testDocument("orders", "order:cancel"))
 
 	status, topic := invoke[TopicSummary](t, c, mesh.TopicQueryTopic, TopicQuery{Topic: "payments:capture"})
 	if status != benzene.StatusOk {
@@ -381,8 +387,8 @@ func TestCollector_ReregistrationReplacesProducerEdgesToo(t *testing.T) {
 // resurrect its consumer edge.
 func TestCollector_TraceParentageNeverAdmitsOrRemovesAGraphEdge(t *testing.T) {
 	c := newTestCollector(t)
-	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("greeter", "greet"))
-	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("frontdoor")) // registered, declares nothing
+	invoke[Ack](t, c, mesh.TopicRegister, testDocument("greeter", "greet"))
+	invoke[Ack](t, c, mesh.TopicRegister, testDocument("frontdoor")) // registered, declares nothing
 
 	for i := 0; i < 5; i++ {
 		invoke[Ack](t, c, mesh.TopicTraces, mesh.TraceBatch{Events: []mesh.TraceEvent{
@@ -403,8 +409,8 @@ func TestCollector_TraceParentageNeverAdmitsOrRemovesAGraphEdge(t *testing.T) {
 // collapsed into a boolean.
 func TestCollector_UnobservedDeclaredEdgeReportsNoLastObservedAt(t *testing.T) {
 	c := newTestCollector(t)
-	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("payments", "payments:capture"))
-	invoke[Ack](t, c, mesh.TopicRegister, testDescriptorProducing("orders", []string{"order:create"}, []string{"payments:capture"}))
+	invoke[Ack](t, c, mesh.TopicRegister, testDocument("payments", "payments:capture"))
+	invoke[Ack](t, c, mesh.TopicRegister, testDocumentSending("orders", []string{"order:create"}, []string{"payments:capture"}))
 
 	_, topic := invoke[TopicSummary](t, c, mesh.TopicQueryTopic, TopicQuery{Topic: "payments:capture"})
 
@@ -426,8 +432,8 @@ func TestCollector_UnobservedDeclaredEdgeReportsNoLastObservedAt(t *testing.T) {
 
 func TestCollector_ObservedDeclaredEdgeReportsLastObservedAt(t *testing.T) {
 	c := newTestCollector(t)
-	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("payments", "payments:capture"))
-	invoke[Ack](t, c, mesh.TopicRegister, testDescriptorProducing("orders", nil, []string{"payments:capture"}))
+	invoke[Ack](t, c, mesh.TopicRegister, testDocument("payments", "payments:capture"))
+	invoke[Ack](t, c, mesh.TopicRegister, testDocumentSending("orders", nil, []string{"payments:capture"}))
 
 	invoke[Ack](t, c, mesh.TopicTraces, mesh.TraceBatch{Events: []mesh.TraceEvent{
 		event("trace-1", "span-orders", "", "orders", "order:create", "ok", 1),
@@ -452,7 +458,7 @@ func TestCollector_ObservedDeclaredEdgeReportsLastObservedAt(t *testing.T) {
 // contract-drift issue.
 func TestCollector_UndeclaredProviderEdgeIsContractDrift(t *testing.T) {
 	c := newTestCollector(t)
-	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("greeter", "greet")) // does not declare "farewell"
+	invoke[Ack](t, c, mesh.TopicRegister, testDocument("greeter", "greet")) // does not declare "farewell"
 
 	invoke[Ack](t, c, mesh.TopicTraces, mesh.TraceBatch{Events: []mesh.TraceEvent{
 		event("trace-1", "span-1", "", "greeter", "farewell", "ok", 1),
@@ -470,8 +476,8 @@ func TestCollector_UndeclaredProviderEdgeIsContractDrift(t *testing.T) {
 
 func TestCollector_UndeclaredConsumerEdgeIsContractDrift(t *testing.T) {
 	c := newTestCollector(t)
-	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("payments", "payments:capture"))
-	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("orders", "order:create")) // does not declare consuming payments:capture
+	invoke[Ack](t, c, mesh.TopicRegister, testDocument("payments", "payments:capture"))
+	invoke[Ack](t, c, mesh.TopicRegister, testDocument("orders", "order:create")) // does not declare consuming payments:capture
 
 	invoke[Ack](t, c, mesh.TopicTraces, mesh.TraceBatch{Events: []mesh.TraceEvent{
 		event("trace-1", "span-orders", "", "orders", "order:create", "ok", 1),
@@ -498,10 +504,10 @@ func TestCollector_UndeclaredConsumerEdgeIsContractDrift(t *testing.T) {
 // never flagged, no matter what topics it appears to serve or call in trace traffic.
 func TestCollector_AnonymousServiceNeverFlaggedForDrift(t *testing.T) {
 	c := newTestCollector(t)
-	invoke[Ack](t, c, mesh.TopicRegister, testDescriptor("greeter", "greet"))
+	invoke[Ack](t, c, mesh.TopicRegister, testDocument("greeter", "greet"))
 
 	invoke[Ack](t, c, mesh.TopicTraces, mesh.TraceBatch{Events: []mesh.TraceEvent{
-		// frontdoor never registered a descriptor at all.
+		// frontdoor never registered at all.
 		event("trace-1", "span-front", "", "frontdoor", "welcome", "ok", 1),
 		event("trace-1", "span-greet", "span-front", "greeter", "greet", "ok", 1),
 	}})
@@ -614,22 +620,15 @@ func TestCollector_FleetTraceListIsBounded(t *testing.T) {
 	}
 }
 
-func TestCollector_ServesItsOwnDescriptor(t *testing.T) {
+func TestCollector_ServesItsOwnContractDocument(t *testing.T) {
 	c := newTestCollector(t)
 
-	status, desc := invoke[mesh.Descriptor](t, c, mesh.TopicID, struct{}{})
+	status, doc := invoke[contract.Document](t, c, contract.TopicID, struct{}{})
 
-	if status != benzene.StatusOk || desc.Service != "meshd" {
-		t.Fatalf("mesh topic = (%v, %+v), want the collector's own descriptor", status, desc)
-	}
-	topics := map[string]bool{}
-	for _, topic := range desc.Topics {
-		topics[topic.ID] = true
-	}
-	for _, want := range []string{mesh.TopicRegister, mesh.TopicHeartbeat, mesh.TopicTraces, mesh.TopicQueryFleet, mesh.TopicQueryService, mesh.TopicQueryTopic, mesh.TopicQueryTrace} {
-		if !topics[want] {
-			t.Errorf("collector descriptor is missing its own topic %q: %v", want, desc.Topics)
-		}
+	// Every collector topic is a reserved benzene: topic, which a document never lists, and the
+	// collector sends nothing: its document is its identity alone.
+	if status != benzene.StatusOk || doc.Service != "meshd" || len(doc.Requests) != 0 || len(doc.Events) != 0 || len(doc.Sends) != 0 || doc.Degraded != nil {
+		t.Fatalf("benzene:spec = (%v, %+v), want the collector's own document", status, doc)
 	}
 }
 
@@ -665,5 +664,119 @@ func TestAck_WireFieldNamesAreCamelCase(t *testing.T) {
 	}
 	if string(data) != `{"accepted":3}` {
 		t.Errorf("marshaled ack = %s, want {\"accepted\":3}", data)
+	}
+}
+
+// registerRaw sends a register body verbatim - a document carrying only the members a test needs,
+// as a non-Go producer may send it.
+func registerRaw(t *testing.T, c *Collector, body string) benzene.Status {
+	t.Helper()
+	builder := c.Builder()
+	resp := envelope.Dispatch(context.Background(), builder.Pipeline, builder.Container, wire.Request{
+		Topic: mesh.TopicRegister, Headers: map[string]string{}, Body: body,
+	})
+	return benzene.Status(resp.StatusCode)
+}
+
+func TestCollector_PublishedEventMakesItsPublisherAProvider(t *testing.T) {
+	c := newTestCollector(t)
+	registerRaw(t, c, `{"service":"orders","requests":[],"events":[{"topic":"order:placed","message":{}}],"sends":[]}`)
+	registerRaw(t, c, `{"service":"shipping","requests":[{"topic":"order:placed","request":{}}]}`)
+
+	_, topic := invoke[TopicSummary](t, c, mesh.TopicQueryTopic, TopicQuery{Topic: "order:placed"})
+	if strings.Join(topic.Providers, ",") != "orders" || strings.Join(topic.Consumers, ",") != "shipping" {
+		t.Errorf("order:placed = providers %v, consumers %v; want [orders], [shipping]", topic.Providers, topic.Consumers)
+	}
+	_, fleet := invoke[FleetView](t, c, mesh.TopicQueryFleet, struct{}{})
+	if fleet.Services[0].Service != "orders" || fleet.Services[0].Produces != 1 {
+		t.Errorf("orders row = %+v, want produces 1", fleet.Services[0])
+	}
+}
+
+func TestCollector_ReservedEntriesAreIgnored(t *testing.T) {
+	c := newTestCollector(t)
+	registerRaw(t, c, `{"service":"orders","requests":[{"topic":"order:create","request":{}},{"topic":"benzene:spec","request":{}}],`+
+		`"events":[{"topic":"benzene:mesh:issues","message":{}}],"sends":[{"topic":"benzene:mesh:traces","request":{}}]}`)
+
+	_, fleet := invoke[FleetView](t, c, mesh.TopicQueryFleet, struct{}{})
+	if len(fleet.Topics) != 1 || fleet.Topics[0].Topic != "order:create" || fleet.Services[0].Topics != 1 || fleet.Services[0].Produces != 0 {
+		t.Errorf("fleet = %+v / %+v, want only order:create", fleet.Services, fleet.Topics)
+	}
+}
+
+func TestCollector_AServiceOnlyBodyIsAcceptedAndDeclaresNothing(t *testing.T) {
+	c := newTestCollector(t)
+	// No schemaDialect, no hashes, no lists: a collector requires service alone (mesh.md §2).
+	if status := registerRaw(t, c, `{"service":"orders"}`); status != benzene.StatusOk {
+		t.Fatalf("register = %v, want ok", status)
+	}
+	invoke[Ack](t, c, mesh.TopicTraces, mesh.TraceBatch{Events: []mesh.TraceEvent{
+		event("trace-1", "span-orders", "", "orders", "order:create", "ok", 1),
+		event("trace-1", "span-payments", "span-orders", "payments", "payments:capture", "ok", 1),
+	}})
+
+	_, view := invoke[ServiceView](t, c, mesh.TopicQueryService, ServiceQuery{Service: "orders"})
+	if string(view.Descriptor) != `{"service":"orders"}` {
+		t.Errorf("descriptor = %s, want the body as registered", view.Descriptor)
+	}
+	for _, feed := range view.MissingFeeds {
+		if feed == "descriptor" {
+			t.Error("a registered service reports its registration missing")
+		}
+	}
+	// Every member is unknown, so neither the handled topic nor the sent one is undeclared.
+	_, fleet := invoke[FleetView](t, c, mesh.TopicQueryFleet, struct{}{})
+	for _, issue := range fleet.Issues {
+		t.Errorf("unknown members raised drift: %+v", issue)
+	}
+}
+
+func TestCollector_DegradedMembersAreUnknownNotUndeclared(t *testing.T) {
+	c := newTestCollector(t)
+	// requests known (and declaring order:create); events and sends present but degraded.
+	registerRaw(t, c, `{"service":"orders","degraded":["events","sends"],"requests":[{"topic":"order:create","request":{}}],"events":[],"sends":[]}`)
+	// sends unknown through absence alone, events known: still not enough to call a send undeclared.
+	registerRaw(t, c, `{"service":"billing","requests":[{"topic":"bill","request":{}}],"events":[]}`)
+	// requests degraded: audit handling anything is not undeclared either.
+	registerRaw(t, c, `{"service":"audit","degraded":["requests"],"requests":[],"events":[],"sends":[]}`)
+
+	invoke[Ack](t, c, mesh.TopicTraces, mesh.TraceBatch{Events: []mesh.TraceEvent{
+		event("trace-1", "span-orders", "", "orders", "order:create", "ok", 1),
+		event("trace-1", "span-pay", "span-orders", "payments", "payments:capture", "ok", 1),
+		event("trace-2", "span-bill", "", "billing", "bill", "ok", 1),
+		event("trace-2", "span-pay2", "span-bill", "payments", "payments:capture", "ok", 1),
+		event("trace-3", "span-audit", "", "audit", "audit:record", "ok", 1),
+	}})
+
+	_, fleet := invoke[FleetView](t, c, mesh.TopicQueryFleet, struct{}{})
+	for _, issue := range fleet.Issues {
+		if issue.Service == "orders" || issue.Service == "billing" || issue.Service == "audit" {
+			t.Errorf("an unknown member raised drift: %+v", issue)
+		}
+	}
+
+	// A known, empty sends list does assert "none": the same send is then undeclared.
+	registerRaw(t, c, `{"service":"orders","requests":[{"topic":"order:create","request":{}}],"events":[],"sends":[]}`)
+	invoke[Ack](t, c, mesh.TopicTraces, mesh.TraceBatch{Events: []mesh.TraceEvent{
+		event("trace-4", "span-orders-4", "", "orders", "order:create", "ok", 1),
+		event("trace-4", "span-pay-4", "span-orders-4", "payments", "payments:capture", "ok", 1),
+	}})
+	if _, ok := fleetIssue(t, c, mesh.IssueFingerprint("orders", "payments:capture", "", mesh.ClassificationContractDrift, "ok")); !ok {
+		t.Error("a send absent from a known sends list was not flagged")
+	}
+}
+
+func TestCollector_HeartbeatHashIsComparedWithTheServicesOneRegistration(t *testing.T) {
+	c := newTestCollector(t)
+	// The carried registrationHash is trusted, never recomputed or rejected (mesh.md §2).
+	registerRaw(t, c, `{"service":"orders","serviceVersion":"1","registrationHash":"sha256:aaaa"}`)
+	hb := testHeartbeat("orders", "orders-1", true, "sha256:aaaa")
+	hb.ServiceVersion = "1"
+	invoke[Ack](t, c, mesh.TopicHeartbeat, hb)
+
+	_, view := invoke[ServiceView](t, c, mesh.TopicQueryService, ServiceQuery{Service: "orders"})
+	if view.ServiceVersion != "1" || len(view.Instances) != 1 || view.Instances[0].ServiceVersion != "1" ||
+		view.Instances[0].RegistrationHash != "sha256:aaaa" || view.Instances[0].HashMatches == nil || !*view.Instances[0].HashMatches {
+		t.Errorf("service view = %+v, want instance orders-1 at version 1 matching sha256:aaaa", view)
 	}
 }

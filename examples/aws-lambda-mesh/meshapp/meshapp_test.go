@@ -351,9 +351,9 @@ func TestApp_Announce_RespectsContextCancellation(t *testing.T) {
 	}
 }
 
-// -- descriptor --------------------------------------------------------------------------------
+// -- contract document -------------------------------------------------------------------------
 
-func TestApp_Descriptor_ReflectsRegisteredTopics(t *testing.T) {
+func TestApp_Contract_ReflectsRegisteredTopics(t *testing.T) {
 	app := New(Config{
 		ServiceName: "svc",
 		Register: func(registry *benzene.Registry) []httpbinding.Route {
@@ -361,17 +361,21 @@ func TestApp_Descriptor_ReflectsRegisteredTopics(t *testing.T) {
 			return nil
 		},
 	})
-	desc := app.Descriptor()
-	if desc.Service != "svc" || desc.Runtime != "go" {
-		t.Errorf("Descriptor = %+v, want Service=svc Runtime=go", desc)
+	doc := app.Contract()
+	if doc.Service != "svc" || doc.Runtime != "go" || doc.Placement == nil {
+		t.Errorf("Contract = %+v, want Service=svc Runtime=go with a placement", doc)
+	}
+	// Undeclared events and sends are unknown, not "none".
+	if len(doc.Degraded) != 2 {
+		t.Errorf("Degraded = %v, want events and sends", doc.Degraded)
 	}
 	found := false
-	for _, topic := range desc.Topics {
-		if topic.ID == "some:topic" {
+	for _, request := range doc.Requests {
+		if request.Topic == "some:topic" {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("Descriptor.Topics = %+v, want some:topic present", desc.Topics)
+		t.Errorf("Contract.Requests = %+v, want some:topic present", doc.Requests)
 	}
 }

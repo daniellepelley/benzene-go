@@ -9,8 +9,9 @@
 //
 // Scope: this is the runtime capability (mappings + middleware + the Publisher port). The .NET
 // package's AsyncAPI/event-service spec-catalog half (IResponseEventCatalog, declaration-only
-// definitions, the unmapped-response build-time diagnostic) is deliberately not ported - Go has no
-// AsyncAPI generator here; the mesh descriptor derivation (mesh/) is this port's introspection path.
+// definitions, the unmapped-response build-time diagnostic) is deliberately not ported - this port's
+// introspection path is the Contract Document (contract/), whose events come from
+// contract.RegisterEvent declarations, not from these mappings.
 // Mapping.Covers is kept so a future diagnostic can be built on the same static coverage rule.
 //
 // Nil-payload semantics: a mapping publishes only when the result carries a payload. "Carries a

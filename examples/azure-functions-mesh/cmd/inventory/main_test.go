@@ -115,22 +115,26 @@ func TestInventory_Spec(t *testing.T) {
 	}
 }
 
-// TestInventory_DescriptorDeclaresWhatItSends pins inventory as a pure event consumer: it sends
-// nothing, so its descriptor must carry an EMPTY Consumes - and, just as importantly, must not
-// report the outbound feed as degraded. "Sends nothing" and "send side wasn't wired up" are
+// TestInventory_ContractDeclaresWhatItSends pins inventory as a pure event consumer: it sends
+// nothing, so its document must carry no events or sends - and, just as importantly, must not
+// name them in degraded. "Sends nothing" and "send side wasn't wired up" are
 // different claims about this service, and only the first one is true here.
-func TestInventory_DescriptorDeclaresWhatItSends(t *testing.T) {
-	desc := newApp(nil).Descriptor()
+func TestInventory_ContractDeclaresWhatItSends(t *testing.T) {
+	doc := newApp(nil).Contract()
 
+	// What it provides: its events and its sends, sorted by topic.
 	got := []string{}
-	for _, topic := range desc.Produces {
-		got = append(got, topic.ID)
+	for _, event := range doc.Events {
+		got = append(got, event.Topic)
 	}
-	// Sorted by topic ID, matching mesh.OutboundRegistry.Topics().
+	for _, send := range doc.Sends {
+		got = append(got, send.Topic)
+	}
+	slices.Sort(got)
 	if want := []string{}; !slices.Equal(got, want) {
-		t.Errorf("Descriptor.Produces = %v, want %v", got, want)
+		t.Errorf("events and sends = %v, want %v", got, want)
 	}
-	if len(desc.Degraded) != 0 {
-		t.Errorf("Descriptor.Degraded = %v, want none (both feeds are wired)", desc.Degraded)
+	if len(doc.Degraded) != 0 {
+		t.Errorf("Degraded = %v, want none (events and sends are declared)", doc.Degraded)
 	}
 }

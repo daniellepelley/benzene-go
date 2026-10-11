@@ -329,9 +329,9 @@ func TestApp_Close_IsSafeWithAndWithoutAMeshClient(t *testing.T) {
 	newTestApp(t, meshClient).Close()
 }
 
-// -- descriptor --------------------------------------------------------------------------------
+// -- contract document -------------------------------------------------------------------------
 
-func TestApp_Descriptor_ReflectsRegisteredTopics(t *testing.T) {
+func TestApp_Contract_ReflectsRegisteredTopics(t *testing.T) {
 	app := New(Config{
 		ServiceName: "svc",
 		Register: func(registry *benzene.Registry, _ *contract.OutboundRegistry) []httpbinding.Route {
@@ -341,47 +341,42 @@ func TestApp_Descriptor_ReflectsRegisteredTopics(t *testing.T) {
 			return nil
 		},
 	})
-	desc := app.Descriptor()
-	if desc.Service != "svc" || desc.Runtime != "go" {
-		t.Errorf("Descriptor = %+v, want Service=svc Runtime=go", desc)
+	doc := app.Contract()
+	if doc.Service != "svc" || doc.Runtime != "go" || doc.Placement == nil {
+		t.Errorf("Contract = %+v, want Service=svc Runtime=go with a placement", doc)
 	}
 	found := false
-	for _, topic := range desc.Topics {
-		if topic.ID == "some:topic" {
+	for _, request := range doc.Requests {
+		if request.Topic == "some:topic" {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("Descriptor.Topics = %+v, want some:topic present", desc.Topics)
+		t.Errorf("Contract.Requests = %+v, want some:topic present", doc.Requests)
 	}
 }
 
-// TestApp_Descriptor_ReflectsOutboundRegistrations is the send-side counterpart of the test
-// above: what Config.Register declares on the OutboundRegistry must reach Descriptor.Produces,
-// since that list - not observed trace parentage - is the sole source of this service's consumer
-// edges on the mesh's topic catalog (mesh.md §4).
-func TestApp_Descriptor_ReflectsOutboundRegistrations(t *testing.T) {
-	desc := newTestApp(t, nil).Descriptor()
+// TestApp_Contract_ReflectsOutboundRegistrations is the send-side counterpart of the test above:
+// what Config.Register declares on the OutboundRegistry must reach the document's sends, since
+// they - not observed trace parentage - are the sole source of this service's provider edges on
+// the mesh's topic catalog (mesh.md §4).
+func TestApp_Contract_ReflectsOutboundRegistrations(t *testing.T) {
+	doc := newTestApp(t, nil).Contract()
 
-	if len(desc.Produces) != 1 || desc.Produces[0].ID != "downstream" {
-		t.Fatalf("Descriptor.Produces = %+v, want exactly [downstream]", desc.Produces)
+	if len(doc.Sends) != 1 || doc.Sends[0].Topic != "downstream" {
+		t.Fatalf("Contract.Sends = %+v, want exactly [downstream]", doc.Sends)
 	}
-	// TRes = any derives the unconstrained {} responseSchema mesh.md §2.3 specifies for a
-	// sender with no expected response type - present, not omitted.
-	if got := desc.Produces[0].ResponseSchema; got == nil || len(got) != 0 {
-		t.Errorf("downstream ResponseSchema = %v, want a present, empty ({}) schema", got)
-	}
-	if len(desc.Degraded) != 0 {
-		t.Errorf("Degraded = %v, want empty (both feeds are wired)", desc.Degraded)
+	if len(doc.Degraded) != 0 {
+		t.Errorf("Degraded = %v, want empty (events and sends are declared)", doc.Degraded)
 	}
 }
 
-// TestApp_Descriptor_NoOutboundRegistrationsIsEmptyNotDegraded pins the distinction a pure event
-// consumer (inventory/notifications/analytics) depends on: declaring nothing leaves Consumes
-// empty, but must NOT mark the outbound feed Degraded - "sends nothing" and "send side not wired
-// up" are different claims, and New always passes a real OutboundRegistry so only the former can
-// be reported.
-func TestApp_Descriptor_NoOutboundRegistrationsIsEmptyNotDegraded(t *testing.T) {
+// TestApp_Contract_NoOutboundRegistrationsIsEmptyNotDegraded pins the distinction a pure event
+// consumer (inventory/notifications/analytics) depends on: declaring nothing leaves events and
+// sends empty, but must NOT name them in degraded - "sends nothing" and "undetermined" are
+// different claims, and New always passes a real OutboundRegistry so only the former can be
+// reported.
+func TestApp_Contract_NoOutboundRegistrationsIsEmptyNotDegraded(t *testing.T) {
 	app := New(Config{
 		ServiceName: "svc",
 		Register: func(registry *benzene.Registry, _ *contract.OutboundRegistry) []httpbinding.Route {
@@ -391,15 +386,13 @@ func TestApp_Descriptor_NoOutboundRegistrationsIsEmptyNotDegraded(t *testing.T) 
 			return nil
 		},
 	})
-	desc := app.Descriptor()
+	doc := app.Contract()
 
-	if len(desc.Produces) != 0 {
-		t.Errorf("Descriptor.Produces = %+v, want empty", desc.Produces)
+	if len(doc.Events) != 0 || len(doc.Sends) != 0 {
+		t.Errorf("events/sends = %+v/%+v, want empty", doc.Events, doc.Sends)
 	}
-	for _, feed := range desc.Degraded {
-		if feed == mesh.FeedOutboundRegistry {
-			t.Errorf("Degraded = %v, want no %q entry: declaring nothing is not a missing feed", desc.Degraded, mesh.FeedOutboundRegistry)
-		}
+	if len(doc.Degraded) != 0 {
+		t.Errorf("Degraded = %v, want none: declaring nothing is not undetermined", doc.Degraded)
 	}
 }
 

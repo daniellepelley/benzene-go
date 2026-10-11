@@ -6,7 +6,7 @@ import "context"
 // (or adopted from the caller's traceparent) for the event it will export. Handlers use it
 // to propagate the trace onto outbound calls, which is what lets a collector join spans
 // across services - an observed signal for liveness and undeclared-edge drift (mesh.md §4.2),
-// layered on top of the producer/consumer graph the declared ServiceDescriptor alone provides
+// layered on top of the producer/consumer graph the registered Contract Documents alone provide
 // (mesh.md §4), never a way to derive who-calls-whom in place of declaring it.
 type Span struct {
 	TraceID string

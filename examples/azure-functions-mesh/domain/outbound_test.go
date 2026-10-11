@@ -53,7 +53,7 @@ func TestRegisterOutbound_DeclaresWhatEachServiceSends(t *testing.T) {
 // declaration honest: it drives every handler with recording senders and compares the topics
 // actually published against the topics RegisterOutbound declares. A hop added to a handler and
 // left undeclared (or a declaration for a hop that was removed) fails here - which is the whole
-// point, since nothing derives Consumes from the code itself (contract.OutboundRegistry forbids
+// point, since nothing derives events or sends from the code itself (contract.OutboundRegistry forbids
 // exactly that kind of inference).
 func TestRegisterOutbound_MatchesTheTopicsTheHandlersActuallySend(t *testing.T) {
 	ctx := context.Background()
@@ -112,7 +112,7 @@ func TestRegisterOutbound_UnknownServiceIsAnError(t *testing.T) {
 
 // TestRegisterOutbound_RejectsADuplicateDeclaration checks the startup error every multi-topic
 // service surfaces rather than swallows: a second declaration of the same topic is a wiring bug,
-// and RegisterOutbound propagates mesh.RegisterOutbound's error from whichever hop hit it first
+// and RegisterOutbound propagates contract.RegisterSend's or RegisterEvent's error from whichever hop hit it first
 // instead of continuing with a half-built registry.
 func TestRegisterOutbound_RejectsADuplicateDeclaration(t *testing.T) {
 	for _, service := range []string{ServiceOrders, ServicePayments, ServiceShipping} {
@@ -131,9 +131,9 @@ func TestRegisterOutbound_RejectsADuplicateDeclaration(t *testing.T) {
 // -- the estate's declared graph ------------------------------------------------------------
 
 // estateInbound is what each cmd/<service>/main.go registers as its handlers - the RECEIVE half
-// of every service's contract, listed here so this package can assemble all six descriptors at
-// once (each main's own test asserts that its real App descriptor carries these same topics, and
-// the Consumes half declaredSends produces below). The values are the topics themselves; the
+// of every service's contract, listed here so this package can assemble all six documents at
+// once (each main's own test asserts that its real App document carries these same topics, and
+// the events and sends RegisterOutbound declares). The values are the topics themselves; the
 // handler each one is registered with is registerInbound's business.
 var estateInbound = map[string][]string{
 	ServiceOrders:        {TopicOrderCreate},
@@ -164,9 +164,9 @@ func registerInbound(registry *benzene.Registry, topic string) error {
 	}
 }
 
-// describeService builds one service's real mesh.Descriptor: handlers from estateInbound, and the
-// outbound declaration from the production RegisterOutbound switch.
-func describeService(t *testing.T, service string) mesh.Descriptor {
+// describeService derives one service's real Contract Document - its register body: handlers from
+// estateInbound, and the event and send declarations from the production RegisterOutbound switch.
+func describeService(t *testing.T, service string) contract.Document {
 	t.Helper()
 	registry := benzene.NewRegistry()
 	for _, topic := range estateInbound[service] {
@@ -178,22 +178,24 @@ func describeService(t *testing.T, service string) mesh.Descriptor {
 	if err := RegisterOutbound(outbound, service); err != nil {
 		t.Fatalf("RegisterOutbound(%q) error = %v", service, err)
 	}
-	return mesh.Describe(registry, outbound, mesh.ServiceInfo{
-		Service: service, ServiceVersion: "1.0.0", InstanceID: service, Binding: "azure-functions",
-	})
+	doc, err := contract.Derive(registry, outbound, contract.Info{Service: service, ServiceVersion: "1.0.0", VersionScheme: "semver"})
+	if err != nil {
+		t.Fatalf("Derive(%q) error = %v", service, err)
+	}
+	return doc
 }
 
 // TestEstate_DeclaredProducerConsumerGraph is the end-to-end proof the whole outbound declaration
-// exists for: register all six services' descriptors with a real meshd.Collector - no traffic, no
-// traces, no transports - and read the topic catalog back. Every edge below comes from a declared
-// descriptor and nothing else (mesh.md §4).
+// exists for: register all six services' Contract Documents with a real meshd.Collector - no
+// traffic, no traces, no transports - and read the topic catalog back. Every edge below comes from
+// a registered document and nothing else (mesh.md §4).
 //
 // Note the direction meshd's vocabulary uses, which is what these field names mean: a topic's
-// PROVIDERS are the services that declared they send it (they supply it), and its CONSUMERS are the
-// services that registered a handler for it (they take delivery of it) - store.go's register()
-// writes providers from Descriptor.Produces and consumers from Descriptor.Topics. So orders, which
-// sends payment:take, appears on payment:take's providers, and payments, which handles it, on its
-// consumers.
+// PROVIDERS are the services that declared they publish or send it (they supply it), and its
+// CONSUMERS are the services that registered a handler for it (they take delivery of it) - meshd
+// reads providers from a document's events and sends, and consumers from its requests. So orders,
+// which sends payment:take, appears on payment:take's providers, and payments, which handles it, on
+// its consumers.
 //
 // This is the direction mesh.md settled on in the role inversion (spec f45a187, "consumes" becoming
 // "produces"): a handler is a consumer of the topic it handles. Before it, these two columns were
@@ -209,7 +211,7 @@ func TestEstate_DeclaredProducerConsumerGraph(t *testing.T) {
 	} {
 		body, err := json.Marshal(describeService(t, service))
 		if err != nil {
-			t.Fatalf("marshal %s descriptor: %v", service, err)
+			t.Fatalf("marshal %s document: %v", service, err)
 		}
 		if body, ok := dispatch(ctx, collector, mesh.TopicRegister, string(body)); !ok {
 			t.Fatalf("register %s with the collector failed: %s", service, body)

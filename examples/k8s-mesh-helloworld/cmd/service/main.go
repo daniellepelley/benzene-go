@@ -13,17 +13,17 @@
 //
 // Egress (the chain): orders' order:create handler asks payments' payment:take, and payments'
 // payment:take handler asks shipping's shipment:book, each over DOWNSTREAM_MSG_URL — the
-// downstream service's in-cluster envelope endpoint. Each caller also registers an outbound
-// record for its downstream topic (contract.RegisterSend, mesh.md §2.3) — that declared
-// Consumes entry, not trace propagation, is what makes the caller show up as a consumer on the
-// mesh's topic catalog (mesh.md §4). The httpclient.Client is separately wrapped in
+// downstream service's in-cluster envelope endpoint. Each caller also declares a send to its
+// downstream topic (contract.RegisterSend) — that declared send, not trace propagation, is what
+// makes the caller that topic's provider on the mesh's topic catalog (mesh.md §4). The httpclient.Client is separately wrapped in
 // mesh.WithTraceContext so the collector can additionally show that declared edge as observed
 // (mesh.md §4.2, exactly like examples/mesh-helloworld's frontdoor -> greeter hop) — propagation
 // layers on top of the declared edge, it never substitutes for it. shipping is terminal: no
 // DOWNSTREAM_MSG_URL, no outbound client, nothing to register.
 //
-// Fleet reporting: when MESH_COLLECTOR_ENVELOPE_URL is set, this service announces its
-// descriptor, heartbeats every 10s, and pushes traces + issues to the mesh's meshd collector —
+// Fleet reporting: when MESH_COLLECTOR_ENVELOPE_URL is set, this service registers its Contract
+// Document (mesh.Announcer - the same document benzene:spec serves), heartbeats every 10s, and
+// pushes traces + issues to the mesh's meshd collector (or any other port's collector) —
 // the same push-based fleet plane benzene-dotnet's K8sMesh services use, over
 // mesh.PushExporter/PushIssueExporter instead of Benzene.Mesh.Collector's client. See
 // examples/k8s-mesh-helloworld/README.md's "Divergence from .NET" section for why this port has
@@ -55,10 +55,10 @@ import (
 type service struct {
 	name          string
 	handler       http.Handler
-	descriptor    mesh.Descriptor
+	contract      contract.Document
+	announcer     *mesh.Announcer         // nil-safe; nil when no collector is configured
 	exporter      *mesh.PushExporter      // nil-safe; nil when no collector is configured
 	issueExporter *mesh.PushIssueExporter // nil-safe; nil when no collector is configured
-	collector     *httpclient.Client      // nil when no collector is configured
 }
 
 // newService wires one domain instance: the selected handler + native route, fleet-reporting
@@ -79,12 +79,13 @@ func newService(meshService, downstreamURL, collectorURL string) *service {
 	}
 	name, routes := registerDomain(registry, outbound, routes, meshService, downstream)
 
-	info := mesh.ServiceInfo{Service: name, ServiceVersion: "1.0.0", InstanceID: name, Binding: "http"}
-	descriptor := mesh.Describe(registry, outbound, info)
-	// The Contract Document (R5), served on benzene:spec and GET /benzene/spec. A derivation error -
-	// a component-name collision - is a wiring mistake, so it stops the service at start-up.
+	info := mesh.ServiceInfo{Service: name, InstanceID: name}
+	// The Contract Document: served on benzene:spec and GET /benzene/spec (R5), and registered with
+	// the collector (mesh.md §2) - one derivation for both. A derivation error - a component-name
+	// collision - is a wiring mistake, so it stops the service at start-up.
+	placement := mesh.DetectPlacement()
 	spec, err := contract.Derive(registry, outbound, contract.Info{
-		Service: name, ServiceVersion: "1.0.0", VersionScheme: "semver",
+		Service: name, ServiceVersion: "1.0.0", VersionScheme: "semver", Placement: &placement,
 		MessageEndpoint: httpbinding.EnvelopePath, Transports: []string{"http"}, HTTPRoutes: contractRoutes(routes),
 	})
 	if err != nil {
@@ -99,11 +100,18 @@ func newService(meshService, downstreamURL, collectorURL string) *service {
 	// WithCollector: an unreachable or unconfigured collector reduces the mesh, never this
 	// service. exporter/issueExporter stay nil when collectorURL is "", and
 	// mesh.TraceMiddleware/mesh.IssueMiddleware are documented nil-safe against that.
+	var announcer *mesh.Announcer
 	var exporter *mesh.PushExporter
 	var issueExporter *mesh.PushIssueExporter
-	var collector *httpclient.Client
 	if collectorURL != "" {
-		collector = httpclient.NewClient(collectorURL)
+		collector := httpclient.NewClient(collectorURL)
+		announcer = mesh.NewAnnouncer(collector, spec, mesh.AnnouncerOptions{
+			InstanceID: name,
+			Checks:     checks,
+			OnSendFailure: func(topic string, result benzene.Result[json.RawMessage]) {
+				log.Printf("%s: %s to collector: %v %v", name, topic, result.Status, result.Errors)
+			},
+		})
 		exporter = mesh.NewPushExporter(collector, mesh.PushExporterOptions{FlushInterval: 5 * time.Second})
 		issueExporter = mesh.NewPushIssueExporter(collector, name, mesh.PushIssueExporterOptions{FlushInterval: 5 * time.Second})
 	}
@@ -112,7 +120,6 @@ func newService(meshService, downstreamURL, collectorURL string) *service {
 		mesh.TraceMiddleware(info, exporter),
 		mesh.IssueMiddleware(info, issueExporter),
 		contract.Middleware(spec),
-		mesh.Middleware(descriptor),
 		healthcheck.Middleware(checks),
 		benzene.RouterMiddleware(registry),
 	)
@@ -126,17 +133,16 @@ func newService(meshService, downstreamURL, collectorURL string) *service {
 	return &service{
 		name:          name,
 		handler:       mux,
-		descriptor:    descriptor,
+		contract:      spec,
+		announcer:     announcer,
 		exporter:      exporter,
 		issueExporter: issueExporter,
-		collector:     collector,
 	}
 }
 
 // registerDomain wires the selected domain's handler + native route onto registry/routes, and -
-// when downstream is non-nil - its outbound registration for the topic it chains to onto
-// outbound (mesh.md §2.3: the declared Consumes entry, the sole source of that consumer edge on
-// the mesh's topic catalog, mesh.md §4). Returns the resolved service name ("orders" is also the
+// when downstream is non-nil - its declared send to the topic it chains to onto outbound (the sole
+// source of that provider edge on the mesh's topic catalog, mesh.md §4). Returns the resolved service name ("orders" is also the
 // default for any unrecognised value, matching benzene-dotnet's Domain.HandlersFor switch
 // default).
 func registerDomain(registry *benzene.Registry, outbound *contract.OutboundRegistry, routes []httpbinding.Route, meshService string, downstream client.Sender) (string, []httpbinding.Route) {
@@ -151,7 +157,7 @@ func registerDomain(registry *benzene.Registry, outbound *contract.OutboundRegis
 	case "shipping":
 		benzene.MustRegister(registry, benzene.NewTopic(domain.TopicShipmentBook), domain.BookShipmentHandler())
 		routes = append(routes, httpbinding.Route{Method: http.MethodPost, Path: "/shipments", Topic: benzene.NewTopic(domain.TopicShipmentBook)})
-		// shipping is terminal: no downstream, nothing to register as consumed.
+		// shipping is terminal: no downstream, nothing it sends.
 		return "shipping", routes
 	default:
 		benzene.MustRegister(registry, benzene.NewTopic(domain.TopicOrderCreate), domain.CreateOrderHandler(downstream))
@@ -172,69 +178,6 @@ func contractRoutes(routes []httpbinding.Route) []contract.HTTPRoute {
 	return out
 }
 
-// announceAndHeartbeat registers s.descriptor with the collector (retrying while it comes up,
-// matching examples/mesh-helloworld's announce/heartbeat loop), then heartbeats every 10s until
-// ctx is cancelled. A no-op when s.collector is nil (no MESH_COLLECTOR_ENVELOPE_URL configured).
-func (s *service) announceAndHeartbeat(ctx context.Context) {
-	if s.collector == nil {
-		return
-	}
-	for attempt := 0; attempt < 30 && !s.announce(ctx); attempt++ {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(2 * time.Second):
-		}
-	}
-	s.heartbeat(ctx)
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			s.heartbeat(ctx)
-		}
-	}
-}
-
-// announce registers s.descriptor with the collector once, reporting whether it landed. Failure
-// is logged and otherwise ignored — an unreachable collector reduces the mesh, never this
-// service (matching examples/mesh-helloworld's service.announce).
-func (s *service) announce(ctx context.Context) bool {
-	body, err := json.Marshal(s.descriptor)
-	if err != nil {
-		log.Printf("%s: marshal descriptor: %v", s.name, err)
-		return false
-	}
-	if result := s.collector.Send(ctx, benzene.NewTopic(mesh.TopicRegister), nil, body); !result.IsSuccessful() {
-		log.Printf("%s: register with collector: %v %v", s.name, result.Status, result.Errors)
-		return false
-	}
-	return true
-}
-
-// heartbeat sends one health report. In a real service the Health field would come from running
-// the same checks the healthcheck middleware serves; a static healthy report keeps the example
-// focused (matching examples/mesh-helloworld's own heartbeat).
-func (s *service) heartbeat(ctx context.Context) {
-	hb, err := json.Marshal(mesh.Heartbeat{
-		Service:        s.descriptor.Service,
-		InstanceID:     s.descriptor.InstanceID,
-		DescriptorHash: s.descriptor.DescriptorHash,
-		SentAt:         time.Now().UTC(),
-		Health:         healthcheck.Response{IsHealthy: true, HealthChecks: map[string]healthcheck.CheckResult{}},
-	})
-	if err != nil {
-		log.Printf("%s: marshal heartbeat: %v", s.descriptor.Service, err)
-		return
-	}
-	if result := s.collector.Send(ctx, benzene.NewTopic(mesh.TopicHeartbeat), nil, hb); !result.IsSuccessful() {
-		log.Printf("%s: heartbeat to collector: %v %v", s.descriptor.Service, result.Status, result.Errors)
-	}
-}
-
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -251,11 +194,11 @@ func main() {
 	defer svc.exporter.Close()
 	defer svc.issueExporter.Close()
 
-	if svc.collector != nil {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		go svc.announceAndHeartbeat(ctx)
-	}
+	// Register (retrying while the collector comes up), then heartbeat every 10s. A no-op when no
+	// collector is configured: the announcer is nil.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go svc.announcer.Run(ctx)
 
 	log.Printf("%s listening on :%s (downstream=%q collector=%q)", svc.name, port, downstreamURL, collectorURL)
 	log.Fatal(http.ListenAndServe(":"+port, svc.handler))

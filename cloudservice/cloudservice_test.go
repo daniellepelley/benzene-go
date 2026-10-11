@@ -13,7 +13,6 @@ import (
 	"github.com/daniellepelley/benzene-go/contract"
 	"github.com/daniellepelley/benzene-go/healthcheck"
 	"github.com/daniellepelley/benzene-go/httpbinding"
-	"github.com/daniellepelley/benzene-go/mesh"
 	"github.com/daniellepelley/benzene-go/wire"
 )
 
@@ -61,13 +60,15 @@ func invoke(t *testing.T, h http.Handler, topic, body string) wire.Response {
 func TestNew_ServesReservedSurfaceAndAppRoutes(t *testing.T) {
 	svc := mustNew(t, "greeter", newRegistry(t),
 		WithServiceVersion("1.0.0"),
-		WithBinding("http"),
 		WithRoutes(httpbinding.Route{Method: http.MethodPost, Path: "/greet", Topic: benzene.NewTopic("greet")}),
 	)
 
-	// Identity flows into the descriptor.
-	if svc.Descriptor.Service != "greeter" || svc.Descriptor.ServiceVersion != "1.0.0" || svc.Descriptor.DescriptorHash == "" {
-		t.Errorf("descriptor = %+v, want service greeter/1.0.0 with a hash", svc.Descriptor)
+	// Identity, the runtime and the wiring self-check flow into the Contract Document.
+	if svc.Contract.Service != "greeter" || svc.Contract.ServiceVersion != "1.0.0" || svc.Contract.RegistrationHash == "" || svc.Contract.Runtime != "go" {
+		t.Errorf("contract = %+v, want service greeter/1.0.0 on go with a hash", svc.Contract)
+	}
+	if p := svc.Contract.Profile; p == nil || p.Name != "cloud-service" || strings.Join(p.Missing, ",") != "R6,R8" {
+		t.Errorf("profile = %+v, want cloud-service missing R6 and R8", p)
 	}
 
 	// R3: health over HTTP.
@@ -97,9 +98,9 @@ func TestNew_ServesReservedSurfaceAndAppRoutes(t *testing.T) {
 		t.Errorf("GET %s?type=openapi = %d, want 501", httpbinding.SpecPath, rec.Code)
 	}
 
-	// R6: the reserved benzene:mesh topic returns the descriptor over the envelope path.
-	if resp := invoke(t, svc.Handler, mesh.TopicID, "{}"); !benzene.Status(resp.StatusCode).IsSuccess() {
-		t.Errorf("invoke benzene:mesh status = %q, want success", resp.StatusCode)
+	// The reserved benzene:mesh topic is gone (spec-0.4.0): the self-description is benzene:spec.
+	if resp := invoke(t, svc.Handler, "benzene:mesh", "{}"); benzene.Status(resp.StatusCode).IsSuccess() {
+		t.Errorf("invoke benzene:mesh status = %q, want a failure - no such topic", resp.StatusCode)
 	}
 
 	// R2 + app route: the envelope path dispatches an application topic.
@@ -153,15 +154,17 @@ func TestNew_WithoutDescriptorDisablesR5R6(t *testing.T) {
 	if rec := get(t, svc.Handler, httpbinding.SpecPath); rec.Code != http.StatusNotFound {
 		t.Errorf("GET %s = %d, want 404 when the descriptor is disabled", httpbinding.SpecPath, rec.Code)
 	}
-	// The reserved benzene:mesh and benzene:spec topics no longer have interception -> not-found (no
-	// handler registered).
-	for _, topic := range []string{mesh.TopicID, contract.TopicID} {
+	// The reserved benzene:spec topic no longer has interception -> not-found (no handler registered).
+	for _, topic := range []string{contract.TopicID} {
 		if resp := invoke(t, svc.Handler, topic, "{}"); benzene.Status(resp.StatusCode).IsSuccess() {
 			t.Errorf("invoke %s status = %q, want a failure when the descriptor is disabled", topic, resp.StatusCode)
 		}
 	}
 
-	// With the descriptor off, R5 joins R6 and R8 as unsatisfied.
+	// With the self-description off, R5 joins R6 and R8 as unsatisfied - and the derived document says so.
+	if p := svc.Contract.Profile; strings.Join(p.Missing, ",") != "R5,R6,R8" {
+		t.Errorf("profile missing = %v, want R5, R6, R8", p.Missing)
+	}
 	unsat := requirementIDs(svc.Report.Unsatisfied())
 	if !unsat["R5"] || !unsat["R6"] || !unsat["R8"] {
 		t.Errorf("Unsatisfied() = %+v, want R5, R6, R8 when the descriptor is disabled", svc.Report.Unsatisfied())
@@ -183,42 +186,40 @@ func TestNew_HealthReflectsChecks(t *testing.T) {
 	}
 }
 
-func TestNew_PlacementInstanceAndContainer(t *testing.T) {
+func TestNew_PlacementAndContainer(t *testing.T) {
 	container := benzene.NewContainer()
 	svc := mustNew(t, "greeter", newRegistry(t),
 		WithPlacement("aws", "us-east-1"),
-		WithInstanceID("greeter-7"),
 		WithContainer(container),
 	)
-	if svc.Descriptor.Placement.Cloud != "aws" || svc.Descriptor.Placement.Region != "us-east-1" {
-		t.Errorf("placement = %+v, want aws/us-east-1", svc.Descriptor.Placement)
-	}
-	if svc.Descriptor.InstanceID != "greeter-7" {
-		t.Errorf("instanceID = %q, want greeter-7", svc.Descriptor.InstanceID)
+	if p := svc.Contract.Placement; p == nil || p.Cloud != "aws" || p.Region != "us-east-1" {
+		t.Errorf("placement = %+v, want aws/us-east-1", p)
 	}
 	if svc.Builder.Container != container {
 		t.Error("Builder.Container is not the supplied container")
 	}
 }
 
-func TestNew_WithConsumesDerivesConsumesElseDegrades(t *testing.T) {
-	t.Run("unset degrades the outbound-registry feed", func(t *testing.T) {
+func TestNew_DetectsPlacementWhenUnset(t *testing.T) {
+	t.Setenv("K_SERVICE", "greeter")
+	svc := mustNew(t, "greeter", newRegistry(t))
+	if p := svc.Contract.Placement; p == nil || p.Cloud != "gcp" {
+		t.Errorf("placement = %+v, want the detected gcp", p)
+	}
+}
+
+func TestNew_WithProducesDeclaresEventsAndSendsElseDegrades(t *testing.T) {
+	t.Run("unset names events and sends in degraded", func(t *testing.T) {
 		svc := mustNew(t, "greeter", newRegistry(t))
-		if len(svc.Descriptor.Produces) != 0 {
-			t.Errorf("Consumes = %v, want empty", svc.Descriptor.Produces)
+		if len(svc.Contract.Events) != 0 || len(svc.Contract.Sends) != 0 {
+			t.Errorf("events/sends = %v/%v, want empty", svc.Contract.Events, svc.Contract.Sends)
 		}
-		degraded := false
-		for _, feed := range svc.Descriptor.Degraded {
-			if feed == mesh.FeedOutboundRegistry {
-				degraded = true
-			}
-		}
-		if !degraded {
-			t.Errorf("Degraded = %v, want it to include %q", svc.Descriptor.Degraded, mesh.FeedOutboundRegistry)
+		if strings.Join(svc.Contract.Degraded, ",") != "events,sends" {
+			t.Errorf("Degraded = %v, want [events sends]", svc.Contract.Degraded)
 		}
 	})
 
-	t.Run("WithConsumes populates the consumed-topic catalog, not degraded", func(t *testing.T) {
+	t.Run("WithConsumes declares the sends, not degraded", func(t *testing.T) {
 		outbound := contract.NewOutboundRegistry()
 		if err := contract.RegisterSend[greetReq](outbound, benzene.NewTopic("payments:capture"), contract.WithResponse[greetRes]()); err != nil {
 			t.Fatalf("RegisterSend() error = %v", err)
@@ -228,14 +229,8 @@ func TestNew_WithConsumesDerivesConsumesElseDegrades(t *testing.T) {
 		if len(svc.Contract.Sends) != 1 || svc.Contract.Sends[0].Topic != "payments:capture" || svc.Contract.Sends[0].Response == nil {
 			t.Errorf("Contract sends = %+v, want payments:capture with its reply", svc.Contract.Sends)
 		}
-
-		if len(svc.Descriptor.Produces) != 1 || svc.Descriptor.Produces[0].ID != "payments:capture" {
-			t.Errorf("Consumes = %+v, want one entry for payments:capture", svc.Descriptor.Produces)
-		}
-		for _, feed := range svc.Descriptor.Degraded {
-			if feed == mesh.FeedOutboundRegistry {
-				t.Errorf("Degraded = %v, want no %q with a real OutboundRegistry supplied", svc.Descriptor.Degraded, mesh.FeedOutboundRegistry)
-			}
+		if svc.Contract.Degraded != nil {
+			t.Errorf("Degraded = %v, want none with a real OutboundRegistry supplied", svc.Contract.Degraded)
 		}
 	})
 }

@@ -9,6 +9,7 @@ import (
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/benzenetest"
+	"github.com/daniellepelley/benzene-go/contract"
 	"github.com/daniellepelley/benzene-go/httpbinding"
 	"github.com/daniellepelley/benzene-go/mesh"
 	"github.com/daniellepelley/benzene-go/meshd"
@@ -22,7 +23,7 @@ func newTestHandler() (*meshd.Collector, func(context.Context, json.RawMessage) 
 
 func TestMeshHandler_DirectInvokeRegistersService(t *testing.T) {
 	_, handler := newTestHandler()
-	event := benzenetest.NewEnvelopeEvent(t, benzene.NewTopic(mesh.TopicRegister), mesh.Descriptor{Service: "orders", Runtime: "go"}, nil)
+	event := benzenetest.NewEnvelopeEvent(t, benzene.NewTopic(mesh.TopicRegister), contract.Document{Service: "orders", Runtime: "go"}, nil)
 
 	raw, err := handler(context.Background(), event)
 	if err != nil {
@@ -42,7 +43,7 @@ func TestMeshHandler_Discovered_CountsRegisteredServices(t *testing.T) {
 	ctx := context.Background()
 
 	for _, name := range []string{"orders", "payments", "shipping", "inventory", "notifications", "analytics"} {
-		event := benzenetest.NewEnvelopeEvent(t, benzene.NewTopic(mesh.TopicRegister), mesh.Descriptor{Service: name, Runtime: "go"}, nil)
+		event := benzenetest.NewEnvelopeEvent(t, benzene.NewTopic(mesh.TopicRegister), contract.Document{Service: name, Runtime: "go"}, nil)
 		if _, err := handler(ctx, event); err != nil {
 			t.Fatalf("register %s: %v", name, err)
 		}
@@ -126,7 +127,7 @@ func TestMeshHandler_HTTPPostEnvelope_DispatchesFleetQuery(t *testing.T) {
 	_, handler := newTestHandler()
 	ctx := context.Background()
 
-	registerEvent := benzenetest.NewEnvelopeEvent(t, benzene.NewTopic(mesh.TopicRegister), mesh.Descriptor{Service: "orders", Runtime: "go"}, nil)
+	registerEvent := benzenetest.NewEnvelopeEvent(t, benzene.NewTopic(mesh.TopicRegister), contract.Document{Service: "orders", Runtime: "go"}, nil)
 	if _, err := handler(ctx, registerEvent); err != nil {
 		t.Fatalf("register: %v", err)
 	}

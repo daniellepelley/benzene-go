@@ -36,7 +36,6 @@ package meshapp
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"time"
 
@@ -55,8 +54,8 @@ type Config struct {
 	// its InstanceID too - one instance per deployed Function App, so the two coincide.
 	ServiceName string
 	// Register runs once at startup: register this service's domain handler(s) on registry -
-	// what it RECEIVES - and its outbound records on outbound - what it SENDS (mesh.md §2.3,
-	// domain.RegisterOutbound) - then return any HTTP routes beyond the standard
+	// what it RECEIVES - and its event and send declarations on outbound - what it PUBLISHES and
+	// SENDS (domain.RegisterOutbound) - then return any HTTP routes beyond the standard
 	// GET /Spec -> benzene:spec and GET /Health -> benzene:healthcheck routes, which New always
 	// adds. A pure event consumer (inventory/notifications/analytics) registers nothing outbound
 	// and returns nil routes - its only HTTP surface is the standard Cloud Service Profile one,
@@ -75,29 +74,30 @@ type Config struct {
 	MeshClient *httpclient.Client
 }
 
-// App is one composite service Function App: its registry + derived descriptor (built once) plus
-// everything main() needs to serve the standard Cloud Service Profile surface and report to the
-// mesh.
+// App is one composite service Function App: its registry + derived Contract Document (built once)
+// plus everything main() needs to serve the standard Cloud Service Profile surface and report to
+// the mesh.
 type App struct {
 	name          string
 	registry      *benzene.Registry
 	routes        []httpbinding.Route
 	builder       *benzene.ApplicationBuilder
-	descriptor    mesh.Descriptor
 	contract      contract.Document
 	info          mesh.ServiceInfo
 	meshClient    *httpclient.Client
+	announcer     *mesh.Announcer // nil when MeshClient is nil
 	exporter      *mesh.PushExporter
 	issueExporter *mesh.PushIssueExporter
 }
 
-// New builds the App: registers the domain handler(s) and the service's outbound records, derives
-// the descriptor from the now-final registries, wires the standard "self" health check, and - when
-// cfg.MeshClient is set - starts the background trace/issue exporters. All startup work, done once.
+// New builds the App: registers the domain handler(s) and the service's event and send
+// declarations, derives the Contract Document from the now-final registries, wires the standard
+// "self" health check, and - when cfg.MeshClient is set - starts the background trace/issue
+// exporters. All startup work, done once.
 //
 // The OutboundRegistry is always real (never nil), even for a service that declares nothing: a
 // present-but-empty one describes a service that genuinely sends nothing, whereas a nil one would
-// mark the feed Degraded - "send side not wired up" - which is a different claim entirely.
+// name events and sends in degraded - "undetermined" - which is a different claim entirely.
 func New(cfg Config) *App {
 	registry := benzene.NewRegistry()
 	outbound := contract.NewOutboundRegistry()
@@ -109,16 +109,17 @@ func New(cfg Config) *App {
 		routes = append(routes, cfg.Register(registry, outbound)...)
 	}
 
-	info := mesh.ServiceInfo{Service: cfg.ServiceName, ServiceVersion: "1.0.0", InstanceID: cfg.ServiceName, Binding: "azure-functions"}
-	descriptor := mesh.Describe(registry, outbound, info)
-	// The Contract Document /Spec answers with (benzene:spec, the Cloud Service Profile's R5). A
-	// derivation error - a component-name collision - is a wiring mistake: stop at start-up.
+	info := mesh.ServiceInfo{Service: cfg.ServiceName, InstanceID: cfg.ServiceName}
+	// The Contract Document /Spec answers with (benzene:spec, the Cloud Service Profile's R5), and the
+	// body Announce registers (mesh.md §2). A derivation error - a component-name collision - is a
+	// wiring mistake: stop at start-up.
 	var appRoutes []contract.HTTPRoute
 	for _, r := range routes {
 		appRoutes = append(appRoutes, contract.HTTPRoute{Method: r.Method, Path: r.Path, Topic: r.Topic})
 	}
+	placement := mesh.DetectPlacement()
 	spec, err := contract.Derive(registry, outbound, contract.Info{
-		Service: cfg.ServiceName, ServiceVersion: "1.0.0", VersionScheme: "semver",
+		Service: cfg.ServiceName, ServiceVersion: "1.0.0", VersionScheme: "semver", Placement: &placement,
 		Transports: []string{"http"}, HTTPRoutes: appRoutes,
 	})
 	if err != nil {
@@ -129,9 +130,11 @@ func New(cfg Config) *App {
 		return healthcheck.CheckResult{Status: healthcheck.StatusOk, Type: "self", Data: map[string]any{"service": cfg.ServiceName}}
 	})}
 
+	var announcer *mesh.Announcer
 	var exporter *mesh.PushExporter
 	var issueExporter *mesh.PushIssueExporter
 	if cfg.MeshClient != nil {
+		announcer = mesh.NewAnnouncer(cfg.MeshClient, spec, mesh.AnnouncerOptions{InstanceID: cfg.ServiceName, Checks: checks})
 		exporter = mesh.NewPushExporter(cfg.MeshClient, mesh.PushExporterOptions{FlushInterval: 5 * time.Second})
 		issueExporter = mesh.NewPushIssueExporter(cfg.MeshClient, cfg.ServiceName, mesh.PushIssueExporterOptions{FlushInterval: 5 * time.Second})
 	}
@@ -140,7 +143,6 @@ func New(cfg Config) *App {
 		mesh.TraceMiddleware(info, exporter),
 		mesh.IssueMiddleware(info, issueExporter),
 		contract.Middleware(spec),
-		mesh.Middleware(descriptor),
 		healthcheck.Middleware(checks),
 		benzene.RouterMiddleware(registry),
 	)
@@ -151,10 +153,10 @@ func New(cfg Config) *App {
 		registry:      registry,
 		routes:        routes,
 		builder:       builder,
-		descriptor:    descriptor,
 		contract:      spec,
 		info:          info,
 		meshClient:    cfg.MeshClient,
+		announcer:     announcer,
 		exporter:      exporter,
 		issueExporter: issueExporter,
 	}
@@ -165,10 +167,7 @@ func New(cfg Config) *App {
 // EnvelopeHandler) dispatches through.
 func (a *App) Builder() *benzene.ApplicationBuilder { return a.builder }
 
-// Descriptor returns the service's derived self-description, for tests and for Announce.
-func (a *App) Descriptor() mesh.Descriptor { return a.descriptor }
-
-// Contract returns the Contract Document /Spec serves.
+// Contract returns the Contract Document /Spec serves and Announce registers.
 func (a *App) Contract() contract.Document { return a.contract }
 
 // HTTPHandler builds the custom-handler HTTP server for every Route this App knows about (the
@@ -195,7 +194,7 @@ func (a *App) Close() {
 	a.issueExporter.Close()
 }
 
-// Announce registers a.Descriptor with the mesh collector, retrying with a short backoff while
+// Announce registers a.Contract with the mesh collector, retrying with a short backoff while
 // the mesh Function comes up (matching examples/k8s-mesh-helloworld/cmd/service's own announce
 // retry loop: 30 attempts, 2s apart - Azure Functions custom handlers are long-lived processes
 // like that example's pods, not Lambda's frozen-between-invocations model, so the same generous
@@ -221,32 +220,14 @@ func (a *App) Announce(ctx context.Context) bool {
 }
 
 func (a *App) announceOnce(ctx context.Context) bool {
-	body, err := json.Marshal(a.descriptor)
-	if err != nil {
-		return false
-	}
-	result := a.meshClient.Send(ctx, benzene.NewTopic(mesh.TopicRegister), nil, body)
-	return result.IsSuccessful()
+	return a.announcer.Register(ctx)
 }
 
-// heartbeat sends one health report to the mesh collector. In a real service Health would come
-// from actually running the service's own checks; a static healthy report keeps the example
-// focused, matching every other push-based mesh example's own heartbeat.
+// heartbeat sends one health report to the mesh collector: the service's own checks, run, with
+// the registered document's registrationHash (mesh.Announcer.Heartbeat). A no-op when
+// Config.MeshClient was nil.
 func (a *App) heartbeat(ctx context.Context) {
-	if a.meshClient == nil {
-		return
-	}
-	hb, err := json.Marshal(mesh.Heartbeat{
-		Service:        a.descriptor.Service,
-		InstanceID:     a.descriptor.InstanceID,
-		DescriptorHash: a.descriptor.DescriptorHash,
-		SentAt:         time.Now().UTC(),
-		Health:         healthcheck.Response{IsHealthy: true, HealthChecks: map[string]healthcheck.CheckResult{}},
-	})
-	if err != nil {
-		return
-	}
-	a.meshClient.Send(ctx, benzene.NewTopic(mesh.TopicHeartbeat), nil, hb)
+	a.announcer.Heartbeat(ctx)
 }
 
 // RunHeartbeatLoop announces (retrying while the mesh Function comes up), then heartbeats every

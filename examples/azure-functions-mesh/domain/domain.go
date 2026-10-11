@@ -48,22 +48,23 @@ const (
 	ServiceAnalytics     = "analytics"
 )
 
-// RegisterOutbound declares on outbound every topic service SENDS (mesh.md §2.3) - the
+// RegisterOutbound declares on outbound every event service publishes and every message it sends
+// (contract-document.md §3) - the
 // counterpart to the benzene.Register calls each cmd/<service>/main.go makes for what it
 // RECEIVES. Both halves are hard-coded contract, never inferred: this switch is the estate's
 // single source for the send side, deliberately kept in the same file as the handlers whose
 // bodies do the sending (CreateOrderHandler/TakePaymentHandler/BookShipmentHandler), so a hop
 // added to a handler and left undeclared here is visible as a one-file discrepancy. Without it
 // the mesh's topic catalog would show every topic with providers and no consumers - a silently
-// half-drawn graph, since Descriptor.Produces, not observed trace parentage, is the sole source
-// of a consumer edge (mesh.md §4).
+// half-drawn graph, since a registered document's events and sends, not observed trace parentage,
+// are the sole source of a provider edge (mesh.md §4).
 //
 // Unlike examples/k8s-mesh-helloworld's equivalent switch, registration here is NOT conditional
 // on the matching client.Sender being wired: that example's nil downstream selects a different
 // ROLE (one image, three deployments, shipping terminal), whereas each service here is its own
 // Function App whose role is fixed at compile time and whose senders differ only by deployment
 // wiring. Per contract.OutboundRegistry's own rule - a declaration carries no destination address,
-// so "the descriptor doesn't change between environments, only the wiring does" - an orders
+// so "the document doesn't change between environments, only the wiring does" - an orders
 // Function booted with nil senders still declares payment:take and order:placed.
 //
 // Each record says who owns the topic's contract (contract-document.md §3): an EVENT is a topic this
@@ -97,9 +98,9 @@ func RegisterOutbound(outbound *contract.OutboundRegistry, service string) error
 		return contract.RegisterEvent[ShipmentBooked](outbound, benzene.NewTopic(TopicShipmentDispatched))
 	case ServiceInventory, ServiceNotifications, ServiceAnalytics:
 		// Pure event consumers: AckHandler sends nothing, so there is nothing to declare. An
-		// empty (but present) outbound registry is the honest answer - it leaves Consumes empty
-		// without degrading the feed, which is exactly "this service sends nothing" rather than
-		// "this service's send side wasn't wired up".
+		// empty (but present) outbound registry is the honest answer - it leaves events and sends
+		// empty without naming them in degraded, which is exactly "this service sends nothing"
+		// rather than "this service's send side is undetermined".
 		return nil
 	default:
 		return fmt.Errorf("domain: unknown service %q", service)

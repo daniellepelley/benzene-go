@@ -29,13 +29,14 @@ var runnerDirs = []string{
 // is a debt, not a dismissal: it is a fixture this port carries and does not honour, and it should
 // leave this list by being run, not by being deleted.
 var fixturesNotRun = map[string]string{
-	// mesh §2.4 (service-version identity) and §2.5 (service-version order). Both fixtures are
-	// collector-conditional - a collector without them stays collector-conformant - and this port
-	// has neither claimed nor dropped them. Awaiting the cross-port claim-or-drop decision on
-	// those two sections; whichever way it goes, these entries go away (a runner is added, or the
-	// fixtures stop being vendored).
-	"mesh-service-version-cases.json": "mesh §2.4 service-version identity: awaiting the cross-port claim-or-drop decision",
-	"mesh-version-order-cases.json":   "mesh §2.5 service-version order: awaiting the cross-port claim-or-drop decision",
+	// The Service Versions module (service-versions.md §1 identity, §2 order; Provisional). Both
+	// fixtures are collector-conditional - a collector without the module stays
+	// collector-conformant - and meshd does not implement it: it keys its catalog by service, and
+	// compares a heartbeat's registrationHash with the service's one registration (mesh.md §5).
+	// These entries go when meshd implements the module (a runner is added) or the fixtures stop
+	// being vendored.
+	"mesh-service-version-cases.json": "service-versions §1 identity: meshd keys by service; the module is not implemented",
+	"mesh-version-order-cases.json":   "service-versions §2 order: meshd keys by service; the module is not implemented",
 }
 
 func TestConformance_EveryFixtureIsRun(t *testing.T) {

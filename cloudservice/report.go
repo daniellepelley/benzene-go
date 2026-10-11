@@ -3,6 +3,8 @@ package cloudservice
 import (
 	"fmt"
 	"strings"
+
+	"github.com/daniellepelley/benzene-go/contract"
 )
 
 // Requirement is one Cloud Service Profile requirement (R1-R8 of
@@ -19,19 +21,21 @@ type Requirement struct {
 // cloudserviceprobe's job, from outside) - so it answers "how far did this builder get me?", cheaply,
 // at startup, and honestly.
 //
-// New wires the synchronous HTTP surface (R1-R5, R7). It deliberately does NOT wire the outbound half
-// of R6 (the register/heartbeat/traces mesh feeds) or R8 (trace-context propagation): those need a
+// New wires the synchronous HTTP surface (R1-R5, R7) and R6's self-description on benzene:spec. It
+// deliberately does NOT wire R6's three feeds (registration, heartbeats, traces) or R8 (trace-context
+// propagation): those need a
 // mesh collector + push-exporter lifecycle and outbound client decorators the app owns. So for a
 // New-only assembly Satisfied() is false by design, and Unsatisfied() is the exact to-do list an
 // operator must complete (add the mesh feeds and trace propagation) to be fully profile-conformant.
 // This mirrors .NET's CloudServiceProfileReport evaluating the wiring against all of R1-R8, rather
-// than quietly reporting the HTTP surface as if it were the whole profile.
+// than quietly reporting the HTTP surface as if it were the whole profile. New carries the report on
+// the Contract Document as its profile (Profile).
 type ProfileReport struct {
 	Requirements []Requirement
 }
 
 // Satisfied reports whether every profile requirement (R1-R8) is wired. It is false for a New-only
-// assembly (R6's outbound feeds and R8 are not this builder's to wire) - see Unsatisfied for what
+// assembly (R6's feeds and R8 are not this builder's to wire) - see Unsatisfied for what
 // remains.
 func (r ProfileReport) Satisfied() bool {
 	for _, req := range r.Requirements {
@@ -40,6 +44,20 @@ func (r ProfileReport) Satisfied() bool {
 		}
 	}
 	return true
+}
+
+// ProfileName is the Cloud Service Profile's name in a Contract Document's profile field.
+const ProfileName = "cloud-service"
+
+// Profile returns the report as the Contract Document's profile self-assessment
+// (contract-document.md §1): the profile's name and the ids of the requirements not wired, Missing
+// omitted when none.
+func (r ProfileReport) Profile() *contract.Profile {
+	profile := &contract.Profile{Name: ProfileName}
+	for _, req := range r.Unsatisfied() {
+		profile.Missing = append(profile.Missing, req.ID)
+	}
+	return profile
 }
 
 // Unsatisfied lists the requirements not wired - the to-do list for full profile conformance. Empty
@@ -81,10 +99,11 @@ func buildReport(cfg config) ProfileReport {
 		specDetail = "disabled by WithoutDescriptor (profile §4 exposure control)"
 	}
 
-	r6Detail := "descriptor feed (benzene:mesh) wired, but register/heartbeat/traces are not wired by " +
-		"this builder - drive them with the mesh push exporters + a collector"
+	r6Detail := "self-description on benzene:spec wired, but the three feeds (register, heartbeats, " +
+		"traces) are not wired by this builder - run a mesh.Announcer over Service.Contract and " +
+		"mesh.TraceMiddleware with a PushExporter"
 	if !cfg.descriptor {
-		r6Detail = "not wired: descriptor disabled (WithoutDescriptor), and register/heartbeat/traces " +
+		r6Detail = "not wired: self-description disabled (WithoutDescriptor), and register/heartbeat/traces " +
 			"are not this builder's responsibility"
 	}
 

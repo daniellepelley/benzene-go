@@ -46,7 +46,7 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 	frontdoorServer := httptest.NewServer(frontdoor.handler)
 	defer frontdoorServer.Close()
 
-	// legacy-portal: trace feed only - no descriptor endpoint, no announce, no heartbeat.
+	// legacy-portal: trace feed only - no self-description, no registration, no heartbeat.
 	legacy := newService("legacy-portal", meshdEndpoint, false, func(registry *benzene.Registry) {
 		greeterClient := mesh.WithTraceContext(httpclient.NewClient(greeterServer.URL + httpbinding.EnvelopePath))
 		if err := benzene.Register(registry, benzene.NewTopic("legacy:relay"), welcomeHandler(greeterClient)); err != nil {
@@ -57,10 +57,11 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 	defer legacyServer.Close()
 
 	ctx := context.Background()
-	greeter.announce(ctx)
-	frontdoor.announce(ctx)
-	greeter.heartbeat(ctx)
-	frontdoor.heartbeat(ctx)
+	for _, svc := range []*service{greeter, frontdoor} {
+		if !svc.announcer.Register(ctx) || !svc.announcer.Heartbeat(ctx) {
+			t.Fatal("register or heartbeat with meshd failed")
+		}
+	}
 
 	// One cross-service call through frontdoor's native route.
 	response, err := http.Post(frontdoorServer.URL+"/welcome", "application/json", strings.NewReader(`{"name":"Mesh"}`))
@@ -91,17 +92,18 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 		t.Fatalf("POST /relay = %d %s - a reduced service must serve like any other", relayResponse.StatusCode, relayBody)
 	}
 
-	// The reserved mesh topic serves the descriptor - schemas and contract hash included.
-	descResult := httpclient.NewClient(greeterServer.URL+httpbinding.EnvelopePath).Send(ctx, benzene.NewTopic(mesh.TopicID), nil, nil)
-	descriptor, err := httpclient.Unmarshal[mesh.Descriptor](descResult)
-	if err != nil || descriptor.Payload == nil {
-		t.Fatalf("mesh topic: %v %v", descResult.Status, err)
+	// The reserved benzene:spec topic serves the Contract Document over the envelope - schemas and
+	// both hashes included. It is the document greeter registered.
+	docResult := httpclient.NewClient(greeterServer.URL+httpbinding.EnvelopePath).Send(ctx, benzene.NewTopic(contract.TopicID), nil, nil)
+	served, err := httpclient.Unmarshal[contract.Document](docResult)
+	if err != nil || served.Payload == nil {
+		t.Fatalf("benzene:spec: %v %v", docResult.Status, err)
 	}
-	if descriptor.Payload.Service != "greeter" || len(descriptor.Payload.Topics) != 1 || descriptor.Payload.Topics[0].RequestSchema == nil {
-		t.Errorf("descriptor = %+v, want greeter's derived contract with schemas", descriptor.Payload)
+	if served.Payload.Service != "greeter" || len(served.Payload.Requests) != 1 || served.Payload.Requests[0].Request == nil {
+		t.Errorf("document = %+v, want greeter's derived contract with schemas", served.Payload)
 	}
-	if !strings.HasPrefix(descriptor.Payload.DescriptorHash, "sha256:") {
-		t.Errorf("DescriptorHash = %q, want sha256:…", descriptor.Payload.DescriptorHash)
+	if !strings.HasPrefix(served.Payload.RegistrationHash, "sha256:") || served.Payload.RegistrationHash != greeter.announcer.Registration().RegistrationHash {
+		t.Errorf("RegistrationHash = %q, want the registered document's sha256:…", served.Payload.RegistrationHash)
 	}
 
 	// GET /benzene/spec serves the Contract Document through the pipeline; frontdoor's declared
@@ -166,17 +168,16 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 		t.Errorf("legacy-portal invocations = 0, want its traced traffic counted despite the reduced feeds")
 	}
 
-	// Graph edges are declared (frontdoor's outbound registration makes it the PROVIDER;
-	// greeter handling greet makes it the consumer), not trace-derived: legacy-portal called
-	// greeter just as much, but it never registered a descriptor, so it has no declared
-	// Produces to show an edge from (mesh.md §4, §4.2).
+	// Graph edges are declared (frontdoor's declared send makes it the PROVIDER; greeter handling
+	// greet makes it the consumer), not trace-derived: legacy-portal called greeter just as much,
+	// but it never registered, so it has no declared send to show an edge from (mesh.md §4, §4.2).
 	topicResult := meshdClient.Send(ctx, benzene.NewTopic(mesh.TopicQueryTopic), nil, []byte(`{"topic":"greet"}`))
 	greet, err := httpclient.Unmarshal[meshd.TopicSummary](topicResult)
 	if err != nil || greet.Payload == nil {
 		t.Fatalf("topic query: %v %v", topicResult.Status, err)
 	}
 	if len(greet.Payload.Providers) != 1 || greet.Payload.Providers[0] != "frontdoor" {
-		t.Errorf("greet providers = %v, want [frontdoor] (declared via outbound registration; legacy-portal never registered)", greet.Payload.Providers)
+		t.Errorf("greet providers = %v, want [frontdoor] (its declared send; legacy-portal never registered)", greet.Payload.Providers)
 	}
 	if len(greet.Payload.Consumers) != 1 || greet.Payload.Consumers[0] != "greeter" {
 		t.Errorf("greet consumers = %v, want [greeter] (it handles the topic)", greet.Payload.Consumers)
@@ -194,7 +195,7 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 		}
 	}
 
-	// Each cross-service call joined into one flow of two events. (The descriptor query
+	// Each cross-service call joined into one flow of two events. (The benzene:spec query
 	// above was itself traced - the trace middleware sees every invocation, including
 	// reserved-topic interceptions - so it appears as a third, single-event flow.)
 	var crossServiceFlows []meshd.TraceSummary
@@ -239,8 +240,7 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 }
 
 // TestReducedMeshStillServes proves the degradation rule end to end: no collector
-// reachable, no descriptor endpoint provisioned - the service must behave exactly as an
-// unmeshed one.
+// reachable - the service must behave exactly as an unmeshed one.
 func TestReducedMeshStillServes(t *testing.T) {
 	unreachable := "http://127.0.0.1:1" + httpbinding.EnvelopePath // nothing listens there
 	greeter := newService("greeter", unreachable, true, func(registry *benzene.Registry) {
@@ -252,8 +252,8 @@ func TestReducedMeshStillServes(t *testing.T) {
 	defer server.Close()
 	defer greeter.exporter.Close()
 
-	greeter.announce(context.Background())  // logs, must not fail
-	greeter.heartbeat(context.Background()) // logs, must not fail
+	greeter.announcer.Register(context.Background())  // logs, must not fail
+	greeter.announcer.Heartbeat(context.Background()) // logs, must not fail
 
 	response, err := http.Post(server.URL+"/greet", "application/json", strings.NewReader(`{"name":"Mesh"}`))
 	if err != nil {

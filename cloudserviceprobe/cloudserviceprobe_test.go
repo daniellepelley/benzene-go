@@ -15,24 +15,24 @@ import (
 type fakeService struct {
 	healthPath, specPath, invokePath string
 
-	healthStatus int
-	healthBody   string
-	specStatus   int
-	specBody     string
-	invokeStatus int
-	invokeBody   string
-	meshStatus   int
-	meshBody     string
+	healthStatus    int
+	healthBody      string
+	specStatus      int
+	specBody        string
+	invokeStatus    int
+	invokeBody      string
+	specTopicStatus int
+	specTopicBody   string
 
 	lastTraceparent string
 	sawInvoke       bool
 }
 
 const (
-	defHealthBody = `{"isHealthy":true,"healthChecks":{}}`
-	defSpecBody   = `{"openapi":"3.0.0","info":{}}`
-	defInvokeBody = `{"statusCode":"200","headers":{},"body":"{\"isHealthy\":true}"}`
-	defMeshBody   = `{"statusCode":"200","headers":{},"body":"{\"service\":\"orders\",\"topics\":[{\"topic\":\"order:create\"}]}"}`
+	defHealthBody    = `{"isHealthy":true,"healthChecks":{}}`
+	defSpecBody      = `{"openapi":"3.0.0","info":{}}`
+	defInvokeBody    = `{"statusCode":"200","headers":{},"body":"{\"isHealthy\":true}"}`
+	defSpecTopicBody = `{"statusCode":"200","headers":{},"body":"{\"service\":\"orders\",\"requests\":[{\"topic\":\"order:create\"}]}"}`
 )
 
 func (f *fakeService) start(t *testing.T) string {
@@ -56,8 +56,8 @@ func (f *fakeService) start(t *testing.T) string {
 			f.sawInvoke = true
 			f.lastTraceparent = r.Header.Get("traceparent")
 			body, _ := io.ReadAll(r.Body)
-			if strings.Contains(string(body), "benzene:mesh") {
-				write(w, or(f.meshStatus, 200), or2(f.meshBody, defMeshBody))
+			if strings.Contains(string(body), "benzene:spec") {
+				write(w, or(f.specTopicStatus, 200), or2(f.specTopicBody, defSpecTopicBody))
 			} else {
 				write(w, or(f.invokeStatus, 200), or2(f.invokeBody, defInvokeBody))
 			}
@@ -132,7 +132,7 @@ func TestRun_FullyConformantIsSatisfiedExceptStructurallyUnobservable(t *testing
 	if got := report.NotSatisfied(); len(got) != 0 {
 		t.Errorf("NotSatisfied() = %v, want none", got)
 	}
-	// The default probe attached a traceparent to the invoke/mesh calls.
+	// The default probe attached a traceparent to the invoke and benzene:spec calls.
 	if svc.lastTraceparent == "" {
 		t.Error("service saw no traceparent header, but the default probe should attach one")
 	}
@@ -150,7 +150,7 @@ func TestRun_UnreachableServiceIsHonestlyNotSatisfied(t *testing.T) {
 	assertVerdict(t, report, "R4", NotSatisfied)
 	assertVerdict(t, report, "R5", NotSatisfied)
 	assertVerdict(t, report, "R6", NotSatisfied)
-	assertVerdict(t, report, "R2", Inconclusive) // no descriptor to read topics from
+	assertVerdict(t, report, "R2", Inconclusive) // no contract document to read requests from
 	assertVerdict(t, report, "R7", NotSatisfied) // default paths, but R3-R6 failed there
 	assertVerdict(t, report, "R8", Inconclusive)
 }
@@ -201,23 +201,23 @@ func TestRun_Spec(t *testing.T) {
 	})
 }
 
-func TestRun_Mesh(t *testing.T) {
-	t.Run("descriptor without a service field fails R6 and leaves R2 inconclusive", func(t *testing.T) {
-		report := Run(context.Background(), nil, (&fakeService{meshBody: `{"statusCode":"200","headers":{},"body":"{\"topics\":[]}"}`}).start(t))
+func TestRun_SelfDescription(t *testing.T) {
+	t.Run("a document without a service field fails R6 and leaves R2 inconclusive", func(t *testing.T) {
+		report := Run(context.Background(), nil, (&fakeService{specTopicBody: `{"statusCode":"200","headers":{},"body":"{\"requests\":[]}"}`}).start(t))
 		assertVerdict(t, report, "R6", NotSatisfied)
 		assertVerdict(t, report, "R2", Inconclusive)
 	})
-	t.Run("descriptor with zero topics satisfies R6 but leaves R2 inconclusive", func(t *testing.T) {
-		report := Run(context.Background(), nil, (&fakeService{meshBody: `{"statusCode":"200","headers":{},"body":"{\"service\":\"orders\",\"topics\":[]}"}`}).start(t))
+	t.Run("a document with zero requests satisfies R6 but leaves R2 inconclusive", func(t *testing.T) {
+		report := Run(context.Background(), nil, (&fakeService{specTopicBody: `{"statusCode":"200","headers":{},"body":"{\"service\":\"orders\",\"requests\":[]}"}`}).start(t))
 		assertVerdict(t, report, "R6", Satisfied)
 		assertVerdict(t, report, "R2", Inconclusive)
 	})
-	t.Run("non-200 on the mesh topic fails R6", func(t *testing.T) {
-		report := Run(context.Background(), nil, (&fakeService{meshStatus: 404}).start(t))
+	t.Run("non-200 on the benzene:spec topic fails R6", func(t *testing.T) {
+		report := Run(context.Background(), nil, (&fakeService{specTopicStatus: 404}).start(t))
 		assertVerdict(t, report, "R6", NotSatisfied)
 	})
-	t.Run("mesh envelope that is not the {statusCode,headers,body} shape fails R6", func(t *testing.T) {
-		report := Run(context.Background(), nil, (&fakeService{meshBody: `{"not":"an envelope"}`}).start(t))
+	t.Run("a benzene:spec envelope that is not the {statusCode,headers,body} shape fails R6", func(t *testing.T) {
+		report := Run(context.Background(), nil, (&fakeService{specTopicBody: `{"not":"an envelope"}`}).start(t))
 		req := verdictOf(t, report, "R6")
 		if req.Verdict != NotSatisfied || !strings.Contains(req.Reason, "envelope shape") {
 			t.Errorf("R6 = %+v, want NotSatisfied about the envelope shape", req)
@@ -238,7 +238,7 @@ func TestRun_CustomInvokeAndSpecPathsAreUsed(t *testing.T) {
 	svc := &fakeService{invokePath: "/api/invoke", specPath: "/api/spec"}
 	report := Run(context.Background(), nil, svc.start(t),
 		WithInvokePath("/api/invoke"), WithSpecPath("/api/spec"))
-	// The probe used the overrides, so invoke, spec, and mesh (also on the invoke path) still check out.
+	// The probe used the overrides, so invoke, spec, and benzene:spec (also on the invoke path) still check out.
 	assertVerdict(t, report, "R4", Satisfied)
 	assertVerdict(t, report, "R5", Satisfied)
 	assertVerdict(t, report, "R6", Satisfied)
@@ -322,23 +322,24 @@ func TestParseEnvelope(t *testing.T) {
 	}
 }
 
-func TestParseDescriptor(t *testing.T) {
+func TestParseContractDocument(t *testing.T) {
 	tests := []struct {
 		name, raw  string
 		wantOK     bool
 		wantSvc    string
 		wantTopics int
 	}{
-		{"valid with topics", `{"service":"orders","topics":[{"a":1},{"b":2}]}`, true, "orders", 2},
-		{"valid with null topics", `{"service":"orders","topics":null}`, true, "orders", 0},
-		{"valid with absent topics", `{"service":"orders"}`, true, "orders", 0},
-		{"empty service", `{"service":"","topics":[]}`, false, "", 0},
-		{"missing service", `{"topics":[]}`, false, "", 0},
+		{"valid with requests", `{"service":"orders","requests":[{"topic":"a"},{"topic":"b"}]}`, true, "orders", 2},
+		{"reserved entries are not counted", `{"service":"orders","requests":[{"topic":"a"},{"topic":"benzene:spec"}]}`, true, "orders", 1},
+		{"valid with null requests", `{"service":"orders","requests":null}`, true, "orders", 0},
+		{"valid with absent requests", `{"service":"orders"}`, true, "orders", 0},
+		{"empty service", `{"service":"","requests":[]}`, false, "", 0},
+		{"missing service", `{"requests":[]}`, false, "", 0},
 		{"not json", `nope`, false, "", 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			svc, topics, reason, ok := parseDescriptor(tc.raw)
+			svc, topics, reason, ok := parseContractDocument(tc.raw)
 			if ok != tc.wantOK {
 				t.Fatalf("ok = %v (reason %q), want %v", ok, reason, tc.wantOK)
 			}

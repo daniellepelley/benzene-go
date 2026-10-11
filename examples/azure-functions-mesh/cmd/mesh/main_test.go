@@ -64,11 +64,11 @@ func TestMesh_Invoke_RegisterThenDiscoveredReportsIt(t *testing.T) {
 	collector := meshd.New(meshd.Options{})
 	handler := mux(collector)
 
-	descriptor, err := json.Marshal(map[string]any{"service": "orders", "instanceId": "orders", "runtime": "go", "topics": []any{}})
+	document, err := json.Marshal(map[string]any{"service": "orders", "runtime": "go", "requests": []any{}, "events": []any{}, "sends": []any{}})
 	if err != nil {
 		t.Fatalf("json.Marshal() error = %v", err)
 	}
-	envelope, err := json.Marshal(map[string]any{"topic": "benzene:mesh:register", "headers": map[string]string{}, "body": string(descriptor)})
+	envelope, err := json.Marshal(map[string]any{"topic": "benzene:mesh:register", "headers": map[string]string{}, "body": string(document)})
 	if err != nil {
 		t.Fatalf("json.Marshal() error = %v", err)
 	}

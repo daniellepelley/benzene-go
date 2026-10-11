@@ -7,7 +7,8 @@ import (
 )
 
 // The mesh wire-contract topics (mesh.md §4): what a service sends to a collector
-// (register/heartbeat/traces) and what a view reads back (query:*). The collector side is
+// (register/heartbeat/traces/issues) and what a view reads back (query:*). The register body is the
+// service's contract.Document (mesh.md §2). The collector side is
 // implemented by the meshd package; the names live here because both sides of the wire
 // share them. They are namespaced under the benzene: default-service-standard prefix
 // (design-principles.md §5.1) and match the .NET reference's MeshTopics/BenzeneTopic, so
@@ -63,14 +64,17 @@ type Issue struct {
 	ResolutionHint   string   `json:"resolutionHint,omitempty"`
 }
 
-// Heartbeat is the body of a mesh:heartbeat message (mesh.md §5.3): the standard
-// aggregate health response reused byte-for-byte (no new health vocabulary), wrapped with
-// identity and the contract hash - a changed hash is how a collector notices a redeploy
-// and knows to re-fetch the descriptor.
+// Heartbeat is the body of a benzene:mesh:heartbeat message (mesh.md §5): the standard aggregate
+// health response reused byte-for-byte (no new health vocabulary), wrapped with identity and the
+// registered document's registrationHash - a hash that differs from the registration's is how a
+// collector notices an instance running a contract it hasn't learned. ServiceVersion is the
+// instance's release, omitted when it declares none; it scopes the comparison in a collector that
+// implements Service Versions. NewHeartbeat builds one from the registered document.
 type Heartbeat struct {
-	Service        string               `json:"service"`
-	InstanceID     string               `json:"instanceId,omitempty"`
-	DescriptorHash string               `json:"descriptorHash,omitempty"`
-	SentAt         time.Time            `json:"sentAt"`
-	Health         healthcheck.Response `json:"health"`
+	Service          string               `json:"service"`
+	ServiceVersion   string               `json:"serviceVersion,omitempty"`
+	InstanceID       string               `json:"instanceId,omitempty"`
+	RegistrationHash string               `json:"registrationHash,omitempty"`
+	SentAt           time.Time            `json:"sentAt"`
+	Health           healthcheck.Response `json:"health"`
 }

@@ -85,7 +85,7 @@ func TraceMiddleware(info ServiceInfo, exporter Exporter) benzene.Middleware {
 		// (SpanFromContext + Span.Traceparent) - the join that lets a collector correlate an
 		// observed call with the declared edge it exercises (mesh.md §4.2: liveness and
 		// undeclared-edge drift, never the producer/consumer graph itself, which comes from
-		// the declared ServiceDescriptor regardless of whether any call has ever propagated a
+		// the registered Contract Document regardless of whether any call has ever propagated a
 		// trace at all).
 		err := next(contextWithSpan(ctx, Span{TraceID: traceID, SpanID: event.SpanID}))
 

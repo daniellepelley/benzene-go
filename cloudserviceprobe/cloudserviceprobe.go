@@ -6,7 +6,8 @@
 //
 // It is deliberately self-contained and depends on nothing else in this module: the profile is a
 // language-neutral spec, so this tool must be usable against ANY Benzene Cloud Service reachable
-// over HTTP - it therefore parses the wire shapes it checks (wire-contracts.md §1.2/§5, mesh.md §2)
+// over HTTP - it therefore parses the wire shapes it checks (wire-contracts.md §1.2/§5,
+// contract-document.md §1)
 // independently rather than importing this port's own models, and keeps its own copy of the
 // /benzene/* default path constants rather than referencing httpbinding. Do not "fix" that into a
 // shared reference; the independence is the point (it is what lets the same tool audit a non-Go
@@ -14,7 +15,7 @@
 //
 // Honesty rule: the result is tri-state (Satisfied / NotSatisfied / Inconclusive), never a bool. A
 // single-service HTTP probe genuinely cannot verify everything - R8 (trace propagation) and half of
-// R6 (register/heartbeat delivery to a collector) are not observable from one service in isolation,
+// R6 (register/heartbeat/trace delivery to a collector) are not observable from one service in isolation,
 // and R7 becomes unknowable the moment the caller points the probe at non-default paths. Those stay
 // Inconclusive by design, never silently upgraded to Satisfied. Run never returns an error for an
 // unreachable or non-conformant service: unreachability and shape mismatches are verdicts, not
@@ -46,10 +47,11 @@ const (
 )
 
 // The synthetic envelopes the probe POSTs to the invoke endpoint: a healthcheck round-trip for R4,
-// and the reserved mesh-descriptor topic for R6. Both use the reserved benzene: topics.
+// and the reserved benzene:spec topic - the self-description R6 requires on every transport - for
+// R6. Both use the reserved benzene: topics.
 const (
 	healthcheckEnvelope = `{"topic":"benzene:healthcheck","headers":{},"body":"{}"}`
-	meshEnvelope        = `{"topic":"benzene:mesh","headers":{},"body":"{}"}`
+	specEnvelope        = `{"topic":"benzene:spec","headers":{},"body":"{}"}`
 )
 
 // Verdict is the tri-state assessment an external probe can honestly reach for one requirement.
@@ -81,7 +83,7 @@ type Requirement struct {
 
 // Report is the result of one probe run: an external, black-box, tri-state assessment of R1-R8 built
 // entirely from what the probe observed over HTTP. It never trusts anything the service claims about
-// itself (e.g. a profile field on its own descriptor).
+// itself (e.g. the profile field on its own contract document).
 type Report struct {
 	// Requirements holds every profile requirement with its assessment, in R1-R8 order.
 	Requirements []Requirement
@@ -179,8 +181,8 @@ func Run(ctx context.Context, client *http.Client, baseURL string, opts ...Optio
 }
 
 // probeOutcome is the internal result of probing one surface: its requirement verdict, whether the
-// surface was reached at all (for the inferential R1), and - for the mesh probe - the descriptor's
-// topic count.
+// surface was reached at all (for the inferential R1), and - for the R6 probe - the contract
+// document's request count.
 type probeOutcome struct {
 	req        Requirement
 	reached    bool
@@ -243,29 +245,30 @@ func probeSpec(ctx context.Context, client *http.Client, baseURL string, cfg con
 	return probeOutcome{req: req("R5", descR5, Satisfied, fmt.Sprintf("GET %s returned 200 with a non-empty JSON object body", cfg.specPath)), reached: true}
 }
 
-const meshCaveat = "Registration (mesh:register) and heartbeat (mesh:heartbeat) delivery to a collector cannot be observed by probing the service alone, so that half of R6 stays unverified even when the descriptor endpoint itself checks out - a passing descriptor check does not imply the whole of R6."
+const meshCaveat = "Registration (benzene:mesh:register), heartbeat (benzene:mesh:heartbeat) and trace (benzene:mesh:traces) delivery to a collector cannot be observed by probing the service alone, so that half of R6 stays unverified even when the self-description checks out - a passing benzene:spec check does not imply the whole of R6."
 
-// probeMesh is R6 (observable half only): POST the reserved mesh topic; satisfied iff a 200 envelope
-// wraps a descriptor with a non-empty "service" field (mesh.md §2). The descriptor's topic count is
-// carried out for R2's inferential check.
+// probeMesh is R6 (observable half only): POST the reserved benzene:spec topic over the envelope;
+// satisfied iff a 200 envelope wraps a contract document with a non-empty "service" field
+// (contract-document.md §1, §7) - the self-description R6 requires, and the body the service
+// registers (mesh.md §2). The document's request count is carried out for R2's inferential check.
 func probeMesh(ctx context.Context, client *http.Client, baseURL string, cfg config) probeOutcome {
-	reached, status, body, failure := post(ctx, client, baseURL+cfg.invokePath, meshEnvelope, cfg.sendTraceParent)
+	reached, status, body, failure := post(ctx, client, baseURL+cfg.invokePath, specEnvelope, cfg.sendTraceParent)
 	if !reached {
-		return probeOutcome{req: req("R6", descR6, NotSatisfied, fmt.Sprintf("POST %s with topic 'benzene:mesh' did not reach the service: %s. %s", cfg.invokePath, failure, meshCaveat))}
+		return probeOutcome{req: req("R6", descR6, NotSatisfied, fmt.Sprintf("POST %s with topic 'benzene:spec' did not reach the service: %s. %s", cfg.invokePath, failure, meshCaveat))}
 	}
 	if status != 200 {
-		return probeOutcome{req: req("R6", descR6, NotSatisfied, fmt.Sprintf("POST %s with topic 'benzene:mesh' returned %d, expected 200 (the reserved mesh topic does not appear to be served). %s", cfg.invokePath, status, meshCaveat)), reached: true}
+		return probeOutcome{req: req("R6", descR6, NotSatisfied, fmt.Sprintf("POST %s with topic 'benzene:spec' returned %d, expected 200 (the reserved self-description topic does not appear to be served). %s", cfg.invokePath, status, meshCaveat)), reached: true}
 	}
 	inner, envReason, ok := parseEnvelope(body)
 	if !ok {
-		return probeOutcome{req: req("R6", descR6, NotSatisfied, fmt.Sprintf("200 response to the 'benzene:mesh' topic did not have the {statusCode, headers, body} envelope shape (wire-contracts.md §1.2): %s. %s", envReason, meshCaveat)), reached: true}
+		return probeOutcome{req: req("R6", descR6, NotSatisfied, fmt.Sprintf("200 response to the 'benzene:spec' topic did not have the {statusCode, headers, body} envelope shape (wire-contracts.md §1.2): %s. %s", envReason, meshCaveat)), reached: true}
 	}
-	service, topics, descReason, ok := parseDescriptor(inner)
+	service, topics, descReason, ok := parseContractDocument(inner)
 	if !ok {
-		return probeOutcome{req: req("R6", descR6, NotSatisfied, fmt.Sprintf("200 response to the 'benzene:mesh' topic did not parse as a descriptor with a non-empty 'service' field (mesh.md §2): %s. %s", descReason, meshCaveat)), reached: true}
+		return probeOutcome{req: req("R6", descR6, NotSatisfied, fmt.Sprintf("200 response to the 'benzene:spec' topic did not parse as a contract document with a non-empty 'service' field (contract-document.md §1): %s. %s", descReason, meshCaveat)), reached: true}
 	}
 	return probeOutcome{
-		req:        req("R6", descR6, Satisfied, fmt.Sprintf("the reserved 'benzene:mesh' topic served a descriptor for service '%s' - the observable half of R6 checks out. %s", service, meshCaveat)),
+		req:        req("R6", descR6, Satisfied, fmt.Sprintf("the reserved 'benzene:spec' topic served a contract document for service '%s' over the envelope - the observable half of R6 checks out. %s", service, meshCaveat)),
 		reached:    true,
 		topicCount: topics,
 	}
@@ -281,17 +284,17 @@ func evaluateR1(health, invoke, spec, mesh probeOutcome) Requirement {
 	return req("R1", desc, NotSatisfied, "none of the health, invoke, spec, or mesh surfaces responded at all; no hosted pipeline was reachable at the configured base address")
 }
 
-// evaluateR2 is inferential from R6's descriptor topics only - the profile mandates no spec format,
-// so topic counts can't be read from R5.
+// evaluateR2 is inferential from the requests of the contract document R6's probe read over the
+// envelope - R5's GET is format-agnostic, so request counts are not read from it.
 func evaluateR2(mesh probeOutcome) Requirement {
 	const desc = "Message handlers via the registry"
 	if mesh.req.Verdict != Satisfied {
-		return req("R2", desc, Inconclusive, "no reachable mesh descriptor to read registered topics from, and the profile does not mandate a spec document format, so topic counts can't be read from the spec surface either - absence of evidence isn't evidence of absence")
+		return req("R2", desc, Inconclusive, "no contract document reachable on the benzene:spec topic to read registered requests from - absence of evidence isn't evidence of absence")
 	}
 	if mesh.topicCount > 0 {
-		return req("R2", desc, Satisfied, fmt.Sprintf("the mesh descriptor lists %d registered topic(s) (mesh.md §2), which can only be populated from the handler registry", mesh.topicCount))
+		return req("R2", desc, Satisfied, fmt.Sprintf("the contract document on benzene:spec lists %d request(s) (contract-document.md §2), which can only be derived from the handler registry", mesh.topicCount))
 	}
-	return req("R2", desc, Inconclusive, "the mesh descriptor is reachable but lists no topics; a service can legitimately have zero handlers registered so far - absence of evidence isn't evidence of absence")
+	return req("R2", desc, Inconclusive, "the contract document is reachable but lists no requests; a service can legitimately have zero handlers registered so far - absence of evidence isn't evidence of absence")
 }
 
 // evaluateR7 is only assessable when the probe itself used the defaults; otherwise it can't tell what
@@ -312,7 +315,7 @@ func evaluateR7(cfg config, health, invoke, spec, mesh probeOutcome) Requirement
 		failing = append(failing, "R5 (spec)")
 	}
 	if mesh.req.Verdict != Satisfied {
-		failing = append(failing, "R6 (mesh)")
+		failing = append(failing, "R6 (benzene:spec)")
 	}
 	if len(failing) == 0 {
 		return req("R7", desc, Satisfied, "the probe used the spec's /benzene/* default paths and R3-R6 all checked out there")
@@ -324,7 +327,7 @@ func evaluateR7(cfg config, health, invoke, spec, mesh probeOutcome) Requirement
 // optional labeled non-breakage bonus note when the traceparent probe was sent.
 func evaluateR8(cfg config, invoke, mesh probeOutcome) Requirement {
 	const desc = "Trace context join and propagation"
-	const base = "trace context propagation cannot be verified by a single-service black-box HTTP probe; proving it requires either a second service to observe forwarded traceparent headers, or a mesh collector's declared-vs-observed signal showing the edge as actually exercised (mesh.md §3-4.2 - the producer/consumer graph itself comes from the registered ServiceDescriptor, not from trace parentage)"
+	const base = "trace context propagation cannot be verified by a single-service black-box HTTP probe; proving it requires either a second service to observe forwarded traceparent headers, or a mesh collector's declared-vs-observed signal showing the edge as actually exercised (mesh.md §3-4.2 - the producer/consumer graph itself comes from the registered contract document, not from trace parentage)"
 	if !cfg.sendTraceParent {
 		return req("R8", desc, Inconclusive, base)
 	}
@@ -439,9 +442,10 @@ func parseEnvelope(raw string) (innerBody, reason string, ok bool) {
 	return body, "", true
 }
 
-// parseDescriptor parses an envelope's inner body as a ServiceDescriptor (mesh.md §2), requiring a
-// non-empty "service" field, and returns the topic count for R2.
-func parseDescriptor(innerBody string) (service string, topicCount int, reason string, ok bool) {
+// parseContractDocument parses an envelope's inner body as a contract document
+// (contract-document.md §1), requiring a non-empty "service" field, and returns its request count
+// for R2 - reserved benzene: entries, which a producer never lists and a consumer ignores, excluded.
+func parseContractDocument(innerBody string) (service string, requestCount int, reason string, ok bool) {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(innerBody), &obj); err != nil {
 		return "", 0, "envelope body is not valid JSON: " + err.Error(), false
@@ -449,12 +453,19 @@ func parseDescriptor(innerBody string) (service string, topicCount int, reason s
 	if err := jsonField(obj, "service", &service); err != nil || service == "" {
 		return "", 0, "missing a non-empty string 'service' field", false
 	}
-	// topics is optional-shaped for counting: absent or null is zero, not a parse failure.
-	var topics []json.RawMessage
-	if raw, present := obj["topics"]; present {
-		_ = json.Unmarshal(raw, &topics)
+	// requests is optional-shaped for counting: absent or null is zero, not a parse failure.
+	var requests []struct {
+		Topic string `json:"topic"`
 	}
-	return service, len(topics), "", true
+	if raw, present := obj["requests"]; present {
+		_ = json.Unmarshal(raw, &requests)
+	}
+	for _, entry := range requests {
+		if !strings.HasPrefix(entry.Topic, "benzene:") {
+			requestCount++
+		}
+	}
+	return service, requestCount, "", true
 }
 
 // jsonField unmarshals a present, non-null field into target, erroring if the field is absent, JSON

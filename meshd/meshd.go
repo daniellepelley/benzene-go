@@ -1,21 +1,24 @@
 // Package meshd implements the Benzene Mesh collector (originally Phases 3-4 of this repo's own
 // work/archive/mesh.md, now the main repo's docs/specification/mesh.md §§4-6). It is itself an
 // ordinary Benzene service - its benzene:mesh:* topics live in a Registry, are served through a
-// Pipeline, and it serves its own descriptor on the reserved mesh topic - so deploying it
+// Pipeline, and it serves its own Contract Document on the reserved benzene:spec topic - so deploying it
 // anywhere this module's bindings reach (Lambda, Functions, Cloud Run, plain HTTP) is the same
 // exercise as deploying any other service.
 //
-// The producer/consumer graph (store.go's register) is built solely from the latest registered
-// ServiceDescriptor's Produces/Topics - present in full for a service with zero traffic, and
-// replaced wholesale on re-registration. Trace parentage (store.go's addEvents) never touches
+// A benzene:mesh:register body is the service's Contract Document (mesh.md §2). The
+// producer/consumer graph (store.go's register) is built solely from the latest registered document -
+// requests for consumers, events ∪ sends for providers, benzene: entries ignored - present in full
+// for a service with zero traffic, and replaced wholesale on re-registration. A body carrying only
+// service is accepted: an absent member, or one the document names in degraded, is unknown, and
+// declares no edge. Trace parentage (store.go's addEvents) never touches
 // that graph; it feeds invocation stats plus two additive, observed-only signals (mesh.md §4.2):
 // per-declared-edge last-observed-at, and contract-drift issues when a *registered* service's
 // traffic names a topic it didn't declare.
 //
 // The collector accepts partial fleets, mirroring the mesh package's degradation rule:
 // traces from a service that never registered render it anonymous-but-live (its row shows
-// the missing descriptor feed, and it is never eligible for a drift issue - it has no
-// declared contract to diverge from); a registered service with no traffic is a catalog entry
+// the missing registration - the "descriptor" feed, in the read models' vocabulary - and it is
+// never eligible for a drift issue: it has no declared contract to diverge from); a registered service with no traffic is a catalog entry
 // with no stats; a service without heartbeats has unknown health. Reduced feeds reduce
 // the view - they never make ingestion or queries fail.
 //
@@ -85,27 +88,30 @@ const (
 	healthUnknown  = "unknown"
 )
 
-// ServiceSummary is one service's fleet row. MissingFeeds names the feeds the collector
-// has not received for it ("descriptor", "health", "traces") - a reduced service is shown
-// as reduced, never mistaken for an empty or dead one.
+// ServiceSummary is one service's fleet row, read from its registered Contract Document: Topics
+// counts its requests (the topics it serves) and Produces its events and sends (the topics it
+// provides), benzene: entries excluded. MissingFeeds names the feeds the collector has not received
+// for it ("descriptor" - the registration -, "health", "traces", "issues") - a reduced service is
+// shown as reduced, never mistaken for an empty or dead one.
 type ServiceSummary struct {
-	Service      string         `json:"service"`
-	Runtime      string         `json:"runtime,omitempty"`
-	Binding      string         `json:"binding,omitempty"`
-	Placement    mesh.Placement `json:"placement"`
-	Topics       int            `json:"topics"`
-	Produces     int            `json:"produces"`
-	Instances    int            `json:"instances"`
-	Health       string         `json:"health"`
-	LastSeen     time.Time      `json:"lastSeen"`
-	Invocations  int64          `json:"invocations"`
-	Errors       int64          `json:"errors"`
-	MissingFeeds []string       `json:"missingFeeds,omitempty"`
+	Service        string              `json:"service"`
+	ServiceVersion string              `json:"serviceVersion,omitempty"`
+	Runtime        string              `json:"runtime,omitempty"`
+	Transports     []string            `json:"transports,omitempty"`
+	Placement      *contract.Placement `json:"placement,omitempty"`
+	Topics         int                 `json:"topics"`
+	Produces       int                 `json:"produces"`
+	Instances      int                 `json:"instances"`
+	Health         string              `json:"health"`
+	LastSeen       time.Time           `json:"lastSeen"`
+	Invocations    int64               `json:"invocations"`
+	Errors         int64               `json:"errors"`
+	MissingFeeds   []string            `json:"missingFeeds,omitempty"`
 }
 
 // TopicSummary is one topic's catalog row. Providers/Consumers are the declared
-// producer/consumer graph (mesh.md §4): built from the latest registered ServiceDescriptor's
-// Produces/Topics alone, present even for a topic with zero traffic - never derived from trace
+// producer/consumer graph (mesh.md §4): built from the latest registered documents' events ∪ sends
+// and requests alone, present even for a topic with zero traffic - never derived from trace
 // parentage. ProviderActivity/ConsumerActivity are the additive, observed-only signal of mesh.md
 // §4.2 layered on top: per declared edge, the last time a trace actually observed it (absent
 // means never observed in the retention window - a decommission candidate, not a fact).
@@ -141,23 +147,26 @@ type TraceSummary struct {
 	Failed     bool      `json:"failed"`
 }
 
-// ServiceView is the benzene:mesh:query:service response.
+// ServiceView is the benzene:mesh:query:service response. Descriptor is the registered Contract
+// Document exactly as the service sent it (the key keeps the read models' "descriptor" feed name).
 type ServiceView struct {
 	ServiceSummary
-	Descriptor *mesh.Descriptor `json:"descriptor,omitempty"`
-	Instances  []InstanceView   `json:"instances,omitempty"`
+	Descriptor json.RawMessage `json:"descriptor,omitempty"`
+	Instances  []InstanceView  `json:"instances,omitempty"`
 }
 
-// InstanceView is one instance's latest heartbeat state. HashMatches compares the
-// heartbeat's descriptor hash against the registered descriptor's - false means the
-// instance is running a different contract than the collector knows (a redeploy the
-// collector hasn't re-learned yet); nil means one side didn't supply a hash.
+// InstanceView is one instance's latest heartbeat state. HashMatches compares the heartbeat's
+// registrationHash with the registered document's (mesh.md §5; this collector keys by service, so
+// with the service's one registration) - false means the instance is running a different contract
+// than the collector knows (a redeploy the collector hasn't re-learned yet); nil means one side
+// didn't supply a hash.
 type InstanceView struct {
-	InstanceID     string    `json:"instanceId,omitempty"`
-	Healthy        bool      `json:"healthy"`
-	LastHeartbeat  time.Time `json:"lastHeartbeat"`
-	DescriptorHash string    `json:"descriptorHash,omitempty"`
-	HashMatches    *bool     `json:"hashMatches,omitempty"`
+	InstanceID       string    `json:"instanceId,omitempty"`
+	ServiceVersion   string    `json:"serviceVersion,omitempty"`
+	Healthy          bool      `json:"healthy"`
+	LastHeartbeat    time.Time `json:"lastHeartbeat"`
+	RegistrationHash string    `json:"registrationHash,omitempty"`
+	HashMatches      *bool     `json:"hashMatches,omitempty"`
 }
 
 // TraceView is the benzene:mesh:query:trace response: the flow's events in start order.
@@ -189,8 +198,8 @@ type Collector struct {
 }
 
 // New builds a Collector with every benzene:mesh:* topic registered and a pipeline that also
-// serves the collector's own descriptor on the reserved mesh topic (the collector is a
-// Benzene service like any other, and appears in its own catalog).
+// serves the collector's own Contract Document on the reserved benzene:spec topic (the collector is a
+// Benzene service like any other).
 func New(options Options) *Collector {
 	if options.MaxTraceEvents <= 0 {
 		options.MaxTraceEvents = 4096
@@ -202,12 +211,18 @@ func New(options Options) *Collector {
 	s := newStore(options.MaxTraceEvents, options.Now)
 	registry := benzene.NewRegistry()
 
+	// The register body is a Contract Document, read loosely (mesh.md §2): only service is
+	// required, and the raw body is kept for the service view.
 	mustRegister(benzene.Register(registry, benzene.NewTopic(mesh.TopicRegister),
-		benzene.Handler[mesh.Descriptor, Ack](func(_ context.Context, desc mesh.Descriptor) benzene.Result[Ack] {
-			if desc.Service == "" {
+		benzene.Handler[json.RawMessage, Ack](func(_ context.Context, body json.RawMessage) benzene.Result[Ack] {
+			var doc contract.Document
+			if err := json.Unmarshal(body, &doc); err != nil {
+				return benzene.BadRequest[Ack]("the register body is not a contract document: " + err.Error())
+			}
+			if doc.Service == "" {
 				return benzene.BadRequest[Ack]("service is required")
 			}
-			s.register(desc)
+			s.register(doc.Service, newRegistration(doc, body))
 			return benzene.Ok(Ack{Accepted: 1})
 		})))
 
@@ -278,14 +293,17 @@ func New(options Options) *Collector {
 			return benzene.Ok(view)
 		})))
 
-	// The collector makes no outbound calls of its own - a real (empty) OutboundRegistry
-	// asserts "consumes nothing" rather than degrading the feed, which would misleadingly
-	// suggest outbound registration is simply unwired here.
-	descriptor := mesh.Describe(registry, contract.NewOutboundRegistry(), mesh.ServiceInfo{Service: "meshd"})
+	// The collector makes no outbound calls of its own - a real (empty) OutboundRegistry asserts
+	// "sends nothing" rather than leaving events and sends undetermined. Its own topics are all
+	// reserved, so its document lists no requests either.
+	doc, err := contract.Derive(registry, contract.NewOutboundRegistry(), contract.Info{Service: "meshd"})
+	if err != nil {
+		panic(err) // the collector's payload types are fixed: a collision is a bug in this package
+	}
 	builder := &benzene.ApplicationBuilder{
 		Registry:  registry,
 		Container: benzene.NewContainer(),
-		Pipeline:  benzene.NewPipeline(mesh.Middleware(descriptor), benzene.RouterMiddleware(registry)),
+		Pipeline:  benzene.NewPipeline(contract.Middleware(doc), benzene.RouterMiddleware(registry)),
 	}
 	return &Collector{store: s, builder: builder}
 }

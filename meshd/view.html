@@ -56,7 +56,7 @@
 <body>
 <div class="wrap">
   <h1>Benzene Mesh</h1>
-  <p class="sub">Providers and consumers are declared by registered descriptors; health, traffic
+  <p class="sub">Providers and consumers are declared by registered contract documents; health, traffic
     and activity are derived live from heartbeats and traces.
     <span id="status" class="err"></span></p>
 
@@ -70,7 +70,7 @@
 
   <h2>Services</h2>
   <div class="tablewrap"><table>
-    <thead><tr><th>Service</th><th>Health</th><th>Cloud</th><th>Region</th><th>Binding</th>
+    <thead><tr><th>Service</th><th>Health</th><th>Cloud</th><th>Region</th><th>Transports</th>
       <th>Topics</th><th>Instances</th><th>Invocations</th><th>Errors</th><th>Reduced feeds</th></tr></thead>
     <tbody id="services"></tbody>
   </table></div>
@@ -135,7 +135,7 @@
       cell(tr, marks[s.health] || s.health, "h-" + s.health);
       cell(tr, (s.placement || {}).cloud);
       cell(tr, (s.placement || {}).region);
-      cell(tr, s.binding);
+      cell(tr, (s.transports || []).join(", "));
       cell(tr, s.topics, "num");
       cell(tr, s.instances, "num");
       cell(tr, s.invocations, "num");

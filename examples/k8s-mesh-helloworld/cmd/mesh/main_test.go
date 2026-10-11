@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/contract"
 	"github.com/daniellepelley/benzene-go/httpbinding"
 	"github.com/daniellepelley/benzene-go/httpclient"
 	"github.com/daniellepelley/benzene-go/mesh"
@@ -45,8 +46,7 @@ func TestDiscoveredHandler_CountsRegisteredServices(t *testing.T) {
 	envelopeClient := httpclient.NewClient(server.URL + httpbinding.EnvelopePath)
 
 	for _, name := range []string{"orders", "payments", "shipping"} {
-		desc := mesh.Descriptor{Service: name, Runtime: "go"}
-		body, _ := json.Marshal(desc)
+		body, _ := json.Marshal(contract.Document{Service: name, Runtime: "go"})
 		if result := envelopeClient.Send(context.Background(), benzene.NewTopic(mesh.TopicRegister), nil, body); !result.IsSuccessful() {
 			t.Fatalf("register %s: %v %v", name, result.Status, result.Errors)
 		}

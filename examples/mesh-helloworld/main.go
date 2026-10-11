@@ -2,16 +2,16 @@
 // promoted spec, docs/specification/mesh.md in the main repo) in one process: a meshd
 // collector and three services demonstrating every mesh feature.
 //
-//   - greeter and frontdoor are fully meshed: descriptor endpoint (topics + derived
-//     schemas + contract hash), registration (including frontdoor's outbound registration
-//     of "greet" - what makes it a declared consumer, mesh.md §2.3), heartbeats, and trace
-//     push. frontdoor also propagates its trace span onto its call to greeter, so the
-//     collector can additionally show that declared edge as observed (mesh.md §4.2) - but
-//     the edge itself, on the topic catalog, comes from frontdoor's registered Consumes,
-//     never from the trace.
+//   - greeter and frontdoor are fully meshed: the Contract Document on benzene:spec (requests,
+//     events and sends with derived schemas and both hashes), registration of that same
+//     document (including frontdoor's declared send to "greet" - what makes it that topic's
+//     declared provider, mesh.md §4), heartbeats, and trace push. frontdoor also propagates its
+//     trace span onto its call to greeter, so the collector can additionally show that declared
+//     edge as observed (mesh.md §4.2) - but the edge itself, on the topic catalog, comes from
+//     frontdoor's registered sends, never from the trace.
 //   - legacy-portal is deliberately reduced: it provisions ONLY the trace feed - no
-//     descriptor endpoint, no registration, no heartbeats (the "descriptor endpoint
-//     withheld" deployment). It still calls greeter and still appears on the view, as
+//     self-description, no registration, no heartbeats (the "self-description withheld"
+//     deployment). It still calls greeter and still appears on the view, as
 //     reduced feeds: descriptor, health - anonymous-but-live, exactly the degradation
 //     rule the design makes normative. Because it never registers, it has no declared
 //     contract to diverge from: its calls to greeter add up in "greet"'s invocation stats,
@@ -23,9 +23,10 @@
 //	curl -s -X POST localhost:8081/welcome -d '{"name":"Mesh"}'   # fully meshed path
 //	curl -s -X POST localhost:8082/relay   -d '{"name":"Mesh"}'   # reduced-service path
 //
-// The topic catalog (who provides/consumes what) is declared by each service's descriptor;
+// The topic catalog (who provides/consumes what) is declared by each service's registered Contract
+// Document;
 // health, traffic stats, and the observed-activity/drift signals are derived from what the
-// running services actually do. See the README for drilling into descriptors, topics, and
+// running services actually do. See the README for drilling into documents, topics, and
 // traces with curl.
 package main
 
@@ -81,7 +82,7 @@ type welcomeResponse struct {
 // joins the two services' trace events into one flow and lets the collector show the declared
 // edge as observed (mesh.md §4.2) - is handled by wrapping greeter in mesh.WithTraceContext at
 // construction (see the call sites), so the handler itself writes no mesh-specific line at all.
-// The edge on the topic catalog itself comes from the caller's outbound registration
+// The edge on the topic catalog itself comes from the caller's declared send
 // (registerOutbound at the newService call site), not from this propagation.
 func welcomeHandler(greeter client.Sender) benzene.Handler[welcomeRequest, welcomeResponse] {
 	return func(ctx context.Context, req welcomeRequest) benzene.Result[welcomeResponse] {
@@ -106,19 +107,17 @@ type service struct {
 	handler       http.Handler
 	exporter      *mesh.PushExporter      // caller owns Close
 	issueExporter *mesh.PushIssueExporter // caller owns Close
-	descriptor    mesh.Descriptor
-	meshd         *httpclient.Client
+	announcer     *mesh.Announcer         // registers the Contract Document, heartbeats
 }
 
-// newService assembles a meshed Benzene service: the caller's handlers, its outbound
-// registration (what it consumes, mesh.md §2.3 - registerOutbound may be nil for a service that
-// consumes nothing), health-check interception, trace push to the collector, native routes, and
-// the envelope endpoint at httpbinding.EnvelopePath (the default service standard's well-known
-// mount, main repo's docs/specification/design-principles.md §5). provisionDescriptor controls
-// the reserved-mesh-topic endpoint - passing false is the "spec endpoint withheld" deployment:
-// the service still traces, it just serves no descriptor (and on the view degrades to reduced,
-// never breaks). The mesh wiring is the mesh.* lines in the pipeline; everything else is the
-// same as examples/helloworld.
+// newService assembles a meshed Benzene service: the caller's handlers, its event and send
+// declarations (registerOutbound may be nil for a service that sends nothing), health-check
+// interception, trace push to the collector, native routes, and the envelope endpoint at
+// httpbinding.EnvelopePath (the default service standard's well-known mount, main repo's
+// docs/specification/design-principles.md §5). provisionDescriptor controls the self-description -
+// passing false is the "spec endpoint withheld" deployment: the service still traces, it just
+// serves no document on benzene:spec (and on the view degrades to reduced, never breaks). The mesh
+// wiring is the mesh.* lines; everything else is the same as examples/helloworld.
 func newService(name, meshdEndpoint string, provisionDescriptor bool, registerHandlers func(*benzene.Registry), registerOutbound func(*contract.OutboundRegistry), routes []httpbinding.Route) *service {
 	registry := benzene.NewRegistry()
 	registerHandlers(registry)
@@ -128,11 +127,14 @@ func newService(name, meshdEndpoint string, provisionDescriptor bool, registerHa
 		registerOutbound(outbound)
 	}
 
-	info := mesh.ServiceInfo{Service: name, ServiceVersion: "1.0.0", InstanceID: name + "-1", Binding: "http"}
-	descriptor := mesh.Describe(registry, outbound, info)
-	// The Contract Document (R5): what GET /benzene/spec and the benzene:spec topic answer with. A
-	// derivation error (a component-name collision) is a wiring mistake: stop at start-up.
-	spec, err := contract.Derive(registry, outbound, contract.Info{Service: name, ServiceVersion: "1.0.0", VersionScheme: "semver", MessageEndpoint: httpbinding.EnvelopePath})
+	info := mesh.ServiceInfo{Service: name, InstanceID: name + "-1"}
+	// The Contract Document: what GET /benzene/spec and the benzene:spec topic answer with (R5), and
+	// the body the announcer registers (mesh.md §2). A derivation error (a component-name collision)
+	// is a wiring mistake: stop at start-up.
+	spec, err := contract.Derive(registry, outbound, contract.Info{
+		Service: name, ServiceVersion: "1.0.0", VersionScheme: "semver",
+		MessageEndpoint: httpbinding.EnvelopePath, Transports: []string{"http"},
+	})
 	if err != nil {
 		panic(err)
 	}
@@ -145,7 +147,7 @@ func newService(name, meshdEndpoint string, provisionDescriptor bool, registerHa
 
 	middlewares := []benzene.Middleware{mesh.TraceMiddleware(info, exporter), mesh.IssueMiddleware(info, issueExporter)}
 	if provisionDescriptor {
-		middlewares = append(middlewares, contract.Middleware(spec), mesh.Middleware(descriptor))
+		middlewares = append(middlewares, contract.Middleware(spec))
 	}
 	middlewares = append(middlewares, healthcheck.Middleware(checks), benzene.RouterMiddleware(registry))
 
@@ -166,44 +168,13 @@ func newService(name, meshdEndpoint string, provisionDescriptor bool, registerHa
 		handler:       mux,
 		exporter:      exporter,
 		issueExporter: issueExporter,
-		descriptor:    descriptor,
-		meshd:         httpclient.NewClient(meshdEndpoint),
-	}
-}
-
-// announce registers the service's descriptor with the collector, reporting whether it
-// landed. Failure is logged and otherwise ignored: an unreachable collector reduces the
-// mesh, never the service.
-func (s *service) announce(ctx context.Context) bool {
-	body, err := json.Marshal(s.descriptor)
-	if err != nil {
-		log.Printf("%s: marshal descriptor: %v", s.descriptor.Service, err)
-		return false
-	}
-	if result := s.meshd.Send(ctx, benzene.NewTopic(mesh.TopicRegister), nil, body); !result.IsSuccessful() {
-		log.Printf("%s: register with meshd: %v %v", s.descriptor.Service, result.Status, result.Errors)
-		return false
-	}
-	return true
-}
-
-// heartbeat sends one health report. In a real service the Health field would come from
-// running the same checks the healthcheck middleware serves; a static healthy report
-// keeps the example focused.
-func (s *service) heartbeat(ctx context.Context) {
-	body, err := json.Marshal(mesh.Heartbeat{
-		Service:        s.descriptor.Service,
-		InstanceID:     s.descriptor.InstanceID,
-		DescriptorHash: s.descriptor.DescriptorHash,
-		SentAt:         time.Now().UTC(),
-		Health:         healthcheck.Response{IsHealthy: true, HealthChecks: map[string]healthcheck.CheckResult{}},
-	})
-	if err != nil {
-		log.Printf("%s: marshal heartbeat: %v", s.descriptor.Service, err)
-		return
-	}
-	if result := s.meshd.Send(ctx, benzene.NewTopic(mesh.TopicHeartbeat), nil, body); !result.IsSuccessful() {
-		log.Printf("%s: heartbeat to meshd: %v %v", s.descriptor.Service, result.Status, result.Errors)
+		announcer: mesh.NewAnnouncer(httpclient.NewClient(meshdEndpoint), spec, mesh.AnnouncerOptions{
+			InstanceID: info.InstanceID,
+			Checks:     checks,
+			OnSendFailure: func(topic string, result benzene.Result[json.RawMessage]) {
+				log.Printf("%s: %s to meshd: %v %v", name, topic, result.Status, result.Errors)
+			},
+		}),
 	}
 }
 
@@ -238,9 +209,9 @@ func main() {
 		greeterClient := mesh.WithTraceContext(httpclient.NewClient("http://localhost:" + greeterPort + httpbinding.EnvelopePath))
 		benzene.MustRegister(registry, benzene.NewTopic("welcome"), welcomeHandler(greeterClient))
 	}, func(outbound *contract.OutboundRegistry) {
-		// frontdoor's declared contract: it calls greeter's "greet" (mesh.md §2.3). This -
-		// not the trace propagation above - is what makes "greet" show frontdoor as a
-		// consumer on the topic catalog (mesh.md §4).
+		// frontdoor's declared contract: it sends to greeter's "greet". This - not the trace
+		// propagation above - is what makes "greet" show frontdoor as its provider on the
+		// topic catalog (mesh.md §4).
 		contract.MustRegisterSend[greetRequest](outbound, benzene.NewTopic("greet"), contract.WithResponse[greetResponse]())
 	}, []httpbinding.Route{
 		{Method: http.MethodPost, Path: "/welcome", Topic: benzene.NewTopic("welcome")},
@@ -250,9 +221,9 @@ func main() {
 	defer frontdoor.issueExporter.Close()
 	go func() { log.Fatal(http.ListenAndServe(":"+frontdoorPort, frontdoor.handler)) }()
 
-	// legacy-portal provisions ONLY the trace feed: no descriptor endpoint (false below),
-	// and it never announces or heartbeats - so even though it calls greeter, it has no
-	// registered Consumes to show that edge with (mesh.md §4.2: an anonymous service has no
+	// legacy-portal provisions ONLY the trace feed: no self-description (false below), and it
+	// never registers or heartbeats - so even though it calls greeter, it has no registered
+	// sends to show that edge with (mesh.md §4.2: an anonymous service has no
 	// contract to diverge from, declared or drifted). It shows up on the view as reduced -
 	// "missing feeds: descriptor, health" - and its calls to greeter still count in "greet"'s
 	// invocation stats. This is the degradation rule, live.
@@ -266,25 +237,16 @@ func main() {
 	defer legacy.issueExporter.Close()
 	go func() { log.Fatal(http.ListenAndServe(":"+legacyPort, legacy.handler)) }()
 
-	// Announce like the .NET example's StartAnnouncing: retry registration until the
-	// collector (starting concurrently above) is up, then heartbeat every 10s. A
+	// Announce like the .NET example's StartAnnouncing: retry registration until the collector
+	// (starting concurrently above) is up, then heartbeat every 10s (mesh.Announcer's defaults). A
 	// registration that never lands is still only a reduced mesh, never a dead service.
 	ctx := context.Background()
-	for _, svc := range []*service{greeter, frontdoor} {
-		go func(s *service) {
-			for attempt := 0; attempt < 30 && !s.announce(ctx); attempt++ {
-				time.Sleep(2 * time.Second)
-			}
-			s.heartbeat(ctx)
-			for range time.Tick(10 * time.Second) {
-				s.heartbeat(ctx)
-			}
-		}(svc)
-	}
+	go greeter.announcer.Run(ctx)
+	go frontdoor.announcer.Run(ctx)
 
 	log.Printf("mesh view      http://localhost:%s/", meshdPort)
 	log.Printf("meshed flow    curl -s -X POST localhost:%s/welcome -d '{\"name\":\"Mesh\"}'", frontdoorPort)
 	log.Printf("reduced flow   curl -s -X POST localhost:%s/relay -d '{\"name\":\"Mesh\"}'", legacyPort)
-	log.Printf("descriptor     curl -s -X POST localhost:%s%s -d '{\"topic\":\"benzene:mesh\",\"headers\":{},\"body\":\"\"}'", greeterPort, httpbinding.EnvelopePath)
+	log.Printf("contract       curl -s localhost:%s%s", greeterPort, httpbinding.SpecPath)
 	select {}
 }

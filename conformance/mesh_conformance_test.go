@@ -18,158 +18,20 @@ import (
 	"testing"
 
 	benzene "github.com/daniellepelley/benzene-go"
-	"github.com/daniellepelley/benzene-go/contract"
 	"github.com/daniellepelley/benzene-go/envelope"
 	"github.com/daniellepelley/benzene-go/mesh"
 	"github.com/daniellepelley/benzene-go/meshd"
 	"github.com/daniellepelley/benzene-go/wire"
 )
 
-// canonicalRegistry registers the two canonical conformance handlers (README.md), the set
-// mesh-descriptor-cases.json pins schema derivation against.
+// canonicalRegistry registers the two canonical conformance handlers (README.md), which the trace
+// cases dispatch through.
 func canonicalRegistry(t *testing.T) *benzene.Registry {
 	t.Helper()
 	registry := benzene.NewRegistry()
 	must(t, benzene.Register(registry, benzene.NewTopic("conformance:greet"), benzene.Handler[conformanceGreetRequest, conformanceGreetResponse](conformanceGreetHandler)))
 	must(t, benzene.Register(registry, benzene.NewTopic("conformance:status"), benzene.Handler[conformanceStatusRequest, conformanceStatusResponse](conformanceStatusHandler)))
 	return registry
-}
-
-// conformanceLogRequest is the request type of the canonical outbound registration
-// (conformance/README.md "Canonical outbound registration"): conformance:log, no declared
-// response type.
-type conformanceLogRequest struct {
-	Message string `json:"message"`
-}
-
-// canonicalOutboundRegistry registers the one canonical outbound record mesh-descriptor-cases.json
-// pins Produces derivation against: conformance:log, a one-way send (mesh.md §2.3 - a sender with no
-// expected response type derives the unconstrained {} responseSchema).
-func canonicalOutboundRegistry(t *testing.T) *contract.OutboundRegistry {
-	t.Helper()
-	outbound := contract.NewOutboundRegistry()
-	must(t, contract.RegisterSend[conformanceLogRequest](outbound, benzene.NewTopic("conformance:log")))
-	return outbound
-}
-
-// --- mesh-descriptor-cases.json ---
-
-type meshDescriptorFixture struct {
-	ServiceInfo struct {
-		Service        string `json:"service"`
-		ServiceVersion string `json:"serviceVersion"`
-		Placement      struct {
-			Cloud  string `json:"cloud"`
-			Region string `json:"region"`
-		} `json:"placement"`
-	} `json:"serviceInfo"`
-	ExpectedDescriptor map[string]any `json:"expectedDescriptor"`
-	Hash               struct {
-		Prefix    string `json:"prefix"`
-		HexLength int    `json:"hexLength"`
-		// Pointers, not bools. A missing key must be distinguishable from a key set to false:
-		// see asserted() below for why that distinction is load-bearing.
-		InvariantToInstanceID     *bool `json:"invariantToInstanceId"`
-		SensitiveToServiceVersion *bool `json:"sensitiveToServiceVersion"`
-		SensitiveToTopics         *bool `json:"sensitiveToTopics"`
-		SensitiveToProduces       *bool `json:"sensitiveToProduces"`
-	} `json:"hash"`
-}
-
-// asserted reports whether the fixture asks for a hash property, and fails the test outright if the
-// fixture does not mention it at all.
-//
-// The distinction matters more than it looks. This runner spent the whole producer/consumer role
-// inversion reading "sensitiveToConsumes" after the fixture had renamed the key to
-// "sensitiveToProduces". Decoded into a plain bool that was simply false, the subtest skipped
-// itself, and a green run meant nothing. A key the fixture does not carry is drift between runner
-// and fixture - never permission to stop checking.
-func asserted(t *testing.T, flag *bool, key string) bool {
-	t.Helper()
-	if flag == nil {
-		t.Fatalf("fixture hash section has no %q - the runner and the fixture have drifted", key)
-	}
-	return *flag
-}
-
-func TestConformance_MeshDescriptorCases(t *testing.T) {
-	var fixture meshDescriptorFixture
-	loadFixture(t, "mesh-descriptor-cases.json", &fixture)
-
-	info := mesh.ServiceInfo{
-		Service:        fixture.ServiceInfo.Service,
-		ServiceVersion: fixture.ServiceInfo.ServiceVersion,
-		Placement:      mesh.Placement{Cloud: fixture.ServiceInfo.Placement.Cloud, Region: fixture.ServiceInfo.Placement.Region},
-	}
-	descriptor := mesh.Describe(canonicalRegistry(t), canonicalOutboundRegistry(t), info)
-
-	t.Run("expected-descriptor", func(t *testing.T) {
-		data, err := json.Marshal(descriptor)
-		if err != nil {
-			t.Fatalf("marshal descriptor: %v", err)
-		}
-		var actual map[string]any
-		if err := json.Unmarshal(data, &actual); err != nil {
-			t.Fatalf("unmarshal descriptor: %v", err)
-		}
-		for _, msg := range meshSubsetMismatches("descriptor", fixture.ExpectedDescriptor, actual) {
-			t.Error(msg)
-		}
-	})
-
-	t.Run("hash-format", func(t *testing.T) {
-		hash := descriptor.DescriptorHash
-		if !strings.HasPrefix(hash, fixture.Hash.Prefix) || len(hash) != len(fixture.Hash.Prefix)+fixture.Hash.HexLength {
-			t.Fatalf("descriptorHash = %q, want %q + %d hex chars", hash, fixture.Hash.Prefix, fixture.Hash.HexLength)
-		}
-		if _, err := hex.DecodeString(hash[len(fixture.Hash.Prefix):]); err != nil {
-			t.Errorf("descriptorHash suffix is not hex: %v", err)
-		}
-	})
-
-	t.Run("hash-invariant-to-instance-id", func(t *testing.T) {
-		if !asserted(t, fixture.Hash.InvariantToInstanceID, "invariantToInstanceId") {
-			t.Skip("not asserted by the fixture")
-		}
-		other := info
-		other.InstanceID = "some-other-instance"
-		if got := mesh.Describe(canonicalRegistry(t), canonicalOutboundRegistry(t), other).DescriptorHash; got != descriptor.DescriptorHash {
-			t.Errorf("hash changed with instanceId: %q vs %q", got, descriptor.DescriptorHash)
-		}
-	})
-
-	t.Run("hash-sensitive-to-service-version", func(t *testing.T) {
-		if !asserted(t, fixture.Hash.SensitiveToServiceVersion, "sensitiveToServiceVersion") {
-			t.Skip("not asserted by the fixture")
-		}
-		bumped := info
-		bumped.ServiceVersion = info.ServiceVersion + "-changed"
-		if got := mesh.Describe(canonicalRegistry(t), canonicalOutboundRegistry(t), bumped).DescriptorHash; got == descriptor.DescriptorHash {
-			t.Errorf("hash did not change with serviceVersion: %q", got)
-		}
-	})
-
-	t.Run("hash-sensitive-to-topics", func(t *testing.T) {
-		if !asserted(t, fixture.Hash.SensitiveToTopics, "sensitiveToTopics") {
-			t.Skip("not asserted by the fixture")
-		}
-		grown := canonicalRegistry(t)
-		must(t, benzene.Register(grown, benzene.NewTopic("conformance:extra"), benzene.Handler[conformanceGreetRequest, conformanceGreetResponse](conformanceGreetHandler)))
-		if got := mesh.Describe(grown, canonicalOutboundRegistry(t), info).DescriptorHash; got == descriptor.DescriptorHash {
-			t.Errorf("hash did not change with the topic set: %q", got)
-		}
-	})
-
-	t.Run("hash-sensitive-to-produces", func(t *testing.T) {
-		if !asserted(t, fixture.Hash.SensitiveToProduces, "sensitiveToProduces") {
-			t.Skip("not asserted by the fixture")
-		}
-		grown := canonicalOutboundRegistry(t)
-		must(t, contract.RegisterSend[conformanceLogRequest](grown, benzene.NewTopic("conformance:extra-produced")))
-		if got := mesh.Describe(canonicalRegistry(t), grown, info).DescriptorHash; got == descriptor.DescriptorHash {
-			t.Errorf("hash did not change with the produced-topic set: %q", got)
-		}
-	})
 }
 
 // --- mesh-trace-cases.json ---

@@ -58,10 +58,12 @@ func TestChain_OrdersToPaymentsToShipping(t *testing.T) {
 
 	ctx := context.Background()
 	for _, svc := range []*service{shipping, payments, orders} {
-		if !svc.announce(ctx) {
-			t.Fatalf("%s: announce failed", svc.name)
+		if !svc.announcer.Register(ctx) {
+			t.Fatalf("%s: register failed", svc.name)
 		}
-		svc.heartbeat(ctx)
+		if !svc.announcer.Heartbeat(ctx) {
+			t.Fatalf("%s: heartbeat failed", svc.name)
+		}
 	}
 
 	// Drive the chain through orders' native route, exactly like the README's curl example.
@@ -123,7 +125,7 @@ func TestChain_OrdersToPaymentsToShipping(t *testing.T) {
 		t.Errorf("expected traced invocations on every hop, got %+v", services)
 	}
 
-	// Graph edges are declared: orders' outbound registration (registerDomain in main.go) is
+	// Graph edges are declared: orders' declared send (registerDomain in main.go) is
 	// what puts it on payment:take's PROVIDERS, and payments handling the topic is what puts
 	// it on the consumers - not the traffic just asserted above (mesh.md §4).
 	topicResult := collectorClient.Send(ctx, benzene.NewTopic(mesh.TopicQueryTopic), nil, []byte(`{"topic":"payment:take"}`))
@@ -145,8 +147,8 @@ func TestChain_OrdersToPaymentsToShipping(t *testing.T) {
 // examples/mesh-helloworld's degradation-rule test.
 func TestNewService_Standalone(t *testing.T) {
 	svc := newService("shipping", "", "")
-	if svc.collector != nil || svc.exporter != nil || svc.issueExporter != nil {
-		t.Fatalf("standalone service should have no collector/exporter wiring, got collector=%v exporter=%v issueExporter=%v", svc.collector, svc.exporter, svc.issueExporter)
+	if svc.announcer != nil || svc.exporter != nil || svc.issueExporter != nil {
+		t.Fatalf("standalone service should have no collector wiring, got announcer=%v exporter=%v issueExporter=%v", svc.announcer, svc.exporter, svc.issueExporter)
 	}
 	server := httptest.NewServer(svc.handler)
 	defer server.Close()
@@ -164,8 +166,8 @@ func TestNewService_Standalone(t *testing.T) {
 		t.Fatalf("POST /shipments = %d %s", resp.StatusCode, body)
 	}
 
-	// announceAndHeartbeat must be a safe no-op with no collector configured.
-	svc.announceAndHeartbeat(context.Background())
+	// Run must be a safe no-op with no collector configured: the announcer is nil.
+	svc.announcer.Run(context.Background())
 }
 
 // TestNewService_DefaultsToOrders proves an unrecognised/empty MESH_SERVICE value falls back to

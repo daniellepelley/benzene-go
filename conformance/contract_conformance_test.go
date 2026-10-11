@@ -96,9 +96,36 @@ type registrations struct {
 	Sends    []registrationEntry `json:"sends"`
 }
 
+// serviceInfo is a derivation case's identity and placement (conformance/README.md): what the
+// document carries and neither hash covers.
+type serviceInfo struct {
+	Service        string              `json:"service"`
+	ServiceVersion string              `json:"serviceVersion"`
+	VersionScheme  string              `json:"versionScheme"`
+	Placement      *contract.Placement `json:"placement"`
+}
+
+// info returns the contract.Info a case's serviceInfo describes; a case without one derives as the
+// "conformance" service.
+func (s *serviceInfo) info() contract.Info {
+	if s == nil {
+		return contract.Info{Service: "conformance"}
+	}
+	return contract.Info{Service: s.Service, ServiceVersion: s.ServiceVersion, VersionScheme: s.VersionScheme, Placement: s.Placement}
+}
+
+// derivedMembers are the expected document's members a derivation case compares by its own rules
+// (entries after normalization, hashes exactly, components by resolution); every other member is an
+// identity field, subset-matched.
+var derivedMembers = map[string]bool{
+	"requests": true, "events": true, "sends": true, "components": true,
+	"contractHash": true, "registrationHash": true,
+}
+
 type contractDocumentFixture struct {
 	DerivationCases []struct {
 		Name          string          `json:"name"`
+		ServiceInfo   *serviceInfo    `json:"serviceInfo"`
 		Registrations registrations   `json:"registrations"`
 		Expected      json.RawMessage `json:"expected"`
 	} `json:"derivationCases"`
@@ -208,7 +235,7 @@ func TestConformance_ContractDerivationCases(t *testing.T) {
 	for _, c := range fixture.DerivationCases {
 		t.Run(c.Name, func(t *testing.T) {
 			registry, outbound := registerCanonical(t, c.Registrations)
-			doc, err := contract.Derive(registry, outbound, contract.Info{Service: "conformance"})
+			doc, err := contract.Derive(registry, outbound, c.ServiceInfo.info())
 			if err != nil {
 				t.Fatalf("Derive: %v", err)
 			}
@@ -218,6 +245,16 @@ func TestConformance_ContractDerivationCases(t *testing.T) {
 			}
 			derived := decodeJSON(t, raw)
 			expected := decodeJSON(t, c.Expected)
+
+			// The identity fields (service, serviceVersion, versionScheme, placement) subset-match.
+			for key, want := range expected {
+				if derivedMembers[key] {
+					continue
+				}
+				for _, msg := range meshSubsetMismatches(key, want, derived[key]) {
+					t.Error(msg)
+				}
+			}
 
 			// Entries compare exactly after §6.2 steps 3-4 (the projection's own normalization), as
 			// sets keyed by topic and version: Projection sorts them.

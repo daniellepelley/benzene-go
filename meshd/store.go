@@ -1,16 +1,19 @@
 package meshd
 
 import (
+	"encoding/json"
+	"slices"
 	"sort"
 	"sync"
 	"time"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/contract"
 	"github.com/daniellepelley/benzene-go/mesh"
 )
 
 // store is the MVP in-memory state behind a Collector (mesh.md §4): cumulative per-service and
-// per-topic stats, the latest heartbeat per instance, registered descriptors, and a bounded ring
+// per-topic stats, the latest heartbeat per instance, registered documents, and a bounded ring
 // of recent trace events (the trace query and the observed-activity/drift signals of §4.2 are
 // derived from it). Everything is derived on the collector side too - a service that never
 // registered still appears once its traces do (anonymous but live), and a registered service
@@ -18,11 +21,11 @@ import (
 //
 // The producer/consumer graph itself is NOT derived from the ring: per the main repo's 2026-08
 // revision, register (below) is the graph's sole source - topicState.providers/consumers are
-// written straight from the latest registered ServiceDescriptor's Produces/Topics, replaced
+// written straight from the latest registered Contract Document's events ∪ sends / requests, replaced
 // wholesale on every re-registration. The ring instead feeds two things that are deliberately
 // NOT graph membership (mesh.md §4.2): providerLastSeen/consumerLastSeen ("Unobserved" liveness
 // - a declared edge nobody has exercised is a decommission candidate, not a fact) and drift
-// detection (an *observed* edge no registered descriptor declared is filed as a contract-drift
+// detection (an *observed* edge no registered document declared is filed as a contract-drift
 // issue). spanService is what makes the second one possible: a persistent record of which
 // service owns each span still in the ring, used only to resolve "who called this" - never to
 // admit or remove a graph edge.
@@ -52,12 +55,65 @@ type topicKey struct {
 	version string
 }
 
+// registration is one registered Contract Document (mesh.md §2) as the graph reads it: the body as
+// received, for the service view, and the non-reserved topics it declares. A member the body omits,
+// or names in degraded, is unknown (mesh.md §2, §6): it declares no edge, and the drift check of
+// §4.2 never flags traffic against it.
+type registration struct {
+	raw              json.RawMessage
+	serviceVersion   string
+	runtime          string
+	placement        *contract.Placement
+	transports       []string
+	registrationHash string
+
+	requests      map[topicKey]bool // the consumer claims
+	produces      map[topicKey]bool // the provider claims: events ∪ sends
+	requestsKnown bool
+	producesKnown bool // both events and sends are known
+}
+
+// newRegistration reads doc (received as raw): requests are its consumer claims and events ∪ sends
+// its provider claims, with benzene: entries ignored (contract-document.md §1).
+func newRegistration(doc contract.Document, raw json.RawMessage) *registration {
+	known := func(member string, present bool) bool {
+		return present && !slices.Contains(doc.Degraded, member)
+	}
+	reg := &registration{
+		raw:              raw,
+		serviceVersion:   doc.ServiceVersion,
+		runtime:          doc.Runtime,
+		placement:        doc.Placement,
+		transports:       doc.Transports,
+		registrationHash: doc.RegistrationHash,
+		requests:         map[topicKey]bool{},
+		produces:         map[topicKey]bool{},
+		requestsKnown:    known(contract.MemberRequests, doc.Requests != nil),
+		producesKnown:    known(contract.MemberEvents, doc.Events != nil) && known(contract.MemberSends, doc.Sends != nil),
+	}
+	claim := func(set map[topicKey]bool, topic, version string) {
+		if topic != "" && !contract.IsReserved(topic) {
+			set[topicKey{id: topic, version: version}] = true
+		}
+	}
+	for _, entry := range doc.Requests {
+		claim(reg.requests, entry.Topic, entry.Version)
+	}
+	for _, entry := range doc.Events {
+		claim(reg.produces, entry.Topic, entry.Version)
+	}
+	for _, entry := range doc.Sends {
+		claim(reg.produces, entry.Topic, entry.Version)
+	}
+	return reg
+}
+
 type serviceState struct {
-	descriptor  *mesh.Descriptor
-	instances   map[string]*instanceState
-	lastSeen    time.Time
-	invocations int64
-	errors      int64
+	registration *registration
+	instances    map[string]*instanceState
+	lastSeen     time.Time
+	invocations  int64
+	errors       int64
 	// issues holds this service's deduplicated failure signatures merged by fingerprint,
 	// including collector-derived contract-drift issues (mesh.md §4.2) alongside emitted ones.
 	issues map[string]*issueState
@@ -83,13 +139,14 @@ type issueState struct {
 }
 
 type instanceState struct {
-	healthy        bool
-	lastHeartbeat  time.Time
-	descriptorHash string
+	healthy          bool
+	lastHeartbeat    time.Time
+	serviceVersion   string
+	registrationHash string
 }
 
 // topicState is one topic's catalog row. providers/consumers are the declared graph (mesh.md
-// §4): written only by register, from the latest ServiceDescriptor's Produces/Topics.
+// §4): written only by register, from the latest registration's events ∪ sends / requests.
 // providerLastSeen/consumerLastSeen are the observed-activity signal of §4.2, keyed by service
 // name regardless of declared-ness (topicSummary filters them down to the declared sets when
 // reporting "Unobserved"/last-observed-at per edge).
@@ -139,31 +196,33 @@ func (s *store) ensureTopic(key topicKey) *topicState {
 	return state
 }
 
-// register stores desc as the service's current contract, replacing any previous registration
-// wholesale - including both the claim to provide (Produces) and the claim to consume (Topics)
-// each topic: a redeploy that drops a topic from either list drops that edge with it, the same
-// rule applied symmetrically to both declared lists (mesh.md §4). This is the producer/consumer
-// graph's sole write path - traces never call it.
-func (s *store) register(desc mesh.Descriptor) {
+// register stores reg as the service's current contract, replacing any previous registration
+// wholesale - including both the claim to provide (events ∪ sends) and the claim to consume
+// (requests) each topic: a redeploy that drops a topic from any list drops that edge with it, the
+// same rule applied symmetrically to every declared list (mesh.md §4). This is the producer/consumer
+// graph's sole write path - traces never call it. This collector keys its catalog by service (it
+// does not implement Service Versions), so a registration replaces the service's one registration
+// whatever its serviceVersion.
+func (s *store) register(service string, reg *registration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	for _, topic := range s.topics {
-		delete(topic.providers, desc.Service)
-		delete(topic.consumers, desc.Service)
+		delete(topic.providers, service)
+		delete(topic.consumers, service)
 	}
 
-	state := s.ensureService(desc.Service)
-	state.descriptor = &desc
+	state := s.ensureService(service)
+	state.registration = reg
 	state.lastSeen = s.now()
 
-	// Topics -> consumers, Produces -> providers (mesh.md §4, the 2026-08 role inversion):
-	// handling a topic makes you its consumer, sending it makes you its provider.
-	for _, topic := range desc.Topics {
-		s.ensureTopic(topicKey{id: topic.ID, version: topic.Version}).consumers[desc.Service] = true
+	// requests -> consumers, events ∪ sends -> providers (mesh.md §4): handling a topic makes you
+	// its consumer; publishing an event on it, or sending to it, makes you its provider.
+	for key := range reg.requests {
+		s.ensureTopic(key).consumers[service] = true
 	}
-	for _, topic := range desc.Produces {
-		s.ensureTopic(topicKey{id: topic.ID, version: topic.Version}).providers[desc.Service] = true
+	for key := range reg.produces {
+		s.ensureTopic(key).providers[service] = true
 	}
 }
 
@@ -175,9 +234,10 @@ func (s *store) heartbeat(hb mesh.Heartbeat) {
 	state := s.ensureService(hb.Service)
 	state.lastSeen = s.now()
 	state.instances[hb.InstanceID] = &instanceState{
-		healthy:        hb.Health.IsHealthy,
-		lastHeartbeat:  s.now(),
-		descriptorHash: hb.DescriptorHash,
+		healthy:          hb.Health.IsHealthy,
+		lastHeartbeat:    s.now(),
+		serviceVersion:   hb.ServiceVersion,
+		registrationHash: hb.RegistrationHash,
 	}
 }
 
@@ -259,38 +319,32 @@ func laterOf(current, candidate time.Time) time.Time {
 	return current
 }
 
-// checkHandlerDrift flags event as contract-drift when event.Service has a registered
-// descriptor that does not declare event.Topic(+Version) among its Topics (mesh.md §4.2
-// "Undeclared"). Since the role inversion, Topics is the CONSUMER claim, so this is the
-// undeclared-consumer check. A service that never registered has no contract to diverge from
-// and is never flagged. Caller holds s.mu.
+// checkHandlerDrift flags event as contract-drift when event.Service has a registration whose
+// requests do not declare event.Topic(+Version) (mesh.md §4.2 "Undeclared"): requests is the
+// CONSUMER claim, so this is the undeclared-consumer check. A service that never registered has no
+// contract to diverge from, and one whose requests are unknown (absent or degraded) asserts none:
+// neither is flagged. Caller holds s.mu.
 func (s *store) checkHandlerDrift(event mesh.TraceEvent) {
 	service, ok := s.services[event.Service]
-	if !ok || service.descriptor == nil {
+	if !ok || service.registration == nil || !service.registration.requestsKnown {
 		return
 	}
-	for _, topic := range service.descriptor.Topics {
-		if topic.ID == event.Topic && topic.Version == event.TopicVersion {
-			return
-		}
+	if !service.registration.requests[topicKey{id: event.Topic, version: event.TopicVersion}] {
+		s.recordDriftIssue(event.Service, event)
 	}
-	s.recordDriftIssue(event.Service, event)
 }
 
-// checkSenderDrift flags event as contract-drift when caller has a registered descriptor that
-// does not declare event.Topic(+Version) among its Produces (mesh.md §4.2 "Undeclared",
-// symmetric to checkHandlerDrift). Caller holds s.mu.
+// checkSenderDrift flags event as contract-drift when caller has a registration whose events ∪
+// sends do not declare event.Topic(+Version) (mesh.md §4.2 "Undeclared", symmetric to
+// checkHandlerDrift; unknown members are never flagged). Caller holds s.mu.
 func (s *store) checkSenderDrift(caller string, event mesh.TraceEvent) {
 	service, ok := s.services[caller]
-	if !ok || service.descriptor == nil {
+	if !ok || service.registration == nil || !service.registration.producesKnown {
 		return
 	}
-	for _, topic := range service.descriptor.Produces {
-		if topic.ID == event.Topic && topic.Version == event.TopicVersion {
-			return
-		}
+	if !service.registration.produces[topicKey{id: event.Topic, version: event.TopicVersion}] {
+		s.recordDriftIssue(caller, event)
 	}
-	s.recordDriftIssue(caller, event)
 }
 
 // recordDriftIssue merges one observed contract-drift occurrence into service's issue set, by
@@ -443,6 +497,10 @@ func (s *store) fleetIssues() []IssueView {
 	return issues
 }
 
+// feedRegistration is the read models' name for the registration feed in missingFeeds: "descriptor",
+// the vocabulary the collector fixtures keep (mesh.md §6), now meaning "registered".
+const feedRegistration = "descriptor"
+
 // maxFleetTraces bounds the recent-flows list on the fleet view.
 const maxFleetTraces = 20
 
@@ -458,15 +516,17 @@ func (s *store) serviceSummary(name string) ServiceSummary {
 		Errors:      state.errors,
 	}
 
-	if state.descriptor != nil {
-		summary.Runtime = state.descriptor.Runtime
-		summary.Binding = state.descriptor.Binding
-		summary.Placement = state.descriptor.Placement
-		summary.Topics = len(state.descriptor.Topics)
-		summary.Produces = len(state.descriptor.Produces)
+	if reg := state.registration; reg != nil {
+		summary.ServiceVersion = reg.serviceVersion
+		summary.Runtime = reg.runtime
+		summary.Transports = reg.transports
+		summary.Placement = reg.placement
+		summary.Topics = len(reg.requests)
+		summary.Produces = len(reg.produces)
 	} else {
-		// Known only from traffic: anonymous but live, and visibly reduced.
-		summary.MissingFeeds = append(summary.MissingFeeds, "descriptor")
+		// Known only from traffic: anonymous but live, and visibly reduced. The read models still
+		// call the registration feed "descriptor" (mesh.md §6).
+		summary.MissingFeeds = append(summary.MissingFeeds, feedRegistration)
 	}
 	if len(state.instances) == 0 {
 		summary.MissingFeeds = append(summary.MissingFeeds, "health")
@@ -581,16 +641,22 @@ func (s *store) service(name string) (ServiceView, bool) {
 		return ServiceView{}, false
 	}
 
-	view := ServiceView{ServiceSummary: s.serviceSummary(name), Descriptor: state.descriptor}
+	view := ServiceView{ServiceSummary: s.serviceSummary(name)}
+	if state.registration != nil {
+		view.Descriptor = state.registration.raw
+	}
 	for id, instance := range state.instances {
 		instanceView := InstanceView{
-			InstanceID:     id,
-			Healthy:        instance.healthy,
-			LastHeartbeat:  instance.lastHeartbeat,
-			DescriptorHash: instance.descriptorHash,
+			InstanceID:       id,
+			ServiceVersion:   instance.serviceVersion,
+			Healthy:          instance.healthy,
+			LastHeartbeat:    instance.lastHeartbeat,
+			RegistrationHash: instance.registrationHash,
 		}
-		if state.descriptor != nil && state.descriptor.DescriptorHash != "" && instance.descriptorHash != "" {
-			matches := instance.descriptorHash == state.descriptor.DescriptorHash
+		// mesh.md §5: without Service Versions, the heartbeat's hash is compared with the
+		// service's one registration.
+		if state.registration != nil && state.registration.registrationHash != "" && instance.registrationHash != "" {
+			matches := instance.registrationHash == state.registration.registrationHash
 			instanceView.HashMatches = &matches
 		}
 		view.Instances = append(view.Instances, instanceView)
