@@ -8,6 +8,7 @@ import (
 	"time"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/contract"
 	"github.com/daniellepelley/benzene-go/envelope"
 	"github.com/daniellepelley/benzene-go/healthcheck"
 	"github.com/daniellepelley/benzene-go/mesh"
@@ -64,9 +65,9 @@ func testDescriptorProducing(service string, topics, produces []string) mesh.Des
 			panic(err)
 		}
 	}
-	outbound := mesh.NewOutboundRegistry()
+	outbound := contract.NewOutboundRegistry()
 	for _, spec := range produces {
-		if err := mesh.RegisterOutbound[struct{}, struct{}](outbound, parseTestTopic(spec)); err != nil {
+		if err := contract.RegisterSend[struct{}](outbound, parseTestTopic(spec)); err != nil {
 			panic(err)
 		}
 	}

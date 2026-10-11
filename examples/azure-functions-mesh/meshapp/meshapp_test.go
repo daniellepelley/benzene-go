@@ -10,6 +10,7 @@ import (
 	"time"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/contract"
 	"github.com/daniellepelley/benzene-go/envelope"
 	"github.com/daniellepelley/benzene-go/httpbinding"
 	"github.com/daniellepelley/benzene-go/httpclient"
@@ -36,12 +37,12 @@ func newTestApp(t *testing.T, meshClient *httpclient.Client) *App {
 	return New(Config{
 		ServiceName: "svc",
 		MeshClient:  meshClient,
-		Register: func(registry *benzene.Registry, outbound *mesh.OutboundRegistry) []httpbinding.Route {
+		Register: func(registry *benzene.Registry, outbound *contract.OutboundRegistry) []httpbinding.Route {
 			if err := benzene.Register(registry, benzene.NewTopic("echo"), echoHandler()); err != nil {
 				t.Fatalf("Register() error = %v", err)
 			}
-			if err := mesh.RegisterOutbound[echoRequest, any](outbound, benzene.NewTopic("downstream")); err != nil {
-				t.Fatalf("RegisterOutbound() error = %v", err)
+			if err := contract.RegisterSend[echoRequest](outbound, benzene.NewTopic("downstream")); err != nil {
+				t.Fatalf("RegisterSend() error = %v", err)
 			}
 			return []httpbinding.Route{{Method: http.MethodPost, Path: "/Echo", Topic: benzene.NewTopic("echo")}}
 		},
@@ -105,12 +106,15 @@ func TestApp_HTTPHandler_ServesSpecHealthAndCustomRoutes(t *testing.T) {
 		if res.StatusCode != "200" {
 			t.Fatalf("GET /Spec statusCode = %s, want 200; body = %s", res.StatusCode, res.Body)
 		}
-		var desc mesh.Descriptor
-		if err := json.Unmarshal([]byte(res.Body), &desc); err != nil {
-			t.Fatalf("unmarshal descriptor: %v; body = %s", err, res.Body)
+		var doc contract.Document
+		if err := json.Unmarshal([]byte(res.Body), &doc); err != nil {
+			t.Fatalf("unmarshal contract document: %v; body = %s", err, res.Body)
 		}
-		if desc.Service != "svc" {
-			t.Errorf("Descriptor.Service = %q, want svc", desc.Service)
+		if doc.Service != "svc" || doc.SchemaDialect != contract.SchemaDialect || doc.ContractHash != app.Contract().ContractHash {
+			t.Errorf("document = %+v, want svc's Contract Document", doc)
+		}
+		if len(doc.Sends) != 1 || doc.Sends[0].Topic != "downstream" {
+			t.Errorf("document sends = %+v, want the declared downstream send", doc.Sends)
 		}
 	})
 
@@ -330,7 +334,7 @@ func TestApp_Close_IsSafeWithAndWithoutAMeshClient(t *testing.T) {
 func TestApp_Descriptor_ReflectsRegisteredTopics(t *testing.T) {
 	app := New(Config{
 		ServiceName: "svc",
-		Register: func(registry *benzene.Registry, _ *mesh.OutboundRegistry) []httpbinding.Route {
+		Register: func(registry *benzene.Registry, _ *contract.OutboundRegistry) []httpbinding.Route {
 			if err := benzene.Register(registry, benzene.NewTopic("some:topic"), echoHandler()); err != nil {
 				t.Fatalf("Register() error = %v", err)
 			}
@@ -380,7 +384,7 @@ func TestApp_Descriptor_ReflectsOutboundRegistrations(t *testing.T) {
 func TestApp_Descriptor_NoOutboundRegistrationsIsEmptyNotDegraded(t *testing.T) {
 	app := New(Config{
 		ServiceName: "svc",
-		Register: func(registry *benzene.Registry, _ *mesh.OutboundRegistry) []httpbinding.Route {
+		Register: func(registry *benzene.Registry, _ *contract.OutboundRegistry) []httpbinding.Route {
 			if err := benzene.Register(registry, benzene.NewTopic("some:topic"), echoHandler()); err != nil {
 				t.Fatalf("Register() error = %v", err)
 			}

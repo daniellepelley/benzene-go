@@ -7,8 +7,8 @@ import (
 	"github.com/daniellepelley/benzene-go/mesh"
 )
 
-// Handler serves the OpenAPI 3.0 document derived from desc over a plain GET, the OpenAPI sibling of
-// mesh.SpecHandler (which serves Benzene's own descriptor format). Mount it wherever a service wants
+// Handler serves the OpenAPI 3.0 document derived from desc over a plain GET, an OpenAPI view beside
+// the Contract Document httpbinding.SpecHandler serves. Mount it wherever a service wants
 // to expose its OpenAPI doc (e.g. GET /openapi.json). Non-GET/HEAD requests get 405; the document is
 // generated once at construction, not per request, since the registry is static after startup.
 func Handler(desc mesh.Descriptor, opts ...Option) http.Handler {

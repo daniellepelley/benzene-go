@@ -1,49 +1,44 @@
-// Package asyncapi derives an AsyncAPI 3.0 document from a Benzene service's registered topics - the
+// Package asyncapi derives an AsyncAPI 3.0 document from a Benzene service's Contract Document - the
 // event-driven sibling of the openapi package and the Go form of Benzene.Schema.OpenApi's AsyncAPI
-// half. Like openapi it is zero-dependency and reuses the request/response JSON Schemas the mesh
-// package already derives from each handler's TReq/TRes types at startup (the one sanctioned use of
-// reflection, never on the dispatch path); it adds no reflection of its own.
+// half. It is zero-dependency and adds no reflection: every schema comes from the contract package's
+// start-up derivation.
 //
-// # The model, and how it resolves the request/response-vs-event classification
+// # The model
 //
 // AsyncAPI 3.0 separates channels (addressable message containers) from operations (what the
 // application does with them), naming the direction explicitly with action "receive" / "send" from
-// the application's own perspective - so, unlike 2.x's publish/subscribe, there is no ambiguity.
-// This port maps Benzene onto that model exactly as the .NET builder does:
+// the application's own perspective. The Contract Document already says which is which, so this
+// package only maps it:
 //
-//   - Every registered topic is something the service RECEIVES: each becomes a channel carrying the
-//     request message, plus a "receive" operation whose reply is the native AsyncAPI reply object
-//     pointing at a reply channel named "<topic>:<responseSuffix>" (default "response"). This half is
-//     derived entirely from the descriptor - no extra input, no fabrication. (Because the descriptor
-//     does not distinguish request/response from fire-and-forget topics, a reply channel is added for
-//     every handled topic; for a genuinely fire-and-forget handler that reply channel is a
-//     documentation artifact, not a guarantee the topic is request/response - the same limitation the
-//     openapi package notes.)
-//   - What a service SENDS (a fire-and-forget event it publishes, e.g. via responseevents) is NOT in
-//     the descriptor - the registry only knows what a service handles, not what it emits. So sent
-//     events are a caller-declared input: WithSentEvent(topic, payloadSchema) adds a channel + a
-//     "send" operation. This mirrors the .NET builder consuming the app's broadcast-event / message-
-//     sender definitions, and is why the earlier openapi package deferred AsyncAPI: the send side
-//     needs a declaration, which this package takes explicitly rather than inventing.
+//   - every requests[] entry is a topic the service RECEIVES: a channel carrying the request message
+//     and a "receive" operation. When the entry has a response, the operation's native AsyncAPI reply
+//     points at a reply channel named "<topic>:<responseSuffix>" (default "response"); a handler that
+//     returns no payload has no reply.
+//   - every events[] entry is an event the service publishes and defines: a "send" operation on a
+//     channel carrying the "event" message.
+//   - every sends[] entry is a message the service sends to a topic another party defines: a "send"
+//     operation on a channel carrying the "request" message, with a reply channel when the send
+//     expects one.
 //
-// A service with only handlers gets a complete receive-side document with no sent events; a service
-// that also declares its published events gets both directions.
+// Nothing is declared twice: events and sends are the service's event and send declarations
+// (contract.RegisterEvent, contract.RegisterSend), the same ones its Contract Document lists.
 //
-// Payload schemas are inlined as AsyncAPI Schema objects. AsyncAPI 3.0's schema format is JSON Schema
-// (Draft 7), which - unlike OpenAPI 3.0 - permits the nullable type array (["string","null"]) mesh
-// derives, so the derived schemas are used as-is (deep-copied so Generate never mutates the
-// descriptor), with none of openapi's nullable reshaping.
+// Payloads reference the document's named schemas, carried over into the AsyncAPI document's own
+// components.schemas under the same names. The Contract Document's schemas are OpenAPI 3.0 Schema
+// Objects; AsyncAPI 3.0's default schema format is JSON Schema, so the one construct the two
+// disagree on - nullability - is rewritten: {"type":T,"nullable":true} becomes {"type":[T,"null"]},
+// and the nullable wrapper {"nullable":true,"allOf":[X]} becomes {"anyOf":[X,{"type":"null"}]}.
 package asyncapi
 
 import (
 	"strconv"
 	"strings"
 
-	"github.com/daniellepelley/benzene-go/mesh"
+	"github.com/daniellepelley/benzene-go/contract"
 )
 
 // Document is a minimal AsyncAPI 3.0 document: enough of the shape to describe a Benzene service's
-// received topics (with their replies) and any declared sent events.
+// received topics (with their replies), its events and its sends.
 type Document struct {
 	AsyncAPI           string               `json:"asyncapi"`
 	ID                 string               `json:"id,omitempty"`
@@ -51,6 +46,12 @@ type Document struct {
 	Info               Info                 `json:"info"`
 	Channels           map[string]Channel   `json:"channels"`
 	Operations         map[string]Operation `json:"operations"`
+	Components         *Components          `json:"components,omitempty"`
+}
+
+// Components holds the named payload schemas messages reference.
+type Components struct {
+	Schemas map[string]map[string]any `json:"schemas"`
 }
 
 // Info is the AsyncAPI info object: the service's identity.
@@ -66,14 +67,15 @@ type Channel struct {
 	Messages map[string]Message `json:"messages"`
 }
 
-// Message carries a payload schema (inlined; AsyncAPI 3.0 payloads are JSON Schema).
+// Message carries a payload schema (JSON Schema; a $ref into components.schemas for a named type).
 type Message struct {
 	Name    string         `json:"name,omitempty"`
 	Payload map[string]any `json:"payload,omitempty"`
 }
 
-// Operation is what the application does with a channel: receive (an inbound handler) or send (a
-// declared outbound event). A receive operation carries a reply referencing the reply channel.
+// Operation is what the application does with a channel: receive (an inbound handler) or send (an
+// event or a send declaration). An operation whose message has a reply carries a reply referencing the
+// reply channel.
 type Operation struct {
 	Action  string `json:"action"` // "receive" | "send"
 	Channel Ref    `json:"channel"`
@@ -91,31 +93,25 @@ type Reply struct {
 	Channel Ref `json:"channel"`
 }
 
-type sentEvent struct {
-	topic   string
-	payload map[string]any
-}
-
 type config struct {
 	title          string
 	version        string
 	description    string
 	responseSuffix string
-	sentEvents     []sentEvent
 }
 
 // Option configures Generate.
 type Option func(*config)
 
-// WithTitle overrides the document title (default: the descriptor's service name, or
+// WithTitle overrides the document title (default: the Contract Document's service, or
 // "benzene-service" when that is empty).
 func WithTitle(title string) Option { return func(c *config) { c.title = title } }
 
-// WithVersion overrides the document version (default: the descriptor's service version, or "0.0.0"
-// when that is empty).
+// WithVersion overrides the document version (default: the Contract Document's serviceVersion, or
+// "0.0.0" when that is empty).
 func WithVersion(version string) Option { return func(c *config) { c.version = version } }
 
-// WithDescription sets the info description.
+// WithDescription overrides the info description (default: the Contract Document's description).
 func WithDescription(description string) Option {
 	return func(c *config) { c.description = description }
 }
@@ -132,31 +128,16 @@ func WithResponseTopicSuffix(suffix string) Option {
 	}
 }
 
-// WithSentEvent declares that the service publishes a fire-and-forget event on topic carrying
-// payload (a JSON Schema, e.g. from mesh's derived schema for the event type, or nil when the event
-// has no body). It adds a channel and a "send" operation. Repeatable; a repeated topic replaces the
-// earlier declaration. This is the caller-supplied send side the descriptor cannot provide.
-func WithSentEvent(topic string, payload map[string]any) Option {
-	return func(c *config) {
-		for i := range c.sentEvents {
-			if c.sentEvents[i].topic == topic {
-				c.sentEvents[i].payload = payload
-				return
-			}
-		}
-		c.sentEvents = append(c.sentEvents, sentEvent{topic: topic, payload: payload})
-	}
-}
-
 // DefaultResponseTopicSuffix is the default reply-channel address suffix (see WithResponseTopicSuffix).
 const DefaultResponseTopicSuffix = "response"
 
-// Generate builds an AsyncAPI 3.0 document from desc (typically mesh.Describe(registry, info)). Each
-// registered topic becomes a receive operation with a reply channel; each WithSentEvent becomes a
-// send operation. The result marshals to valid AsyncAPI 3.0 JSON with encoding/json; map keys marshal
-// sorted, so the output is deterministic for a given descriptor and option set.
-func Generate(desc mesh.Descriptor, opts ...Option) *Document {
-	cfg := config{title: desc.Service, version: desc.ServiceVersion, responseSuffix: DefaultResponseTopicSuffix}
+// Generate builds an AsyncAPI 3.0 document from doc (typically contract.Derive's result): a receive
+// operation per request, a send operation per event and per send, and a reply channel wherever a
+// response is declared. benzene: entries are skipped. The result marshals to valid AsyncAPI 3.0 JSON
+// with encoding/json; map keys marshal sorted, so the output is deterministic for a given document and
+// option set. Generate never mutates doc.
+func Generate(doc contract.Document, opts ...Option) *Document {
+	cfg := config{title: doc.Service, version: doc.ServiceVersion, description: doc.Description, responseSuffix: DefaultResponseTopicSuffix}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
@@ -171,30 +152,36 @@ func Generate(desc mesh.Descriptor, opts ...Option) *Document {
 	operations := map[string]Operation{}
 	usedOps := map[string]bool{}
 
-	// Receive side: every handled topic, derived from the descriptor. Each is a receive operation on
-	// the request channel, replying on a "<topic>:<suffix>" channel.
-	for _, topic := range desc.Topics {
-		reqKey := book.addMessage(topic.ID, "request", Message{Name: "request", Payload: copySchema(topic.RequestSchema)})
-		replyKey := book.addMessage(topic.ID+":"+cfg.responseSuffix, "response", Message{Name: "response", Payload: copySchema(topic.ResponseSchema)})
-		operations[uniqueOp("receive_"+operationSlug(topic.ID), usedOps)] = Operation{
-			Action:  "receive",
-			Channel: Ref{Ref: channelRef(reqKey)},
-			Reply:   &Reply{Channel: Ref{Ref: channelRef(replyKey)}},
+	// add records one operation on topic carrying message (named name), with a reply channel when
+	// reply is non-nil. Reusing the channel book by address means a topic that is both received and
+	// sent becomes one channel carrying both messages, not two channels or a silent overwrite
+	// (matching the .NET builder).
+	add := func(action, topic, name string, payload, reply map[string]any) {
+		key := book.addMessage(topic, name, Message{Name: name, Payload: toJSONSchema(payload)})
+		op := Operation{Action: action, Channel: Ref{Ref: channelRef(key)}}
+		if reply != nil {
+			replyKey := book.addMessage(topic+":"+cfg.responseSuffix, "response", Message{Name: "response", Payload: toJSONSchema(reply)})
+			op.Reply = &Reply{Channel: Ref{Ref: channelRef(replyKey)}}
+		}
+		operations[uniqueOp(action+"_"+operationSlug(topic), usedOps)] = op
+	}
+	for _, r := range doc.Requests {
+		if !contract.IsReserved(r.Topic) {
+			add("receive", r.Topic, "request", r.Request, r.Response)
+		}
+	}
+	for _, e := range doc.Events {
+		if !contract.IsReserved(e.Topic) {
+			add("send", e.Topic, "event", e.Message, nil)
+		}
+	}
+	for _, s := range doc.Sends {
+		if !contract.IsReserved(s.Topic) {
+			add("send", s.Topic, "request", s.Request, s.Response)
 		}
 	}
 
-	// Send side: caller-declared published events. Reusing the channel book by address means a topic
-	// that is BOTH handled and declared as a sent event becomes one channel carrying both the request
-	// and the event message, not two channels or a silent overwrite (matching the .NET builder).
-	for _, ev := range cfg.sentEvents {
-		evKey := book.addMessage(ev.topic, "event", Message{Name: "event", Payload: copySchema(ev.payload)})
-		operations[uniqueOp("send_"+operationSlug(ev.topic), usedOps)] = Operation{
-			Action:  "send",
-			Channel: Ref{Ref: channelRef(evKey)},
-		}
-	}
-
-	return &Document{
+	out := &Document{
 		AsyncAPI:           "3.0.0",
 		ID:                 buildID(cfg.title),
 		DefaultContentType: "application/json",
@@ -202,6 +189,13 @@ func Generate(desc mesh.Descriptor, opts ...Option) *Document {
 		Channels:           book.channels,
 		Operations:         operations,
 	}
+	if len(doc.Components.Schemas) > 0 {
+		out.Components = &Components{Schemas: make(map[string]map[string]any, len(doc.Components.Schemas))}
+		for name, schema := range doc.Components.Schemas {
+			out.Components.Schemas[name] = toJSONSchema(schema)
+		}
+	}
+	return out
 }
 
 // channelBook builds the channels map. It keeps channel MAP KEYS sanitized - AsyncAPI 3.0 keys must
@@ -254,11 +248,12 @@ func channelRef(channelKey string) string {
 	return "#/channels/" + channelKey
 }
 
-// copySchema deep-copies a derived JSON Schema so Generate never mutates the descriptor's maps
-// (Generate must be safe to call repeatedly on the same descriptor). Unlike openapi.toOpenAPISchema
-// it does no reshaping: AsyncAPI 3.0 schemas are JSON Schema, so mesh's derived form is already
-// valid. A nil schema (a topic/event with no body) copies to nil.
-func copySchema(schema map[string]any) map[string]any {
+// toJSONSchema deep-copies an OpenAPI 3.0 schema from the Contract Document into JSON Schema, so
+// Generate never mutates the document: nullable: true moves into the type ([T, "null"]), and the
+// nullable wrapper {"nullable":true,"allOf":[X]} becomes {"anyOf":[X,{"type":"null"}]}. $refs are
+// kept - they point at components.schemas, which Generate carries over under the same names. A nil
+// schema copies to nil.
+func toJSONSchema(schema map[string]any) map[string]any {
 	if schema == nil {
 		return nil
 	}
@@ -266,13 +261,26 @@ func copySchema(schema map[string]any) map[string]any {
 	for k, v := range schema {
 		out[k] = copyValue(v)
 	}
+	if out["nullable"] != true {
+		return out
+	}
+	delete(out, "nullable")
+	if allOf, ok := out["allOf"].([]any); ok && len(allOf) == 1 {
+		delete(out, "allOf")
+		delete(out, "type")
+		out["anyOf"] = []any{allOf[0], map[string]any{"type": "null"}}
+		return out
+	}
+	if typ, ok := out["type"].(string); ok {
+		out["type"] = []string{typ, "null"}
+	}
 	return out
 }
 
 func copyValue(v any) any {
 	switch typed := v.(type) {
 	case map[string]any:
-		return copySchema(typed)
+		return toJSONSchema(typed)
 	case []any:
 		out := make([]any, len(typed))
 		for i, e := range typed {
@@ -309,7 +317,7 @@ func buildID(title string) string {
 }
 
 // uniqueOp guarantees a unique operation key: a collision (two topics that slug to the same) gets a
-// "_2", "_3", ... suffix, in descriptor order, so the document stays valid and deterministic. base is
+// "_2", "_3", ... suffix, in document order, so the document stays valid and deterministic. base is
 // always non-empty here (callers pass a "receive_"/"send_" prefix), so an all-non-alphanumeric topic
 // still yields a valid key ("receive_", then "receive__2", ...).
 func uniqueOp(base string, used map[string]bool) string {

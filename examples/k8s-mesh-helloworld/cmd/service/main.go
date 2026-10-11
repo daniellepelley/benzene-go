@@ -14,7 +14,7 @@
 // Egress (the chain): orders' order:create handler asks payments' payment:take, and payments'
 // payment:take handler asks shipping's shipment:book, each over DOWNSTREAM_MSG_URL — the
 // downstream service's in-cluster envelope endpoint. Each caller also registers an outbound
-// record for its downstream topic (mesh.RegisterOutbound, mesh.md §2.3) — that declared
+// record for its downstream topic (contract.RegisterSend, mesh.md §2.3) — that declared
 // Consumes entry, not trace propagation, is what makes the caller show up as a consumer on the
 // mesh's topic catalog (mesh.md §4). The httpclient.Client is separately wrapped in
 // mesh.WithTraceContext so the collector can additionally show that declared edge as observed
@@ -40,6 +40,7 @@ import (
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/client"
+	"github.com/daniellepelley/benzene-go/contract"
 	"github.com/daniellepelley/benzene-go/examples/k8s-mesh-helloworld/domain"
 	"github.com/daniellepelley/benzene-go/healthcheck"
 	"github.com/daniellepelley/benzene-go/httpbinding"
@@ -72,7 +73,7 @@ func newService(meshService, downstreamURL, collectorURL string) *service {
 	}
 
 	registry := benzene.NewRegistry()
-	outbound := mesh.NewOutboundRegistry()
+	outbound := contract.NewOutboundRegistry()
 	routes := []httpbinding.Route{
 		{Method: http.MethodGet, Path: httpbinding.HealthPath, Topic: benzene.NewTopic(healthcheck.ReservedTopic)},
 	}
@@ -80,6 +81,15 @@ func newService(meshService, downstreamURL, collectorURL string) *service {
 
 	info := mesh.ServiceInfo{Service: name, ServiceVersion: "1.0.0", InstanceID: name, Binding: "http"}
 	descriptor := mesh.Describe(registry, outbound, info)
+	// The Contract Document (R5), served on benzene:spec and GET /benzene/spec. A derivation error -
+	// a component-name collision - is a wiring mistake, so it stops the service at start-up.
+	spec, err := contract.Derive(registry, outbound, contract.Info{
+		Service: name, ServiceVersion: "1.0.0", VersionScheme: "semver",
+		MessageEndpoint: httpbinding.EnvelopePath, Transports: []string{"http"}, HTTPRoutes: contractRoutes(routes),
+	})
+	if err != nil {
+		panic(err)
+	}
 
 	checks := []healthcheck.Check{healthcheck.NamedCheck("self", func(context.Context) healthcheck.CheckResult {
 		return healthcheck.CheckResult{Status: healthcheck.StatusOk, Type: "self", Data: map[string]any{"service": name}}
@@ -101,6 +111,7 @@ func newService(meshService, downstreamURL, collectorURL string) *service {
 	pipeline := benzene.NewPipeline(
 		mesh.TraceMiddleware(info, exporter),
 		mesh.IssueMiddleware(info, issueExporter),
+		contract.Middleware(spec),
 		mesh.Middleware(descriptor),
 		healthcheck.Middleware(checks),
 		benzene.RouterMiddleware(registry),
@@ -109,7 +120,7 @@ func newService(meshService, downstreamURL, collectorURL string) *service {
 
 	mux := http.NewServeMux()
 	mux.Handle(httpbinding.EnvelopePath, httpbinding.EnvelopeHandler(builder))
-	mux.Handle(httpbinding.SpecPath, mesh.SpecHandler(descriptor))
+	mux.Handle(httpbinding.SpecPath, httpbinding.SpecHandler(builder))
 	mux.Handle("/", httpbinding.Handler(builder, routes))
 
 	return &service{
@@ -128,13 +139,13 @@ func newService(meshService, downstreamURL, collectorURL string) *service {
 // the mesh's topic catalog, mesh.md §4). Returns the resolved service name ("orders" is also the
 // default for any unrecognised value, matching benzene-dotnet's Domain.HandlersFor switch
 // default).
-func registerDomain(registry *benzene.Registry, outbound *mesh.OutboundRegistry, routes []httpbinding.Route, meshService string, downstream client.Sender) (string, []httpbinding.Route) {
+func registerDomain(registry *benzene.Registry, outbound *contract.OutboundRegistry, routes []httpbinding.Route, meshService string, downstream client.Sender) (string, []httpbinding.Route) {
 	switch meshService {
 	case "payments":
 		benzene.MustRegister(registry, benzene.NewTopic(domain.TopicPaymentTake), domain.TakePaymentHandler(downstream))
 		routes = append(routes, httpbinding.Route{Method: http.MethodPost, Path: "/payments", Topic: benzene.NewTopic(domain.TopicPaymentTake)})
 		if downstream != nil {
-			mesh.MustRegisterOutbound[domain.BookShipmentRequest, domain.ShipmentBooked](outbound, benzene.NewTopic(domain.TopicShipmentBook))
+			contract.MustRegisterSend[domain.BookShipmentRequest](outbound, benzene.NewTopic(domain.TopicShipmentBook), contract.WithResponse[domain.ShipmentBooked]())
 		}
 		return "payments", routes
 	case "shipping":
@@ -146,10 +157,19 @@ func registerDomain(registry *benzene.Registry, outbound *mesh.OutboundRegistry,
 		benzene.MustRegister(registry, benzene.NewTopic(domain.TopicOrderCreate), domain.CreateOrderHandler(downstream))
 		routes = append(routes, httpbinding.Route{Method: http.MethodPost, Path: "/orders", Topic: benzene.NewTopic(domain.TopicOrderCreate)})
 		if downstream != nil {
-			mesh.MustRegisterOutbound[domain.TakePaymentRequest, domain.PaymentTaken](outbound, benzene.NewTopic(domain.TopicPaymentTake))
+			contract.MustRegisterSend[domain.TakePaymentRequest](outbound, benzene.NewTopic(domain.TopicPaymentTake), contract.WithResponse[domain.PaymentTaken]())
 		}
 		return "orders", routes
 	}
+}
+
+// contractRoutes turns the HTTP routes into the Contract Document's httpMappings input.
+func contractRoutes(routes []httpbinding.Route) []contract.HTTPRoute {
+	out := make([]contract.HTTPRoute, len(routes))
+	for i, r := range routes {
+		out[i] = contract.HTTPRoute{Method: r.Method, Path: r.Path, Topic: r.Topic}
+	}
+	return out
 }
 
 // announceAndHeartbeat registers s.descriptor with the collector (retrying while it comes up,

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/contract"
 	"github.com/daniellepelley/benzene-go/envelope"
 	"github.com/daniellepelley/benzene-go/mesh"
 	"github.com/daniellepelley/benzene-go/meshd"
@@ -16,7 +17,7 @@ import (
 // declared, in OutboundRegistry.Topics()' own sorted order.
 func declaredSends(t *testing.T, service string) []string {
 	t.Helper()
-	outbound := mesh.NewOutboundRegistry()
+	outbound := contract.NewOutboundRegistry()
 	if err := RegisterOutbound(outbound, service); err != nil {
 		t.Fatalf("RegisterOutbound(%q) error = %v", service, err)
 	}
@@ -52,7 +53,7 @@ func TestRegisterOutbound_DeclaresWhatEachServiceSends(t *testing.T) {
 // declaration honest: it drives every handler with recording senders and compares the topics
 // actually published against the topics RegisterOutbound declares. A hop added to a handler and
 // left undeclared (or a declaration for a hop that was removed) fails here - which is the whole
-// point, since nothing derives Consumes from the code itself (mesh.OutboundRegistry forbids
+// point, since nothing derives Consumes from the code itself (contract.OutboundRegistry forbids
 // exactly that kind of inference).
 func TestRegisterOutbound_MatchesTheTopicsTheHandlersActuallySend(t *testing.T) {
 	ctx := context.Background()
@@ -104,7 +105,7 @@ func assertSentMatchesDeclared(t *testing.T, service string, senders ...*recordi
 }
 
 func TestRegisterOutbound_UnknownServiceIsAnError(t *testing.T) {
-	if err := RegisterOutbound(mesh.NewOutboundRegistry(), "not-a-service"); err == nil {
+	if err := RegisterOutbound(contract.NewOutboundRegistry(), "not-a-service"); err == nil {
 		t.Error("RegisterOutbound() error = nil, want an error for an unrecognised service")
 	}
 }
@@ -116,7 +117,7 @@ func TestRegisterOutbound_UnknownServiceIsAnError(t *testing.T) {
 func TestRegisterOutbound_RejectsADuplicateDeclaration(t *testing.T) {
 	for _, service := range []string{ServiceOrders, ServicePayments, ServiceShipping} {
 		t.Run(service, func(t *testing.T) {
-			outbound := mesh.NewOutboundRegistry()
+			outbound := contract.NewOutboundRegistry()
 			if err := RegisterOutbound(outbound, service); err != nil {
 				t.Fatalf("first RegisterOutbound() error = %v", err)
 			}
@@ -173,7 +174,7 @@ func describeService(t *testing.T, service string) mesh.Descriptor {
 			t.Fatalf("register %s on %s: %v", topic, service, err)
 		}
 	}
-	outbound := mesh.NewOutboundRegistry()
+	outbound := contract.NewOutboundRegistry()
 	if err := RegisterOutbound(outbound, service); err != nil {
 		t.Fatalf("RegisterOutbound(%q) error = %v", service, err)
 	}

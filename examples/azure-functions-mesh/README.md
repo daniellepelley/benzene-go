@@ -100,7 +100,7 @@ mesh/ meshd/ httpclient/ httpbinding/` shows exactly that.
 `azurefunctions.Handler`'s Route table maps one *fixed* topic per local Function-folder path (see
 its own doc comment on the local-invocation-path/public-route distinction) — which fits
 `/benzene/spec` and `/benzene/health` perfectly (both are reserved topics intercepted by
-middleware, `mesh.TopicID`/`healthcheck.ReservedTopic`) but cannot express **`POST
+middleware, `contract.TopicID`/`healthcheck.ReservedTopic`; `/Spec` answers with the Contract Document) but cannot express **`POST
 /benzene/invoke`**, whose topic travels in the request *body*, not a fixed route. Nor can it serve
 the mesh Function's Fleet View (`meshd.Collector.ViewHandler`), which expects a real
 `*http.Request`/`http.ResponseWriter`, not topic-routed dispatch. Both needs are met by two small
@@ -146,7 +146,7 @@ Function folder, all sharing one `http.ServeMux` in `main.go`:
 | `mesh` | HTTP only: `FleetUi`, `Invoke`, `Discovered` | `benzene:mesh:*` (via `meshd.Collector`) | — |
 
 Both columns above are **hard-coded contract, never inferred**. *Registers* is each service's
-`benzene.Register` calls (what it receives); *Publishes* is its `mesh.RegisterOutbound` records
+`benzene.Register` calls (what it receives); *Publishes* is its `contract.RegisterEvent`/`contract.RegisterSend` records
 (what it sends, `mesh.md` §2.3), declared for the whole estate in one switch —
 [`domain.RegisterOutbound`](domain/domain.go), called from every `cmd/<service>/main.go` beside
 that service's handler registration. The two together are the *only* source of the mesh's

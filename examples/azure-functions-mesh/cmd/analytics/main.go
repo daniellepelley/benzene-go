@@ -14,9 +14,9 @@ import (
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/azurefunctions"
+	"github.com/daniellepelley/benzene-go/contract"
 	"github.com/daniellepelley/benzene-go/httpbinding"
 	"github.com/daniellepelley/benzene-go/httpclient"
-	"github.com/daniellepelley/benzene-go/mesh"
 
 	"github.com/daniellepelley/benzene-go/examples/azure-functions-mesh/domain"
 	"github.com/daniellepelley/benzene-go/examples/azure-functions-mesh/meshapp"
@@ -27,7 +27,7 @@ func newApp(meshClient *httpclient.Client) *meshapp.App {
 	return meshapp.New(meshapp.Config{
 		ServiceName: domain.ServiceAnalytics,
 		MeshClient:  meshClient,
-		Register: func(registry *benzene.Registry, outbound *mesh.OutboundRegistry) []httpbinding.Route {
+		Register: func(registry *benzene.Registry, outbound *contract.OutboundRegistry) []httpbinding.Route {
 			benzene.MustRegister(registry, benzene.NewTopic(domain.TopicPaymentCaptured), domain.AckHandler[domain.PaymentTaken]())
 			benzene.MustRegister(registry, benzene.NewTopic(domain.TopicShipmentDispatched), domain.AckHandler[domain.ShipmentBooked]())
 			// Declares nothing outbound - a pure event consumer - but every service routes its

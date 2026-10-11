@@ -10,7 +10,7 @@ import (
 )
 
 func TestHandler_ServesDocumentOnGET(t *testing.T) {
-	h := asyncapi.Handler(newDescriptor(t))
+	h := asyncapi.Handler(newDocument(t, nil))
 
 	req := httptest.NewRequest(http.MethodGet, "/asyncapi.json", nil)
 	rec := httptest.NewRecorder()
@@ -32,7 +32,7 @@ func TestHandler_ServesDocumentOnGET(t *testing.T) {
 }
 
 func TestHandler_HEADHasNoBody(t *testing.T) {
-	h := asyncapi.Handler(newDescriptor(t))
+	h := asyncapi.Handler(newDocument(t, nil))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodHead, "/asyncapi.json", nil))
 
@@ -45,7 +45,7 @@ func TestHandler_HEADHasNoBody(t *testing.T) {
 }
 
 func TestHandler_RejectsNonGET(t *testing.T) {
-	h := asyncapi.Handler(newDescriptor(t))
+	h := asyncapi.Handler(newDocument(t, nil))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/asyncapi.json", nil))
 

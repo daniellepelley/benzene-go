@@ -76,7 +76,7 @@ func (r ProfileReport) String() string {
 
 // buildReport evaluates R1-R8 against the builder configuration.
 func buildReport(cfg config) ProfileReport {
-	specDetail := "registry-derived descriptor served at /benzene/spec"
+	specDetail := "registry-derived Contract Document on benzene:spec, served at /benzene/spec through the pipeline"
 	if !cfg.descriptor {
 		specDetail = "disabled by WithoutDescriptor (profile §4 exposure control)"
 	}

@@ -83,7 +83,7 @@ endpoint:
   `POST /payments`, `POST /shipments`).
 - **Egress** — `orders`' `order:create` handler asks `payments` to `payment:take`, and
   `payments`' `payment:take` handler asks `shipping` to `shipment:book`. Each caller declares
-  that outbound call via `mesh.RegisterOutbound` (`registerDomain` in `cmd/service/main.go`,
+  that outbound call via `contract.RegisterSend` (`registerDomain` in `cmd/service/main.go`,
   mesh.md §2.3) — that declared `consumes` entry is what makes the caller show up as the
   downstream topic's consumer on the mesh's topic catalog (mesh.md §4), with no traffic required.
   The `httpclient.Client` making the call is separately wrapped in `mesh.WithTraceContext`

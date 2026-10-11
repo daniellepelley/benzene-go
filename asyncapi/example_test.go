@@ -6,7 +6,7 @@ import (
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/asyncapi"
-	"github.com/daniellepelley/benzene-go/mesh"
+	"github.com/daniellepelley/benzene-go/contract"
 )
 
 type placeOrder struct {
@@ -17,19 +17,23 @@ type orderPlaced struct {
 	ID string `json:"id"`
 }
 
-// ExampleGenerate derives an AsyncAPI 3.0 document from a service's descriptor. Every handled topic
-// becomes a "receive" operation with a reply channel; a published event the service emits is declared
-// with WithSentEvent (a "send" operation), since the registry knows what a service handles but not
-// what it emits.
+// ExampleGenerate derives an AsyncAPI 3.0 document from a service's Contract Document. Every handled
+// topic becomes a "receive" operation, with a reply channel when it returns a payload; every declared
+// event (contract.RegisterEvent) becomes a "send" operation.
 func ExampleGenerate() {
 	registry := benzene.NewRegistry()
 	_ = benzene.Register(registry, benzene.NewTopic("order:place"),
 		benzene.Handler[placeOrder, orderPlaced](func(_ context.Context, _ placeOrder) benzene.Result[orderPlaced] {
 			return benzene.Ok(orderPlaced{})
 		}))
-	desc := mesh.Describe(registry, nil, mesh.ServiceInfo{Service: "orders", ServiceVersion: "1.0.0"})
+	outbound := contract.NewOutboundRegistry()
+	contract.MustRegisterEvent[orderPlaced](outbound, benzene.NewTopic("order:placed"))
+	spec, err := contract.Derive(registry, outbound, contract.Info{Service: "orders", ServiceVersion: "1.0.0"})
+	if err != nil {
+		panic(err)
+	}
 
-	doc := asyncapi.Generate(desc, asyncapi.WithSentEvent("order:placed", nil))
+	doc := asyncapi.Generate(spec)
 
 	fmt.Println(doc.AsyncAPI)
 	fmt.Println(doc.Operations["receive_order_place"].Action, "on", doc.Operations["receive_order_place"].Channel.Ref)

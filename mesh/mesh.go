@@ -113,7 +113,7 @@ type ServiceInfo struct {
 }
 
 // Describe builds the service Descriptor from the live registry, the live outbound registry,
-// and info. Call it after all Register/RegisterOutbound calls (registration is a startup
+// and info. Call it after every Register, contract.RegisterEvent and contract.RegisterSend call (registration is a startup
 // activity, so both lists are complete and static from then on). A nil registry or a nil
 // outbound registry is not an error: the descriptor is built without that half of the catalog
 // and the missing feed is recorded in Degraded, so a service whose registry or outbound-registry
@@ -154,13 +154,20 @@ func Describe(registry *benzene.Registry, outbound *OutboundRegistry, info Servi
 		desc.Degraded = append(desc.Degraded, FeedOutboundRegistry)
 	} else {
 		for _, topic := range outbound.Topics() {
-			// Same blank-ok defensive rationale as the registry loop above.
+			// Events and sends alike: everything this service puts on the wire. Same blank-ok
+			// defensive rationale as the registry loop above.
 			requestType, responseType, _ := outbound.TopicTypes(topic)
+			responseSchema := deriveSchema(responseType)
+			if responseSchema == nil {
+				// An event, or a one-way send, declares no reply: the descriptor's responseSchema
+				// for "no declared response type" is the unconstrained {} (mesh.md §2.3).
+				responseSchema = map[string]any{}
+			}
 			desc.Produces = append(desc.Produces, TopicDescriptor{
 				ID:             topic.ID,
 				Version:        topic.Version,
 				RequestSchema:  deriveSchema(requestType),
-				ResponseSchema: deriveSchema(responseType),
+				ResponseSchema: responseSchema,
 			})
 		}
 	}

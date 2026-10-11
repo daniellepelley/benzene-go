@@ -26,7 +26,7 @@
 // examples/azure-functions-helloworld's own default), so every HTTP-triggered Azure Function
 // folder invokes the SAME shared azurefunctions.Handler at its own fixed *local* invocation path
 // (see azurefunctions.Handler's doc comment) - meaning /benzene/spec and /benzene/health are
-// ordinary topic-routed Routes (mesh.TopicID intercepted by mesh.Middleware, and
+// ordinary topic-routed Routes (contract.TopicID intercepted by contract.Middleware, and
 // healthcheck.ReservedTopic intercepted by healthcheck.Middleware) dispatched exactly like any
 // other domain topic. /benzene/invoke does not fit that Route-per-topic table at all - its topic
 // travels in the request BODY, not a fixed route - so it and the mesh Function's Fleet View need
@@ -42,6 +42,7 @@ import (
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/azurefunctions"
+	"github.com/daniellepelley/benzene-go/contract"
 	"github.com/daniellepelley/benzene-go/healthcheck"
 	"github.com/daniellepelley/benzene-go/httpbinding"
 	"github.com/daniellepelley/benzene-go/httpclient"
@@ -56,7 +57,7 @@ type Config struct {
 	// Register runs once at startup: register this service's domain handler(s) on registry -
 	// what it RECEIVES - and its outbound records on outbound - what it SENDS (mesh.md §2.3,
 	// domain.RegisterOutbound) - then return any HTTP routes beyond the standard
-	// GET /Spec -> benzene:mesh and GET /Health -> benzene:healthcheck routes, which New always
+	// GET /Spec -> benzene:spec and GET /Health -> benzene:healthcheck routes, which New always
 	// adds. A pure event consumer (inventory/notifications/analytics) registers nothing outbound
 	// and returns nil routes - its only HTTP surface is the standard Cloud Service Profile one,
 	// everything else arrives over Service Bus/Event Hub/Event Grid triggers mounted directly in
@@ -64,7 +65,7 @@ type Config struct {
 	//
 	// Both registries reach the one callback (matching examples/k8s-mesh-helloworld/cmd/service's
 	// registerDomain) so each service declares both halves of its contract in the same place.
-	Register func(registry *benzene.Registry, outbound *mesh.OutboundRegistry) []httpbinding.Route
+	Register func(registry *benzene.Registry, outbound *contract.OutboundRegistry) []httpbinding.Route
 	// MeshClient pushes register/heartbeat/trace/issue reports to the mesh Function's
 	// POST /benzene/invoke over plain HTTP (httpclient.Client already satisfies mesh.Sender's
 	// Send signature, so it plugs into PushExporter/PushIssueExporter with no adapter needed -
@@ -83,6 +84,7 @@ type App struct {
 	routes        []httpbinding.Route
 	builder       *benzene.ApplicationBuilder
 	descriptor    mesh.Descriptor
+	contract      contract.Document
 	info          mesh.ServiceInfo
 	meshClient    *httpclient.Client
 	exporter      *mesh.PushExporter
@@ -98,9 +100,9 @@ type App struct {
 // mark the feed Degraded - "send side not wired up" - which is a different claim entirely.
 func New(cfg Config) *App {
 	registry := benzene.NewRegistry()
-	outbound := mesh.NewOutboundRegistry()
+	outbound := contract.NewOutboundRegistry()
 	routes := []httpbinding.Route{
-		{Method: http.MethodGet, Path: "/Spec", Topic: benzene.NewTopic(mesh.TopicID)},
+		{Method: http.MethodGet, Path: "/Spec", Topic: benzene.NewTopic(contract.TopicID)},
 		{Method: http.MethodGet, Path: "/Health", Topic: benzene.NewTopic(healthcheck.ReservedTopic)},
 	}
 	if cfg.Register != nil {
@@ -109,6 +111,19 @@ func New(cfg Config) *App {
 
 	info := mesh.ServiceInfo{Service: cfg.ServiceName, ServiceVersion: "1.0.0", InstanceID: cfg.ServiceName, Binding: "azure-functions"}
 	descriptor := mesh.Describe(registry, outbound, info)
+	// The Contract Document /Spec answers with (benzene:spec, the Cloud Service Profile's R5). A
+	// derivation error - a component-name collision - is a wiring mistake: stop at start-up.
+	var appRoutes []contract.HTTPRoute
+	for _, r := range routes {
+		appRoutes = append(appRoutes, contract.HTTPRoute{Method: r.Method, Path: r.Path, Topic: r.Topic})
+	}
+	spec, err := contract.Derive(registry, outbound, contract.Info{
+		Service: cfg.ServiceName, ServiceVersion: "1.0.0", VersionScheme: "semver",
+		Transports: []string{"http"}, HTTPRoutes: appRoutes,
+	})
+	if err != nil {
+		panic(err)
+	}
 
 	checks := []healthcheck.Check{healthcheck.NamedCheck("self", func(context.Context) healthcheck.CheckResult {
 		return healthcheck.CheckResult{Status: healthcheck.StatusOk, Type: "self", Data: map[string]any{"service": cfg.ServiceName}}
@@ -124,6 +139,7 @@ func New(cfg Config) *App {
 	pipeline := benzene.NewPipeline(
 		mesh.TraceMiddleware(info, exporter),
 		mesh.IssueMiddleware(info, issueExporter),
+		contract.Middleware(spec),
 		mesh.Middleware(descriptor),
 		healthcheck.Middleware(checks),
 		benzene.RouterMiddleware(registry),
@@ -136,6 +152,7 @@ func New(cfg Config) *App {
 		routes:        routes,
 		builder:       builder,
 		descriptor:    descriptor,
+		contract:      spec,
 		info:          info,
 		meshClient:    cfg.MeshClient,
 		exporter:      exporter,
@@ -150,6 +167,9 @@ func (a *App) Builder() *benzene.ApplicationBuilder { return a.builder }
 
 // Descriptor returns the service's derived self-description, for tests and for Announce.
 func (a *App) Descriptor() mesh.Descriptor { return a.descriptor }
+
+// Contract returns the Contract Document /Spec serves.
+func (a *App) Contract() contract.Document { return a.contract }
 
 // HTTPHandler builds the custom-handler HTTP server for every Route this App knows about (the
 // standard Spec/Health routes plus whatever Config.Register added) - mount it at each

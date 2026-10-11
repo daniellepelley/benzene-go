@@ -20,6 +20,7 @@ import (
 	"github.com/daniellepelley/benzene-go/azurefunctions"
 	"github.com/daniellepelley/benzene-go/azureservicebus"
 	"github.com/daniellepelley/benzene-go/client"
+	"github.com/daniellepelley/benzene-go/contract"
 	"github.com/daniellepelley/benzene-go/httpbinding"
 	"github.com/daniellepelley/benzene-go/httpclient"
 	"github.com/daniellepelley/benzene-go/mesh"
@@ -33,7 +34,7 @@ func newApp(shipping, paymentCaptured client.Sender, meshClient *httpclient.Clie
 	return meshapp.New(meshapp.Config{
 		ServiceName: domain.ServicePayments,
 		MeshClient:  meshClient,
-		Register: func(registry *benzene.Registry, outbound *mesh.OutboundRegistry) []httpbinding.Route {
+		Register: func(registry *benzene.Registry, outbound *contract.OutboundRegistry) []httpbinding.Route {
 			handler := domain.TakePaymentHandler(shipping, paymentCaptured)
 			benzene.MustRegister(registry, benzene.NewTopic(domain.TopicPaymentTake), handler)
 			// What this service SENDS: shipment:book (Service Bus) + payment:captured (Event Grid).

@@ -18,6 +18,7 @@ import (
 	"github.com/daniellepelley/benzene-go/azureeventgrid"
 	"github.com/daniellepelley/benzene-go/azurefunctions"
 	"github.com/daniellepelley/benzene-go/client"
+	"github.com/daniellepelley/benzene-go/contract"
 	"github.com/daniellepelley/benzene-go/httpbinding"
 	"github.com/daniellepelley/benzene-go/httpclient"
 	"github.com/daniellepelley/benzene-go/mesh"
@@ -31,7 +32,7 @@ func newApp(shipmentDispatched client.Sender, meshClient *httpclient.Client) *me
 	return meshapp.New(meshapp.Config{
 		ServiceName: domain.ServiceShipping,
 		MeshClient:  meshClient,
-		Register: func(registry *benzene.Registry, outbound *mesh.OutboundRegistry) []httpbinding.Route {
+		Register: func(registry *benzene.Registry, outbound *contract.OutboundRegistry) []httpbinding.Route {
 			handler := domain.BookShipmentHandler(shipmentDispatched)
 			benzene.MustRegister(registry, benzene.NewTopic(domain.TopicShipmentBook), handler)
 			// What this service SENDS: shipment:dispatched (Event Grid) - terminal for the

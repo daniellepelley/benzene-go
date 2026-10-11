@@ -30,6 +30,7 @@ import (
 	"time"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/contract"
 	"github.com/daniellepelley/benzene-go/mesh"
 )
 
@@ -280,7 +281,7 @@ func New(options Options) *Collector {
 	// The collector makes no outbound calls of its own - a real (empty) OutboundRegistry
 	// asserts "consumes nothing" rather than degrading the feed, which would misleadingly
 	// suggest outbound registration is simply unwired here.
-	descriptor := mesh.Describe(registry, mesh.NewOutboundRegistry(), mesh.ServiceInfo{Service: "meshd"})
+	descriptor := mesh.Describe(registry, contract.NewOutboundRegistry(), mesh.ServiceInfo{Service: "meshd"})
 	builder := &benzene.ApplicationBuilder{
 		Registry:  registry,
 		Container: benzene.NewContainer(),

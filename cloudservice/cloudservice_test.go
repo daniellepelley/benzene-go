@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/contract"
 	"github.com/daniellepelley/benzene-go/healthcheck"
 	"github.com/daniellepelley/benzene-go/httpbinding"
 	"github.com/daniellepelley/benzene-go/mesh"
@@ -58,7 +59,7 @@ func invoke(t *testing.T, h http.Handler, topic, body string) wire.Response {
 }
 
 func TestNew_ServesReservedSurfaceAndAppRoutes(t *testing.T) {
-	svc := New("greeter", newRegistry(t),
+	svc := mustNew(t, "greeter", newRegistry(t),
 		WithServiceVersion("1.0.0"),
 		WithBinding("http"),
 		WithRoutes(httpbinding.Route{Method: http.MethodPost, Path: "/greet", Topic: benzene.NewTopic("greet")}),
@@ -79,9 +80,21 @@ func TestNew_ServesReservedSurfaceAndAppRoutes(t *testing.T) {
 	if specRec.Code != http.StatusOK {
 		t.Fatalf("GET %s = %d, want 200", httpbinding.SpecPath, specRec.Code)
 	}
-	var spec mesh.Descriptor
-	if err := json.Unmarshal(specRec.Body.Bytes(), &spec); err != nil || spec.DescriptorHash != svc.Descriptor.DescriptorHash {
-		t.Errorf("spec body = %s (err %v), want the descriptor with hash %q", specRec.Body, err, svc.Descriptor.DescriptorHash)
+	var spec contract.Document
+	if err := json.Unmarshal(specRec.Body.Bytes(), &spec); err != nil || spec.ContractHash != svc.Contract.ContractHash || spec.SchemaDialect != contract.SchemaDialect {
+		t.Errorf("spec body = %s (err %v), want the Contract Document with hash %q", specRec.Body, err, svc.Contract.ContractHash)
+	}
+	if len(spec.Requests) != 1 || len(spec.Requests[0].HTTPMappings) != 1 || spec.Requests[0].HTTPMappings[0].Path != "/greet" {
+		t.Errorf("spec requests = %+v, want greet with its POST /greet mapping", spec.Requests)
+	}
+	if spec.Service != "greeter" || spec.ServiceVersion != "1.0.0" || spec.MessageEndpoint != httpbinding.EnvelopePath {
+		t.Errorf("spec identity = %s %s %s", spec.Service, spec.ServiceVersion, spec.MessageEndpoint)
+	}
+	if resp := invoke(t, svc.Handler, contract.TopicID, ""); resp.StatusCode != string(benzene.StatusOk) || !strings.Contains(resp.Body, svc.Contract.ContractHash) {
+		t.Errorf("invoke benzene:spec = %s %s, want ok with the document", resp.StatusCode, resp.Body)
+	}
+	if rec := get(t, svc.Handler, httpbinding.SpecPath+"?type=openapi"); rec.Code != http.StatusNotImplemented {
+		t.Errorf("GET %s?type=openapi = %d, want 501", httpbinding.SpecPath, rec.Code)
 	}
 
 	// R6: the reserved benzene:mesh topic returns the descriptor over the envelope path.
@@ -111,16 +124,41 @@ func TestNew_ServesReservedSurfaceAndAppRoutes(t *testing.T) {
 	}
 }
 
+func mustNew(t *testing.T, name string, registry *benzene.Registry, opts ...Option) *Service {
+	t.Helper()
+	svc, err := New(name, registry, opts...)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	return svc
+}
+
+func TestNew_ContractIdentityOptions(t *testing.T) {
+	svc := mustNew(t, "greeter", newRegistry(t), WithServiceVersion("2.0.0"), WithVersionScheme("semver"), WithDescription("Greets"))
+	if svc.Contract.VersionScheme != "semver" || svc.Contract.Description != "Greets" || svc.Contract.ServiceVersion != "2.0.0" {
+		t.Errorf("contract identity = %+v", svc.Contract)
+	}
+}
+
+func TestNew_DerivationErrorsFailBeforeServing(t *testing.T) {
+	if svc, err := New("", newRegistry(t)); err == nil || svc != nil {
+		t.Errorf("New(\"\") = %v, %v; want an error and no service", svc, err)
+	}
+}
+
 func TestNew_WithoutDescriptorDisablesR5R6(t *testing.T) {
-	svc := New("greeter", newRegistry(t), WithoutDescriptor())
+	svc := mustNew(t, "greeter", newRegistry(t), WithoutDescriptor())
 
 	// /benzene/spec is not mounted -> falls through to the app router as an unrouted GET -> 404.
 	if rec := get(t, svc.Handler, httpbinding.SpecPath); rec.Code != http.StatusNotFound {
 		t.Errorf("GET %s = %d, want 404 when the descriptor is disabled", httpbinding.SpecPath, rec.Code)
 	}
-	// The reserved benzene:mesh topic no longer has interception -> not-found (no handler registered).
-	if resp := invoke(t, svc.Handler, mesh.TopicID, "{}"); benzene.Status(resp.StatusCode).IsSuccess() {
-		t.Errorf("invoke benzene:mesh status = %q, want a failure when the descriptor is disabled", resp.StatusCode)
+	// The reserved benzene:mesh and benzene:spec topics no longer have interception -> not-found (no
+	// handler registered).
+	for _, topic := range []string{mesh.TopicID, contract.TopicID} {
+		if resp := invoke(t, svc.Handler, topic, "{}"); benzene.Status(resp.StatusCode).IsSuccess() {
+			t.Errorf("invoke %s status = %q, want a failure when the descriptor is disabled", topic, resp.StatusCode)
+		}
 	}
 
 	// With the descriptor off, R5 joins R6 and R8 as unsatisfied.
@@ -134,7 +172,7 @@ func TestNew_HealthReflectsChecks(t *testing.T) {
 	failing := healthcheck.NamedCheck("db", func(context.Context) healthcheck.CheckResult {
 		return healthcheck.CheckResult{Status: healthcheck.StatusFailed, Type: "db"}
 	})
-	svc := New("greeter", newRegistry(t), WithHealthChecks(failing))
+	svc := mustNew(t, "greeter", newRegistry(t), WithHealthChecks(failing))
 
 	if rec := get(t, svc.Handler, httpbinding.HealthPath); rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("GET %s = %d, want 503 when a check fails", httpbinding.HealthPath, rec.Code)
@@ -147,7 +185,7 @@ func TestNew_HealthReflectsChecks(t *testing.T) {
 
 func TestNew_PlacementInstanceAndContainer(t *testing.T) {
 	container := benzene.NewContainer()
-	svc := New("greeter", newRegistry(t),
+	svc := mustNew(t, "greeter", newRegistry(t),
 		WithPlacement("aws", "us-east-1"),
 		WithInstanceID("greeter-7"),
 		WithContainer(container),
@@ -165,7 +203,7 @@ func TestNew_PlacementInstanceAndContainer(t *testing.T) {
 
 func TestNew_WithConsumesDerivesConsumesElseDegrades(t *testing.T) {
 	t.Run("unset degrades the outbound-registry feed", func(t *testing.T) {
-		svc := New("greeter", newRegistry(t))
+		svc := mustNew(t, "greeter", newRegistry(t))
 		if len(svc.Descriptor.Produces) != 0 {
 			t.Errorf("Consumes = %v, want empty", svc.Descriptor.Produces)
 		}
@@ -181,11 +219,15 @@ func TestNew_WithConsumesDerivesConsumesElseDegrades(t *testing.T) {
 	})
 
 	t.Run("WithConsumes populates the consumed-topic catalog, not degraded", func(t *testing.T) {
-		outbound := mesh.NewOutboundRegistry()
-		if err := mesh.RegisterOutbound[greetReq, greetRes](outbound, benzene.NewTopic("payments:capture")); err != nil {
-			t.Fatalf("RegisterOutbound() error = %v", err)
+		outbound := contract.NewOutboundRegistry()
+		if err := contract.RegisterSend[greetReq](outbound, benzene.NewTopic("payments:capture"), contract.WithResponse[greetRes]()); err != nil {
+			t.Fatalf("RegisterSend() error = %v", err)
 		}
-		svc := New("greeter", newRegistry(t), WithConsumes(outbound))
+		svc := mustNew(t, "greeter", newRegistry(t), WithConsumes(outbound))
+
+		if len(svc.Contract.Sends) != 1 || svc.Contract.Sends[0].Topic != "payments:capture" || svc.Contract.Sends[0].Response == nil {
+			t.Errorf("Contract sends = %+v, want payments:capture with its reply", svc.Contract.Sends)
+		}
 
 		if len(svc.Descriptor.Produces) != 1 || svc.Descriptor.Produces[0].ID != "payments:capture" {
 			t.Errorf("Consumes = %+v, want one entry for payments:capture", svc.Descriptor.Produces)
@@ -199,7 +241,7 @@ func TestNew_WithConsumesDerivesConsumesElseDegrades(t *testing.T) {
 }
 
 func TestProfileReport_StringForNewBuild(t *testing.T) {
-	svc := New("greeter", newRegistry(t))
+	svc := mustNew(t, "greeter", newRegistry(t))
 	s := svc.Report.String()
 	// Descriptor on: R1-R5 and R7 wired, R6 and R8 not - 6 of 8.
 	if !strings.Contains(s, "6/8 requirements wired") || !strings.Contains(s, "R4") {

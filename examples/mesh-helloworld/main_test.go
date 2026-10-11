@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/contract"
 	"github.com/daniellepelley/benzene-go/httpbinding"
 	"github.com/daniellepelley/benzene-go/httpclient"
 	"github.com/daniellepelley/benzene-go/mesh"
@@ -37,8 +38,8 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 		if err := benzene.Register(registry, benzene.NewTopic("welcome"), welcomeHandler(greeterClient)); err != nil {
 			t.Fatalf("register welcome: %v", err)
 		}
-	}, func(outbound *mesh.OutboundRegistry) {
-		if err := mesh.RegisterOutbound[greetRequest, greetResponse](outbound, benzene.NewTopic("greet")); err != nil {
+	}, func(outbound *contract.OutboundRegistry) {
+		if err := contract.RegisterSend[greetRequest](outbound, benzene.NewTopic("greet"), contract.WithResponse[greetResponse]()); err != nil {
 			t.Fatalf("register outbound greet: %v", err)
 		}
 	}, []httpbinding.Route{{Method: http.MethodPost, Path: "/welcome", Topic: benzene.NewTopic("welcome")}})
@@ -101,6 +102,21 @@ func TestMeshHelloworldEndToEnd(t *testing.T) {
 	}
 	if !strings.HasPrefix(descriptor.Payload.DescriptorHash, "sha256:") {
 		t.Errorf("DescriptorHash = %q, want sha256:…", descriptor.Payload.DescriptorHash)
+	}
+
+	// GET /benzene/spec serves the Contract Document through the pipeline; frontdoor's declared
+	// send to greet is in it.
+	specResponse, err := http.Get(frontdoorServer.URL + httpbinding.SpecPath)
+	if err != nil {
+		t.Fatalf("GET /benzene/spec: %v", err)
+	}
+	var spec contract.Document
+	if err := json.NewDecoder(specResponse.Body).Decode(&spec); err != nil || specResponse.StatusCode != http.StatusOK {
+		t.Fatalf("GET /benzene/spec = %d, %v", specResponse.StatusCode, err)
+	}
+	specResponse.Body.Close()
+	if spec.Service != "frontdoor" || len(spec.Sends) != 1 || spec.Sends[0].Topic != "greet" || !strings.HasPrefix(spec.ContractHash, "sha256:") {
+		t.Errorf("spec = %+v, want frontdoor's document with its send to greet", spec)
 	}
 
 	// Flush every trace feed, then read the fleet back from the collector.

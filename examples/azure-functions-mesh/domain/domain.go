@@ -17,7 +17,7 @@ import (
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/client"
-	"github.com/daniellepelley/benzene-go/mesh"
+	"github.com/daniellepelley/benzene-go/contract"
 )
 
 // Topic ids for the estate's five cross-service hops, matching
@@ -62,38 +62,39 @@ const (
 // on the matching client.Sender being wired: that example's nil downstream selects a different
 // ROLE (one image, three deployments, shipping terminal), whereas each service here is its own
 // Function App whose role is fixed at compile time and whose senders differ only by deployment
-// wiring. Per mesh.OutboundRegistry's own rule - a declaration carries no destination address,
+// wiring. Per contract.OutboundRegistry's own rule - a declaration carries no destination address,
 // so "the descriptor doesn't change between environments, only the wiring does" - an orders
 // Function booted with nil senders still declares payment:take and order:placed.
 //
-// Every hop in this estate is one-way (Service Bus, Event Hub and Event Grid each answer a send
-// with an acknowledgement and no payload - see azureservicebus/azureeventhub/azureeventgrid's
-// Client.Send), so every record declares TRes as `any`: mesh.md §2.3's "no expected response
-// type", which derives the unconstrained {} responseSchema rather than claiming a response shape
-// that never comes back.
+// Each record says who owns the topic's contract (contract-document.md §3): an EVENT is a topic this
+// service publishes and defines (order:placed, payment:captured, shipment:dispatched - anyone may
+// subscribe), a SEND is a message to a topic another service defines (payment:take is payments',
+// shipment:book is shipping's). Every hop in this estate is one-way (Service Bus, Event Hub and
+// Event Grid each answer a send with an acknowledgement and no payload - see
+// azureservicebus/azureeventhub/azureeventgrid's Client.Send), so no send declares a response.
 //
 // Returns an error for an unrecognised service - the six names are compile-time fixed, so an
 // unknown one is a wiring bug, not a default worth silently absorbing.
-func RegisterOutbound(outbound *mesh.OutboundRegistry, service string) error {
+func RegisterOutbound(outbound *contract.OutboundRegistry, service string) error {
 	switch service {
 	case ServiceOrders:
 		// payment:take over a Service Bus queue (the command chain) + order:placed over Event
 		// Hub (the fan-out stream) - CreateOrderHandler's two sends.
-		if err := mesh.RegisterOutbound[TakePaymentRequest, any](outbound, benzene.NewTopic(TopicPaymentTake)); err != nil {
+		if err := contract.RegisterSend[TakePaymentRequest](outbound, benzene.NewTopic(TopicPaymentTake)); err != nil {
 			return err
 		}
-		return mesh.RegisterOutbound[OrderPlaced, any](outbound, benzene.NewTopic(TopicOrderPlaced))
+		return contract.RegisterEvent[OrderPlaced](outbound, benzene.NewTopic(TopicOrderPlaced))
 	case ServicePayments:
 		// shipment:book over Service Bus + payment:captured over Event Grid -
 		// TakePaymentHandler's two sends.
-		if err := mesh.RegisterOutbound[BookShipmentRequest, any](outbound, benzene.NewTopic(TopicShipmentBook)); err != nil {
+		if err := contract.RegisterSend[BookShipmentRequest](outbound, benzene.NewTopic(TopicShipmentBook)); err != nil {
 			return err
 		}
-		return mesh.RegisterOutbound[PaymentTaken, any](outbound, benzene.NewTopic(TopicPaymentCaptured))
+		return contract.RegisterEvent[PaymentTaken](outbound, benzene.NewTopic(TopicPaymentCaptured))
 	case ServiceShipping:
 		// Terminal for the command chain (no further Service Bus hop), but it does fan
 		// shipment:dispatched out over Event Grid - BookShipmentHandler's one send.
-		return mesh.RegisterOutbound[ShipmentBooked, any](outbound, benzene.NewTopic(TopicShipmentDispatched))
+		return contract.RegisterEvent[ShipmentBooked](outbound, benzene.NewTopic(TopicShipmentDispatched))
 	case ServiceInventory, ServiceNotifications, ServiceAnalytics:
 		// Pure event consumers: AckHandler sends nothing, so there is nothing to declare. An
 		// empty (but present) outbound registry is the honest answer - it leaves Consumes empty

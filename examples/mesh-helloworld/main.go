@@ -38,6 +38,7 @@ import (
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/client"
+	"github.com/daniellepelley/benzene-go/contract"
 	"github.com/daniellepelley/benzene-go/healthcheck"
 	"github.com/daniellepelley/benzene-go/httpbinding"
 	"github.com/daniellepelley/benzene-go/httpclient"
@@ -118,17 +119,23 @@ type service struct {
 // the service still traces, it just serves no descriptor (and on the view degrades to reduced,
 // never breaks). The mesh wiring is the mesh.* lines in the pipeline; everything else is the
 // same as examples/helloworld.
-func newService(name, meshdEndpoint string, provisionDescriptor bool, registerHandlers func(*benzene.Registry), registerOutbound func(*mesh.OutboundRegistry), routes []httpbinding.Route) *service {
+func newService(name, meshdEndpoint string, provisionDescriptor bool, registerHandlers func(*benzene.Registry), registerOutbound func(*contract.OutboundRegistry), routes []httpbinding.Route) *service {
 	registry := benzene.NewRegistry()
 	registerHandlers(registry)
 
-	outbound := mesh.NewOutboundRegistry()
+	outbound := contract.NewOutboundRegistry()
 	if registerOutbound != nil {
 		registerOutbound(outbound)
 	}
 
 	info := mesh.ServiceInfo{Service: name, ServiceVersion: "1.0.0", InstanceID: name + "-1", Binding: "http"}
 	descriptor := mesh.Describe(registry, outbound, info)
+	// The Contract Document (R5): what GET /benzene/spec and the benzene:spec topic answer with. A
+	// derivation error (a component-name collision) is a wiring mistake: stop at start-up.
+	spec, err := contract.Derive(registry, outbound, contract.Info{Service: name, ServiceVersion: "1.0.0", VersionScheme: "semver", MessageEndpoint: httpbinding.EnvelopePath})
+	if err != nil {
+		panic(err)
+	}
 	exporter := mesh.NewPushExporter(httpclient.NewClient(meshdEndpoint), mesh.PushExporterOptions{FlushInterval: time.Second})
 	issueExporter := mesh.NewPushIssueExporter(httpclient.NewClient(meshdEndpoint), name, mesh.PushIssueExporterOptions{FlushInterval: time.Second})
 
@@ -138,7 +145,7 @@ func newService(name, meshdEndpoint string, provisionDescriptor bool, registerHa
 
 	middlewares := []benzene.Middleware{mesh.TraceMiddleware(info, exporter), mesh.IssueMiddleware(info, issueExporter)}
 	if provisionDescriptor {
-		middlewares = append(middlewares, mesh.Middleware(descriptor))
+		middlewares = append(middlewares, contract.Middleware(spec), mesh.Middleware(descriptor))
 	}
 	middlewares = append(middlewares, healthcheck.Middleware(checks), benzene.RouterMiddleware(registry))
 
@@ -150,9 +157,10 @@ func newService(name, meshdEndpoint string, provisionDescriptor bool, registerHa
 
 	mux := http.NewServeMux()
 	mux.Handle(httpbinding.EnvelopePath, httpbinding.EnvelopeHandler(builder))
-	// The derived spec document (Cloud Service Profile R5): the same registry-derived descriptor R6
-	// serves on the benzene:mesh topic, offered as a plain GET at the default /benzene/spec mount.
-	mux.Handle(httpbinding.SpecPath, mesh.SpecHandler(descriptor))
+	// The derived Contract Document (Cloud Service Profile R5) at the default /benzene/spec mount:
+	// the GET dispatches benzene:spec through the pipeline, so a service that withholds its
+	// self-description (provisionDescriptor false) answers it not-found like any unserved topic.
+	mux.Handle(httpbinding.SpecPath, httpbinding.SpecHandler(builder))
 	mux.Handle("/", httpbinding.Handler(builder, routes))
 	return &service{
 		handler:       mux,
@@ -229,11 +237,11 @@ func main() {
 	frontdoor := newService("frontdoor", meshdEndpoint, true, func(registry *benzene.Registry) {
 		greeterClient := mesh.WithTraceContext(httpclient.NewClient("http://localhost:" + greeterPort + httpbinding.EnvelopePath))
 		benzene.MustRegister(registry, benzene.NewTopic("welcome"), welcomeHandler(greeterClient))
-	}, func(outbound *mesh.OutboundRegistry) {
+	}, func(outbound *contract.OutboundRegistry) {
 		// frontdoor's declared contract: it calls greeter's "greet" (mesh.md §2.3). This -
 		// not the trace propagation above - is what makes "greet" show frontdoor as a
 		// consumer on the topic catalog (mesh.md §4).
-		mesh.MustRegisterOutbound[greetRequest, greetResponse](outbound, benzene.NewTopic("greet"))
+		contract.MustRegisterSend[greetRequest](outbound, benzene.NewTopic("greet"), contract.WithResponse[greetResponse]())
 	}, []httpbinding.Route{
 		{Method: http.MethodPost, Path: "/welcome", Topic: benzene.NewTopic("welcome")},
 		{Method: http.MethodGet, Path: httpbinding.HealthPath, Topic: benzene.NewTopic(healthcheck.ReservedTopic)},

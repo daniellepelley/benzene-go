@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/contract"
 	"github.com/daniellepelley/benzene-go/envelope"
 	"github.com/daniellepelley/benzene-go/mesh"
 	"github.com/daniellepelley/benzene-go/meshd"
@@ -42,12 +43,12 @@ type conformanceLogRequest struct {
 }
 
 // canonicalOutboundRegistry registers the one canonical outbound record mesh-descriptor-cases.json
-// pins Consumes derivation against: conformance:log, request-only (mesh.md §2.3 - a sender with no
+// pins Produces derivation against: conformance:log, a one-way send (mesh.md §2.3 - a sender with no
 // expected response type derives the unconstrained {} responseSchema).
-func canonicalOutboundRegistry(t *testing.T) *mesh.OutboundRegistry {
+func canonicalOutboundRegistry(t *testing.T) *contract.OutboundRegistry {
 	t.Helper()
-	outbound := mesh.NewOutboundRegistry()
-	must(t, mesh.RegisterOutbound[conformanceLogRequest, any](outbound, benzene.NewTopic("conformance:log")))
+	outbound := contract.NewOutboundRegistry()
+	must(t, contract.RegisterSend[conformanceLogRequest](outbound, benzene.NewTopic("conformance:log")))
 	return outbound
 }
 
@@ -164,7 +165,7 @@ func TestConformance_MeshDescriptorCases(t *testing.T) {
 			t.Skip("not asserted by the fixture")
 		}
 		grown := canonicalOutboundRegistry(t)
-		must(t, mesh.RegisterOutbound[conformanceLogRequest, any](grown, benzene.NewTopic("conformance:extra-produced")))
+		must(t, contract.RegisterSend[conformanceLogRequest](grown, benzene.NewTopic("conformance:extra-produced")))
 		if got := mesh.Describe(canonicalRegistry(t), grown, info).DescriptorHash; got == descriptor.DescriptorHash {
 			t.Errorf("hash did not change with the produced-topic set: %q", got)
 		}

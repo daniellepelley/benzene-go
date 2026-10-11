@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/contract"
 )
 
 type echoRequest struct {
@@ -147,12 +148,8 @@ func TestDescribe(t *testing.T) {
 
 	t.Run("derives the consumes list from the outbound registry, sorted, schema-derived", func(t *testing.T) {
 		outbound := NewOutboundRegistry()
-		if err := RegisterOutbound[echoRequest, echoResponse](outbound, benzene.NewTopic("payments:capture")); err != nil {
-			t.Fatalf("RegisterOutbound() error = %v", err)
-		}
-		if err := RegisterOutbound[echoRequest, any](outbound, benzene.NewTopic("audit:log")); err != nil {
-			t.Fatalf("RegisterOutbound() error = %v", err)
-		}
+		must(t, contract.RegisterSend[echoRequest](outbound, benzene.NewTopic("payments:capture"), contract.WithResponse[echoResponse]()))
+		must(t, contract.RegisterEvent[echoRequest](outbound, benzene.NewTopic("audit:log")))
 
 		desc := Describe(newTestRegistry(t), outbound, info)
 
@@ -166,7 +163,7 @@ func TestDescribe(t *testing.T) {
 		if desc.Produces[0].ID != "audit:log" || desc.Produces[1].ID != "payments:capture" {
 			t.Errorf("Consumes ids = [%q %q], want [audit:log payments:capture]", desc.Produces[0].ID, desc.Produces[1].ID)
 		}
-		// No declared response type (TRes = any) derives the unconstrained {} responseSchema
+		// No declared response type (an event, or a one-way send) derives the unconstrained {} responseSchema
 		// mesh.md §2.3 specifies, present rather than omitted.
 		if got := desc.Produces[0].ResponseSchema; got == nil || len(got) != 0 {
 			t.Errorf("audit:log ResponseSchema = %v, want a present, empty ({}) schema", got)

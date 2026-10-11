@@ -4,9 +4,9 @@
 // (the one sanctioned use of reflection, never on the dispatch path), so this package adds no
 // reflection of its own - it only reshapes the derived descriptor into the OpenAPI wire format.
 //
-// The Cloud Service Profile's R5 (a derived spec document) is already satisfied by
-// mesh.SpecHandler serving Benzene's own descriptor format, which the profile permits. This is
-// the richer, industry-standard alternative for readers who want OpenAPI: every registered topic
+// The Cloud Service Profile's R5 (a derived spec document) is satisfied by the Contract Document
+// the contract package derives and serves on benzene:spec (GET /benzene/spec). This is an
+// industry-standard view for readers who want OpenAPI: every registered topic
 // becomes a POST operation whose request body is the topic's request schema and whose responses
 // carry the response schema (success) and the Benzene failure vocabulary mapped to HTTP status
 // codes (httpstatus). It is a documentation view of the service's message contracts, not a claim
@@ -14,10 +14,9 @@
 // the value is the request/response shape, not the transport.
 //
 // AsyncAPI generation (the other half of Benzene.Schema.OpenApi) ships in the sibling asyncapi
-// package: it models every handled topic as a "receive" operation with a reply channel (derived from
-// the descriptor) and takes any published events as an explicit WithSentEvent declaration (the send
-// side the descriptor cannot provide), rather than fabricating a request/response-vs-event
-// classification.
+// package, which reads the Contract Document: every handled topic is a "receive" operation, and the
+// service's declared events and sends (contract.RegisterEvent, contract.RegisterSend) are "send"
+// operations.
 package openapi
 
 import (

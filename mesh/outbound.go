@@ -1,108 +1,16 @@
 package mesh
 
-import (
-	"fmt"
-	"reflect"
-	"sort"
+import "github.com/daniellepelley/benzene-go/contract"
 
-	benzene "github.com/daniellepelley/benzene-go"
-)
-
-// OutboundRegistry holds outbound registration records (mesh.md §2.3): topics this service
-// *may send*, with the request type it sends and the response type it expects back - no
-// handler, since nothing here receives. It mirrors Registry's handler discovery exactly, minus
-// the handler, for the identical reason core-concepts.md §9 requires explicit registration for
-// inbound: the list this type holds is what makes ServiceDescriptor.Produces a hard-coded
-// contract rather than an inference. A port MUST NOT populate it by scanning call sites, string
-// literals, or any other static analysis over handler bodies - RegisterOutbound is the only path.
+// OutboundRegistry is contract.OutboundRegistry: the service's event and send declarations
+// (contract-document.md §3), which the descriptor's Produces list reads alongside the Contract
+// Document's events and sends. Declare with contract.RegisterEvent and contract.RegisterSend.
 //
-// A registered entry needs no destination address, queue name, or topic ARN: those are
-// transport/deployment configuration (transport-bindings.md), orthogonal to the contract this
-// registers. A service can declare it consumes payments:capture while its actual queue URL is
-// injected at deploy time - the descriptor doesn't change between environments, only the wiring
-// does.
-type OutboundRegistry struct {
-	entries map[benzene.Topic]outboundEntry
-}
-
-// outboundEntry is what the OutboundRegistry stores per topic: the request/response types
-// captured at the RegisterOutbound call site, for startup-time schema derivation only (mesh.go's
-// Describe), exactly like handlerRegistration's types in registry.go.
-type outboundEntry struct {
-	request  reflect.Type
-	response reflect.Type
-}
+// Deprecated: use contract.OutboundRegistry. The alias stays for one release, until the
+// descriptor is folded into the Contract Document.
+type OutboundRegistry = contract.OutboundRegistry
 
 // NewOutboundRegistry returns an empty OutboundRegistry.
-func NewOutboundRegistry() *OutboundRegistry {
-	return &OutboundRegistry{entries: make(map[benzene.Topic]outboundEntry)}
-}
-
-// RegisterOutbound records topic as a message this service may send: the request type it sends
-// as TReq, and the response type it expects back as TRes (mesh.md §2.3). A sender with no
-// expected response type registers TRes as `any` - schema derivation already maps an interface
-// type to `{}` (unconstrained), which is exactly the responseSchema mesh.md §2 specifies for "no
-// declared response type".
 //
-// Returns an error if topic is already registered - the same startup-error treatment
-// Register gives a duplicate inbound registration.
-func RegisterOutbound[TReq, TRes any](r *OutboundRegistry, topic benzene.Topic) error {
-	if _, exists := r.entries[topic]; exists {
-		return fmt.Errorf("mesh: outbound topic already registered for %q", topic)
-	}
-	r.entries[topic] = outboundEntry{
-		// TypeOf on a pointer's Elem, matching registry.go's Register: interface type
-		// parameters (including TRes = any) yield their interface type rather than nil.
-		request:  reflect.TypeOf((*TReq)(nil)).Elem(),
-		response: reflect.TypeOf((*TRes)(nil)).Elem(),
-	}
-	return nil
-}
-
-// MustRegisterOutbound is RegisterOutbound with the error handling a composition root would
-// otherwise write by hand: it calls RegisterOutbound and panics if registration fails. The
-// explicit form is RegisterOutbound - reach for it when the caller has somewhere better to send
-// the error than a panic (a registration loop that collects failures, a test).
-//
-// The panic is a start-up check: the only failure is a duplicate topic, which is a wiring
-// mistake, and outbound registration happens once at boot before any message is sent - so the
-// panic names the offending topic at start-up, never on the message path. It is the mesh
-// counterpart of benzene.MustRegister, and makes the same trade regexp.MustCompile does.
-//
-// Explicit:
-//
-//	if err := mesh.RegisterOutbound[greetRequest, greetResponse](outbound, benzene.NewTopic("greet")); err != nil {
-//		return err
-//	}
-//
-// Shorthand:
-//
-//	mesh.MustRegisterOutbound[greetRequest, greetResponse](outbound, benzene.NewTopic("greet"))
-func MustRegisterOutbound[TReq, TRes any](r *OutboundRegistry, topic benzene.Topic) {
-	if err := RegisterOutbound[TReq, TRes](r, topic); err != nil {
-		panic(err)
-	}
-}
-
-// TopicTypes returns the request and response types captured when topic was registered, or
-// ok = false when topic isn't registered. Mirrors Registry.TopicTypes.
-func (r *OutboundRegistry) TopicTypes(topic benzene.Topic) (request, response reflect.Type, ok bool) {
-	entry, ok := r.entries[topic]
-	return entry.request, entry.response, ok
-}
-
-// Topics returns every registered outbound topic, sorted by ID then Version - mirrors
-// Registry.Topics, the enumeration behind Descriptor.Produces.
-func (r *OutboundRegistry) Topics() []benzene.Topic {
-	topics := make([]benzene.Topic, 0, len(r.entries))
-	for topic := range r.entries {
-		topics = append(topics, topic)
-	}
-	sort.Slice(topics, func(i, j int) bool {
-		if topics[i].ID != topics[j].ID {
-			return topics[i].ID < topics[j].ID
-		}
-		return topics[i].Version < topics[j].Version
-	})
-	return topics
-}
+// Deprecated: use contract.NewOutboundRegistry.
+func NewOutboundRegistry() *OutboundRegistry { return contract.NewOutboundRegistry() }

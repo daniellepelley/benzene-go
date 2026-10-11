@@ -43,7 +43,7 @@ from what the running services actually do (spec §4, §4.2 - the main repo's 20
   heartbeats (which carry the descriptor hash, so a redeployed instance with a changed
   contract would show a hash mismatch in `benzene:mesh:query:service`).
 - **The consumer edge is declared, not trace-derived** (spec §2.3, §4): frontdoor's
-  `newService` call registers an outbound record for `greet` (`mesh.RegisterOutbound` in
+  `newService` call registers an outbound record for `greet` (`contract.RegisterSend` in
   `main.go`) - that, and only that, is why `greet`'s topic row shows *consumers: frontdoor*,
   and it would show it even with zero traffic. frontdoor's outbound client is separately
   wrapped in `mesh.WithTraceContext`, forwarding the current invocation's span as a
