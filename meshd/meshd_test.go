@@ -428,6 +428,18 @@ func TestCollector_UnobservedDeclaredEdgeReportsNoLastObservedAt(t *testing.T) {
 	if !consumer.LastObservedAt.IsZero() {
 		t.Errorf("payments LastObservedAt = %v, want zero (never observed)", consumer.LastObservedAt)
 	}
+
+	// On the wire the absence is an absent field, not the zero time (0001-01-01T00:00:00Z): the
+	// declared edge is still listed, with an empty activity record.
+	_, raw := invoke[json.RawMessage](t, c, mesh.TopicQueryTopic, TopicQuery{Topic: "payments:capture"})
+	if strings.Contains(string(raw), "lastObservedAt") {
+		t.Errorf("topic summary %s carries a lastObservedAt for a never-observed edge, want it absent", raw)
+	}
+	for _, want := range []string{`"providerActivity":{"orders":{}}`, `"consumerActivity":{"payments":{}}`} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("topic summary %s lacks %s - the never-observed edge must still be reported", raw, want)
+		}
+	}
 }
 
 func TestCollector_ObservedDeclaredEdgeReportsLastObservedAt(t *testing.T) {
@@ -449,6 +461,10 @@ func TestCollector_ObservedDeclaredEdgeReportsLastObservedAt(t *testing.T) {
 	}
 	if got := topic.ConsumerActivity["payments"].LastObservedAt; !got.Equal(testClock) {
 		t.Errorf("payments LastObservedAt = %v, want the observation clock %v", got, testClock)
+	}
+	_, raw := invoke[json.RawMessage](t, c, mesh.TopicQueryTopic, TopicQuery{Topic: "payments:capture"})
+	if want := `"orders":{"lastObservedAt":"` + testClock.Format(time.RFC3339Nano) + `"}`; !strings.Contains(string(raw), want) {
+		t.Errorf("topic summary %s lacks %s", raw, want)
 	}
 }
 

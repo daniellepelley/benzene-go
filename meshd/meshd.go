@@ -132,9 +132,11 @@ type TopicSummary struct {
 // EdgeActivity is one declared edge's observed-activity record (mesh.md §4.2 "Unobserved"): the
 // last time a trace showed it being exercised, or the zero value when it never has been within
 // the collector's retention window - reported explicitly per edge rather than collapsed to a
-// boolean, so a reader can judge staleness for itself.
+// boolean, so a reader can judge staleness for itself. On the wire a never-observed edge is an
+// entry with lastObservedAt absent ({}), never the zero time: omitzero, because omitempty does not
+// omit a struct such as time.Time.
 type EdgeActivity struct {
-	LastObservedAt time.Time `json:"lastObservedAt,omitempty"`
+	LastObservedAt time.Time `json:"lastObservedAt,omitzero"`
 }
 
 // TraceSummary is one recent flow on the fleet view.
