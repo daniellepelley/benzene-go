@@ -39,20 +39,21 @@ delivery order - just the current honest picture, kept up to date as things land
   cross-compile-verified only.
 - `clienthealthcheck` - the consumer-side dependency health check (zero dependencies), matching
   `Benzene.Clients.HealthChecks`: a `ServiceCheck` (a `healthcheck.Check`, in its own package so
-  `healthcheck` keeps its net-only footprint) probes a downstream Benzene provider's reserved
-  `benzene:mesh` descriptor through an outbound `client.Sender` and reports the *contract*
-  relationship, not the provider's transient health - unreachable / serves no descriptor = `failed`,
+  `healthcheck` keeps its net-only footprint) asks a downstream Benzene provider's reserved
+  `benzene:spec` topic for its Contract Document through an outbound `client.Sender` and reports the
+  *contract* relationship, not the provider's transient health - unreachable / serves no contract = `failed`,
   reachable+matching contract hash = `ok`, reachable+drifted = `warning` (degraded, does not flip the
   caller's health), reachable without drift-detection configured = `ok` (reachability only),
-  reachable+hashless descriptor = `ok` (drift unassessable, recorded in the result `Data` per the
-  profile's §4 degradation rule). Both the reachability signal and the hash come from the descriptor,
-  which `mesh.Middleware` serves with a success status unconditionally (health-independent) -
+  reachable+hashless document = `ok` (drift unassessable, recorded in the result `Data` per the
+  profile's §4 degradation rule). Both the reachability signal and the served `contractHash` come
+  from the document, which `contract.Middleware` serves with a success status unconditionally
+  (health-independent) -
   deliberately NOT the `benzene:healthcheck` topic, whose failure-on-unhealthy the envelope transport
   can't tell from "down" (`httpclient` drops a failure body), and coupling this contract check to the
   provider's transient health is exactly what it must avoid. .NET bakes the hash into a generated
   client; Go has none, so `WithExpectedContractHash` supplies the consumer's built-against hash (a
-  documented divergence driven by the transport + the fact that Go's descriptor, not its health
-  response, carries the hash). For a *contracts* diagnostic surface, not a liveness/readiness probe.
+  documented divergence driven by the transport + the fact that the Contract Document, not the
+  health response, carries the hash). For a *contracts* diagnostic surface, not a liveness/readiness probe.
 - `validation` - request-validation building block (zero dependencies): `Validated(validator,
   handler)` wraps a handler so an invalid request short-circuits to a `validation-error` result
   before the handler runs, plus `Validator[T]`/`ValidatorFunc[T]` and a `Combine` composer. The
@@ -157,11 +158,12 @@ delivery order - just the current honest picture, kept up to date as things land
   (`Satisfied`/`NotSatisfied`/`Inconclusive`) for R1-R8 - never a bool (which would overclaim), never
   a panic or error (unreachability and shape mismatches are verdicts, matching the "never throws"
   contract). The honesty rule is load-bearing: R8 (trace propagation) and half of R6
-  (register/heartbeat delivery to a collector) are inherently unobservable by a single-service HTTP
+  (register/heartbeat/trace delivery to a collector) are inherently unobservable by a single-service HTTP
   probe and stay `Inconclusive`; R7 goes `Inconclusive` the moment the caller points the probe at
   non-default paths. Deliberately independent of `httpbinding`/`healthcheck`/`mesh` - it keeps its
   own `/benzene/*` path constants and parses the checked wire shapes (health `isHealthy`, the
-  `{statusCode,headers,body}` envelope, the descriptor `service`/`topics`) itself, because the
+  `{statusCode,headers,body}` envelope, the Contract Document's `service`/`requests` read from
+  `benzene:spec` for R6's observable half) itself, because the
   profile is language-neutral and this tool must be able to audit ANY Benzene Cloud Service reachable
   over HTTP, a non-Go port included (the same rationale, and the same deliberate duplication, as the
   .NET package's `CloudServiceProbePaths`).
@@ -170,33 +172,35 @@ delivery order - just the current honest picture, kept up to date as things land
   opts...)` wires the profile's synchronous HTTP surface from a registry - R1 (hosted pipeline), R2
   (registry handlers via `RouterMiddleware`), R3 (`healthcheck.Middleware` + a `HealthPath` route),
   R4 (`EnvelopeHandler` at `EnvelopePath`, `/benzene/invoke`), R5 (the `contract` package's Contract
-  Document on `benzene:spec`, `httpbinding.SpecHandler` at `SpecPath`), R7 (default `/benzene/*` paths), plus `mesh.Describe`+`mesh.Middleware` for the `benzene:mesh`
-  descriptor - over one `ApplicationBuilder`, with descriptor/health interception ordered before
-  `RouterMiddleware`. It returns the `http.Handler`, `Descriptor`, `Builder`, and a wiring-time
-  `ProfileReport` - a full **R1-R8** checklist (`Requirement{ID,Name,Satisfied,Detail}`,
+  Document on `benzene:spec`, `httpbinding.SpecHandler` at `SpecPath` - also R6's self-description),
+  R7 (default `/benzene/*` paths) - over one `ApplicationBuilder`, with self-description/health
+  interception ordered before `RouterMiddleware`. It returns the `http.Handler`, `Contract`,
+  `Builder`, and a wiring-time `ProfileReport` (which the document carries as its `profile`) - a full **R1-R8** checklist (`Requirement{ID,Name,Satisfied,Detail}`,
   `Satisfied()`/`Unsatisfied()`), the inside "how far did this builder get me?" self-check that pairs
   with `cloudserviceprobe`'s outside audit (`CloudServiceProfileReport` vs `.Probe` in .NET). It is
-  honest about scope: `New` deliberately does NOT wire R6's outbound feeds (register/heartbeat/traces
-  - they need a collector + push-exporter lifecycle the app owns) or R8 (trace propagation -
+  honest about scope: `New` deliberately does NOT wire R6's three feeds (register/heartbeat/traces
+  - they need a collector + `mesh.Announcer`/push-exporter lifecycle the app owns) or R8 (trace propagation -
   `mesh.TraceMiddleware` inbound + the client `WithTraceContext` outbound), so `Satisfied()` is
   false for a `New`-only build and `Unsatisfied()` is the exact to-do list to reach full conformance -
   the report never reports the HTTP surface as if it were the whole profile. `WithoutDescriptor()`
-  additionally drops R5/R6 per §4 exposure control. A thin assembler over existing pieces; nothing
+  drops the self-description per §4 exposure control. A thin assembler over existing pieces; nothing
   here spawns or owns a background goroutine.
-- `contract` - the spec-0.3.0 self-description (zero dependencies): `Derive` builds the Contract
+- `contract` - the spec-0.4.0 self-description (zero dependencies): `Derive` builds the Contract
   Document from the registry and the `RegisterEvent`/`RegisterSend` declarations (OpenAPI 3.0
   dialect, named structs hoisted, a component-name collision failing at start-up,
   `BenzeneSchemaName()` as the declared-name hook), `HashDocument` computes `contractHash` and
   `registrationHash` over the hand-written RFC 8785 `internal/jcs` (fuzzed against `gowebpki/jcs` in
   `codegen/jcsfuzz`), and `Middleware` answers `benzene:spec`, which `httpbinding.SpecHandler` serves
-  at `GET /benzene/spec` through the pipeline. Still to come with spec-0.4.0: the document as the
-  mesh register body (`descriptorHash` → `registrationHash`, heartbeats, the collector, the probe).
+  at `GET /benzene/spec` through the pipeline. The same document - with its deployment-side
+  `runtime`, `placement`, `profile` and `degraded`, outside both hashes - is the mesh register body
+  (`mesh.Announcer`).
 - `openapi` - OpenAPI 3.0 document generation (zero dependencies), the Go form of the OpenAPI half
-  of `Benzene.Schema.OpenApi`: `Generate(desc, opts...)` turns a `mesh.Descriptor` into an OpenAPI
-  document (each registered topic a POST operation - request body = the topic's request schema,
+  of `Benzene.Schema.OpenApi`: `Generate(doc, opts...)` turns the Contract Document into an OpenAPI
+  document (each request a POST operation - request body = the topic's request schema,
   responses = the response schema at 200 plus the framework failure vocabulary grouped by the HTTP
-  codes `httpstatus.ToHTTP` maps them to), and `Handler` serves it over GET. It reuses mesh's startup-derived schemas rather than deriving its own (no new
-  reflection), converting only JSON Schema's nullable type-array to OpenAPI 3.0's `nullable: true`.
+  codes `httpstatus.ToHTTP` maps them to), and `Handler` serves it over GET. The document is already
+  in the OpenAPI 3.0 dialect, so its components and `$ref`s carry over as they are (no new
+  reflection).
   A documentation view of the message contracts, not a claim every topic is HTTP-routed.
 - `asyncapi` - AsyncAPI 3.0 document generation (zero dependencies), the event-driven sibling of
   `openapi` and the other half of `Benzene.Schema.OpenApi`. `Generate(doc, opts...)` maps the
@@ -261,17 +265,19 @@ delivery order - just the current honest picture, kept up to date as things land
   just this module). Unlike SQS's event source mapping, a direct SNS-to-Lambda subscription has
   no batch/partial-failure mechanism - `Handler` instead returns a Go error for a failed
   notification, triggering AWS's own async-invoke retry.
-- `mesh` - Phases 1-2 of `work/archive/mesh.md`: the service `Descriptor` derived from the live
-  `Registry` (topics + startup-derived JSON Schemas + `descriptorHash`),
-  reserved-`benzene:mesh`-topic descriptor middleware, `TraceMiddleware` with W3C `traceparent`
+- `mesh` - the service side of the main repo's `docs/specification/mesh.md`: `Announcer` registers
+  the Contract Document (`benzene:mesh:register`) and heartbeats its `registrationHash` and
+  `serviceVersion` with `healthcheck.Run`'s aggregate, `TraceMiddleware` with W3C `traceparent`
   propagation (plus `WithTraceContext`, its outbound counterpart - the client decorator that
   forwards the current span's `traceparent` onto outbound calls, so a collector derives
   who-calls-whom without a declared edge), the `LogExporter`/`PushExporter` trace feeds, and the
   issue feed's emitter
   (`IssueMiddleware` + `PushIssueExporter`: source-side classification, SHA-256 fingerprint, delta
   aggregation, liveness flush - mesh.md §4.1) - every feed independent and optional.
-- `meshd` - Phases 3-4 of `work/archive/mesh.md`: the collector (register/heartbeat/traces/issues
-  ingest + `benzene:mesh:query:*` read models over an in-memory store with a bounded trace ring;
+- `meshd` - the collector of the main repo's `docs/specification/mesh.md` (register/heartbeat/
+  traces/issues ingest - a register body is a Contract Document, only `service` required, its
+  `requests` the consumers and `events` ∪ `sends` the providers, an absent or degraded member
+  unknown - + `benzene:mesh:query:*` read models over an in-memory store with a bounded trace ring;
   the `benzene:mesh:issues` feed merges failure signatures by fingerprint and flags the feed's
   absence only when a failure needs explaining, per mesh.md §4.1) and
   the Mesh View (one embedded self-contained page, no JS framework). The wire contract is
@@ -479,8 +485,8 @@ equivalent to port, not gaps in this port:
   generation-semantics contract. See `docs/codegen-client.md`.
 - ~~**`Benzene.Mesh.*`** - doesn't need a per-language port~~ - **superseded.** This entry
   predates `work/archive/mesh.md`. The mesh as actually designed is not just an HTTP
-  health-check aggregator: the service-side feeds (descriptor derivation from the live
-  `Registry`, trace emission) are necessarily per-language, and this port ships them (`mesh`,
+  health-check aggregator: the service-side feeds (Contract Document derivation from the live
+  `Registry`, registration, trace emission) are necessarily per-language, and this port ships them (`mesh`,
   `meshd` - see Done above). What stays true is that the *collector* is language-neutral: any
   implementation's collector can host any implementation's services over the shared
   `benzene:mesh:*` wire contract.

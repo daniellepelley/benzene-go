@@ -20,7 +20,7 @@ benzene-dotnet's `examples/K8sMesh/Mesh` **discovers** the three domain services
 `Benzene.Mesh.Discovery.Kubernetes` equivalent exists in this port, and building one from scratch
 would be new framework capability, not an example backfill. What this port has instead, fully
 built and platform-agnostic, is [`meshd`](../../meshd) — a **push**-based collector: services
-announce themselves and heartbeat/trace/report-issues to it over the wire envelope
+register their Contract Document and heartbeat/trace/report-issues to it over the wire envelope
 (`benzene:mesh:register`/`:heartbeat`/`:traces`/`:issues`), exactly the mechanism
 [`examples/mesh-helloworld`](../mesh-helloworld) already proves end to end.
 
@@ -83,16 +83,17 @@ endpoint:
   `POST /payments`, `POST /shipments`).
 - **Egress** — `orders`' `order:create` handler asks `payments` to `payment:take`, and
   `payments`' `payment:take` handler asks `shipping` to `shipment:book`. Each caller declares
-  that outbound call via `contract.RegisterSend` (`registerDomain` in `cmd/service/main.go`,
-  mesh.md §2.3) — that declared `consumes` entry is what makes the caller show up as the
-  downstream topic's consumer on the mesh's topic catalog (mesh.md §4), with no traffic required.
+  that outbound call via `contract.RegisterSend` (`registerDomain` in `cmd/service/main.go`) — that
+  declared send, in the Contract Document the service registers through `mesh.Announcer`, is what
+  makes the caller show up as the downstream topic's provider on the mesh's topic catalog
+  (mesh.md §4), with no traffic required.
   The `httpclient.Client` making the call is separately wrapped in `mesh.WithTraceContext`
   (propagates the invocation's span as a `traceparent` header, the same decorator
   `examples/mesh-helloworld`'s frontdoor → greeter hop uses) — that only lets the collector show
   the already-declared edge as *observed* (mesh.md §4.2), on top of, never instead of, the
   declared one. The target is the neighbour's in-cluster DNS name, injected as
   `DOWNSTREAM_MSG_URL` (e.g. `http://payments/benzene/invoke`); the terminal `shipping` service
-  has none, and registers no outbound record.
+  has none, and declares no send.
 
 Send an order into the front of the chain and watch it propagate (from a
 `kubectl -n benzene-mesh port-forward svc/orders 8081:80`, or directly against a service ELB on

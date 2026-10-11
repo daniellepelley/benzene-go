@@ -27,8 +27,8 @@ mean inventing a whole new discovery-source-plus-catalog-writer subsystem the `m
 packages don't have any abstraction for today, out of proportion for one example (the same
 reasoning `examples/k8s-mesh-helloworld` and `examples/aws-lambda-mesh` already apply to their own
 Kubernetes-API and AWS-Lambda-discovery equivalents). What this port has instead, fully built and
-platform-agnostic, is [`meshd`](../../meshd) — a **push**-based collector: services announce
-themselves and heartbeat/trace/report-issues to it over the wire envelope
+platform-agnostic, is [`meshd`](../../meshd) — a **push**-based collector: services register
+their Contract Document (`mesh.Announcer`) and heartbeat/trace/report-issues to it over the wire envelope
 (`benzene:mesh:register`/`:heartbeat`/`:traces`/`:issues`), exactly the mechanism both sibling
 examples already prove end to end.
 
@@ -147,15 +147,16 @@ Function folder, all sharing one `http.ServeMux` in `main.go`:
 
 Both columns above are **hard-coded contract, never inferred**. *Registers* is each service's
 `benzene.Register` calls (what it receives); *Publishes* is its `contract.RegisterEvent`/`contract.RegisterSend` records
-(what it sends, `mesh.md` §2.3), declared for the whole estate in one switch —
+(what it publishes and sends), declared for the whole estate in one switch —
 [`domain.RegisterOutbound`](domain/domain.go), called from every `cmd/<service>/main.go` beside
 that service's handler registration. The two together are the *only* source of the mesh's
-producer/consumer graph: the collector draws a topic's **providers** from the descriptors that
-registered a handler for it and its **consumers** from the descriptors that declared they send it,
-before a single message flows (`mesh.md` §4). Trace propagation
+producer/consumer graph: each service registers them in its Contract Document (`requests`,
+`events`, `sends`), and the collector draws a topic's **providers** from the documents that publish
+or send it and its **consumers** from the documents that handle it, before a single message flows
+(`mesh.md` §4). Trace propagation
 (`mesh.WithTraceContext`, wired on every outbound client here) only marks those declared edges as
 *observed* (§4.2) — it never adds one. Skip the outbound declaration and the catalog comes out
-half-drawn: every topic with providers, no consumers, and nothing in the UI to say why.
+half-drawn: every topic with consumers, no providers, and nothing in the UI to say why.
 
 Domain logic is deliberately trivial (see [`domain/domain.go`](domain/domain.go)) — the point of
 this example is proving the mesh's transport wiring, not rich business behaviour, matching every
@@ -166,7 +167,7 @@ sibling mesh example's own stance.
 | Path | What it is |
 |---|---|
 | `domain/` | the trivial handlers for all six services — the Go counterpart of benzene-dotnet's `*/Domain.cs`, using this topology's own topic names (`payment:take`/`shipment:book`, matching `examples/k8s-mesh-helloworld`'s naming; `order:placed`/`payment:captured`/`shipment:dispatched`, matching `examples/aws-lambda-mesh`'s naming) |
-| `meshapp/` | the shared composition root every one of the six service Functions is built from: registry/descriptor/Cloud-Service-Profile-route wiring, push fleet reporting (`App`, `meshapp.go`), and the two custom-handler HTTP adapters the mesh's own `/benzene/invoke` and Fleet View need (`httpadapters.go`) |
+| `meshapp/` | the shared composition root every one of the six service Functions is built from: registry/Contract-Document/Cloud-Service-Profile-route wiring, push fleet reporting (`App`, `meshapp.go`), and the two custom-handler HTTP adapters the mesh's own `/benzene/invoke` and Fleet View need (`httpadapters.go`) |
 | `cmd/orders/`, `cmd/payments/`, `cmd/shipping/`, `cmd/inventory/`, `cmd/notifications/`, `cmd/analytics/` | one Function App per service: `main.go` + `host.json` + `local.settings.json` + one folder per Function (matching `examples/azure-functions-helloworld`'s layout) |
 | `cmd/mesh/` | the mesh Function: wraps `meshd.Collector` directly (no `meshapp.App` — it's a thin collector wrapper, not a composite service, matching `examples/k8s-mesh-helloworld`'s and `examples/aws-lambda-mesh`'s own mesh binaries) |
 | `deploy/` | Terraform for the whole estate (storage, Consumption plan, 7 Function Apps, Service Bus, Event Hub, Event Grid) + `build.sh` to cross-compile and zip the seven custom handlers |

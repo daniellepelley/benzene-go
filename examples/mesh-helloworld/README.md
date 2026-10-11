@@ -12,9 +12,9 @@ go run .
 | Port | Service | Mesh feeds provisioned |
 |---|---|---|
 | `8090` | meshd | the Mesh View at `/benzene/fleet-ui` (`/` redirects there), the collector's envelope endpoint at `/benzene/invoke` |
-| `8080` | greeter (`greet`) | **all**: descriptor endpoint, registration, heartbeats, traces, issues |
+| `8080` | greeter (`greet`) | **all**: self-description (`benzene:spec`), registration, heartbeats, traces, issues |
 | `8081` | frontdoor (`welcome`, calls greeter) | **all** |
-| `8082` | legacy-portal (`legacy:relay`, calls greeter) | **traces + issues only** - no descriptor endpoint, no registration, no heartbeats |
+| `8082` | legacy-portal (`legacy:relay`, calls greeter) | **traces + issues only** - no self-description, no registration, no heartbeats |
 
 Open <http://localhost:8090/> and generate traffic:
 
@@ -25,31 +25,35 @@ curl -s -X POST localhost:8082/relay   -d '{"name":"Mesh"}'     # the same flow 
 
 ## What each part demonstrates
 
-The topic catalog (who provides/consumes what) is **declared** by each service's own descriptor;
+The topic catalog (who provides/consumes what) is **declared** by each service's registered
+Contract Document;
 health, traffic stats, and the observed-activity/drift signals layered on top are **derived**
 from what the running services actually do (spec §4, §4.2 - the main repo's 2026-08 revision):
 
-- **Descriptor + schemas + contract hash** (spec §2): each fully-meshed service's row comes
-  from its `benzene:mesh:register` descriptor - `topics` from the Registry (what it provides),
-  `consumes` from the OutboundRegistry (what it consumes, spec §2.3), request/response JSON
-  Schemas derived at startup from the registered types, and the `descriptorHash`. Fetch one
-  directly from the reserved `mesh` topic:
+- **One document: self-description and registration** (spec §1-§2): each fully-meshed service
+  derives its Contract Document once (`contract.Derive`) - `requests` from the Registry, `events`
+  and `sends` from its declarations (`contract.RegisterEvent`/`RegisterSend`), schemas derived at
+  startup from the registered types, `contractHash` and `registrationHash` - serves it on
+  `benzene:spec`, and registers that same document with the collector through `mesh.Announcer`.
+  Fetch one directly:
 
   ```
-  curl -s -X POST localhost:8080/benzene/invoke -d '{"topic":"benzene:mesh","headers":{},"body":""}'
+  curl -s localhost:8080/benzene/spec
+  curl -s -X POST localhost:8080/benzene/invoke -d '{"topic":"benzene:spec","headers":{},"body":""}'
   ```
 
 - **Health from heartbeats** (spec §5): greeter and frontdoor turn *healthy* on their
-  heartbeats (which carry the descriptor hash, so a redeployed instance with a changed
-  contract would show a hash mismatch in `benzene:mesh:query:service`).
-- **The consumer edge is declared, not trace-derived** (spec §2.3, §4): frontdoor's
-  `newService` call registers an outbound record for `greet` (`contract.RegisterSend` in
-  `main.go`) - that, and only that, is why `greet`'s topic row shows *consumers: frontdoor*,
+  heartbeats (which carry `serviceVersion` and the registered `registrationHash`, so a
+  redeployed instance with a changed contract would show a hash mismatch in
+  `benzene:mesh:query:service`).
+- **The provider edge is declared, not trace-derived** (spec §4): frontdoor's `newService` call
+  declares a send to `greet` (`contract.RegisterSend` in `main.go`) - that, and only that, is why
+  `greet`'s topic row shows *providers: frontdoor* (greeter, which handles it, is its consumer),
   and it would show it even with zero traffic. frontdoor's outbound client is separately
   wrapped in `mesh.WithTraceContext`, forwarding the current invocation's span as a
   `traceparent` header - but that propagation only lets the collector show the *already-declared*
   edge as observed (spec §4.2); it plays no part in putting the edge on the graph. legacy-portal
-  calls greeter exactly as much, but never registers, so it never appears as a consumer no
+  calls greeter exactly as much, but never registers, so it never appears as a provider no
   matter how much traffic it sends - a live demonstration that the graph is knowable before a
   single message flows, and that traffic alone can't add to it.
 - **Issue feed** (spec §4.1): every service also runs `mesh.IssueMiddleware` with a
@@ -62,10 +66,10 @@ from what the running services actually do (spec §4, §4.2 - the main repo's 20
   topic it didn't declare - legacy-portal is exempt from this too, since an anonymous service has
   no declared contract to diverge from.
 - **Degradation, live** (spec §6): legacy-portal provisions only the trace and issue feeds
-  (`provisionDescriptor=false` in `main.go`, never announces or heartbeats). It serves
+  (`provisionDescriptor=false` in `main.go`, never registers or heartbeats). It serves
   traffic like any other service, its calls still produce flows and add to `greet`'s
   invocation stats, and its row reads *reduced feeds: descriptor, health* - anonymous-but-live,
-  never an error, and never a consumer edge or a drift flag either (it has nothing registered
+  never an error, and never a provider edge or a drift flag either (it has nothing registered
   to derive either from).
 - **Drill-downs** - the same read models the view uses:
 
@@ -79,11 +83,11 @@ from what the running services actually do (spec §4, §4.2 - the main repo's 20
 
 `go test ./...` runs the full story over real HTTP loopback servers: collector + all three
 services, a meshed and a reduced cross-service call, then asserts the derived fleet (health,
-missing-feed markers on legacy-portal), the descriptor served on the reserved topic
-(schemas + hash), the declared consumer edge (frontdoor only - legacy-portal's traffic counts
+missing-feed markers on legacy-portal), the Contract Document served on `benzene:spec` (schemas
++ the registered `registrationHash`), the declared provider edge (frontdoor only - legacy-portal's traffic counts
 in the stats but leaves no edge or drift flag), the joined flows, and the parent-child span
 relationship via the trace drill-down. A second test points a fully-meshed service at a dead
-collector port and proves announce/heartbeat log-and-continue while the service keeps
+collector port and proves register/heartbeat log-and-continue while the service keeps
 serving - the degradation rule end to end. The mesh wire shapes themselves are additionally
 pinned by the vendored fixtures in `conformance/` (see `mesh-*.json`).
 

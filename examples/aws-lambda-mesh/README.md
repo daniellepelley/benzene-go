@@ -26,8 +26,8 @@ provider anywhere in this port, and no S3-backed mesh artifact/catalog store —
 from scratch would mean inventing a whole new discovery-source-plus-catalog-writer subsystem the
 `mesh`/`meshd` packages don't have any abstraction for today, which is out of scope for one
 example. What this port has instead, fully built and platform-agnostic, is
-[`meshd`](../../meshd) — a **push**-based collector: services announce themselves and
-heartbeat/trace/report-issues to it over the wire envelope
+[`meshd`](../../meshd) — a **push**-based collector: services register their Contract Document
+(`mesh.Announcer`) and heartbeat/trace/report-issues to it over the wire envelope
 (`benzene:mesh:register`/`:heartbeat`/`:traces`/`:issues`), exactly the mechanism
 [`examples/k8s-mesh-helloworld`](../k8s-mesh-helloworld) already proves end to end on Kubernetes.
 
@@ -54,7 +54,7 @@ three concrete implementation choices beyond what the Kubernetes example needed:
    To keep the demo deterministic, `meshapp.App.Handler` builds a **fresh** exporter pair per
    invocation (`BatchSize: 1`, so the one event from this invocation flushes immediately) and
    `Close()`s them — a synchronous, blocking flush — before the handler returns. Only the
-   `Pipeline` is rebuilt this way; the `Registry` and the derived `Descriptor` (schema derivation
+   `Pipeline` is rebuilt this way; the `Registry` and the derived Contract Document (schema derivation
    is startup-only, never on the dispatch path, matching every other package in this repo) are
    built once at cold start and reused for the life of the execution environment. See
    [`meshapp/meshapp.go`](meshapp/meshapp.go)'s package doc for the full reasoning.

@@ -159,7 +159,7 @@ The `Registry` also exposes read-only introspection, all backed by the same auth
 
 - `Has(topic Topic) bool` — whether a handler is registered for a topic.
 - `Topics() []Topic` — every registered topic, sorted by ID then Version. This is the enumeration
-  behind service self-description (the mesh `Descriptor`).
+  behind service self-description (the Contract Document `contract.Derive` builds).
 - `TopicTypes(topic Topic) (request, response reflect.Type, ok bool)` — the request/response types
   captured at registration, for self-description; `ok` is false for an unregistered topic.
 

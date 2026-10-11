@@ -60,8 +60,11 @@ alongside the shared spec.
   `internal/jcs` - the one implementation both the runtime and `codegen` use. `Middleware(doc)`
   answers `benzene:spec` (`{type?, format?}`, unsupported -> `not-implemented`,
   `WithDocumentType` for port extensions); `httpbinding.SpecHandler` is its `GET /benzene/spec`,
-  through the pipeline. It is a root package (not in `mesh`) so `mesh` can alias its
-  `OutboundRegistry` without an import cycle.
+  through the pipeline. The document also carries the deployment-side `runtime` (`"go"`), `placement`
+  (`Info.Placement`; `Derive` never detects it), `profile` (`Info.Profile`) and `degraded` (events and
+  sends when `outbound` is nil - pass `NewOutboundRegistry()` to assert "none"), all outside both
+  hashes, because the same document is the mesh register body. It is a root package (not in `mesh`)
+  so `mesh` and `meshd` can import it without a cycle.
 - `internal/jcs/` - hand-written RFC 8785 canonicalization (the root module stays dependency-free;
   ruling Q8 of the main repo's `work/self-description-design.md`). Rejects duplicate names, lone
   surrogates and non-finite numbers; differentially fuzzed against `github.com/gowebpki/jcs` in
@@ -288,51 +291,44 @@ alongside the shared spec.
   wires the **synchronous HTTP surface** of the profile from a registry: R1 (hosted pipeline), R2
   (registry handlers via `RouterMiddleware`), R3 (`healthcheck.Middleware` + a `HealthPath` route),
   R4 (`EnvelopeHandler` at `EnvelopePath`, `/benzene/invoke`), R5 (`contract.Derive` +
-  `contract.Middleware` for `benzene:spec`, and `httpbinding.SpecHandler` at `SpecPath`), R7 (default
-  `/benzene/*` paths), plus `mesh.Describe`+`mesh.Middleware` for the `benzene:mesh` descriptor - all
-  over one `ApplicationBuilder`. Pipeline order is self-description/health interception before
-  `RouterMiddleware` so a reserved topic never falls through. Returns `(*Service, error)` - the
-  derivation error (a component-name collision) fails before anything is served - with the
-  `http.Handler`, the `Contract` document, the `Descriptor`, the `Builder`, and a **wiring**
+  `contract.Middleware` for `benzene:spec`, and `httpbinding.SpecHandler` at `SpecPath` - also R6's
+  self-description), R7 (default `/benzene/*` paths) - all over one `ApplicationBuilder`. Pipeline
+  order is self-description/health interception before `RouterMiddleware` so a reserved topic never
+  falls through. Returns `(*Service, error)` - the derivation error (a component-name collision)
+  fails before anything is served - with the `http.Handler`, the `Contract` document (placement
+  detected unless `WithPlacement`, the report as its `profile`), the `Builder`, and a **wiring**
   `ProfileReport` - a full **R1-R8** checklist
   (`Requirement{ID,Name,Satisfied,Detail}`, `Satisfied()`/`Unsatisfied()`). Crucially it is **honest**:
-  `New` deliberately does not wire R6's outbound feeds (register/heartbeat/traces need a collector +
-  push-exporter lifecycle the app owns) or R8 (trace propagation - `mesh.TraceMiddleware` inbound +
+  `New` deliberately does not wire R6's three feeds (register/heartbeat/traces need a collector +
+  `mesh.Announcer`/push-exporter lifecycle the app owns) or R8 (trace propagation - `mesh.TraceMiddleware` inbound +
   the client `WithTraceContext` outbound), so `Satisfied()` is **false** for a `New`-only build
   and `Unsatisfied()` is the exact to-do list to reach full conformance (mirroring .NET's
   `CloudServiceProfileReport` evaluating all of R1-R8, not just the HTTP surface). `WithoutDescriptor()`
-  additionally drops R5/R6 per §4 exposure control. It composes the existing pieces - a thin assembler;
-  don't reimplement descriptor/health/spec logic here, and don't let the report over-claim conformance.
-- `mesh/` - originally Phases 1-2 of this repo's own `work/archive/mesh.md`, now the main
-  repo's `docs/specification/mesh.md` §§1-3: service `Descriptor` derived from the `Registry`
-  (`topics` - what the service provides - + JSON Schemas derived at startup from the
-  `TReq`/`TRes` types `Register` captures) AND from the `OutboundRegistry`
-  (`produces` - what the service puts on the wire, mesh.md §2.3: its events and sends, declared
-  with `contract.RegisterEvent`/`RegisterSend` - `mesh.OutboundRegistry` is a deprecated alias of
-  `contract.OutboundRegistry`; an event or a one-way send gets the unconstrained `{}`
-  responseSchema), plus the contract `descriptorHash` (now sensitive to both lists),
-  reserved-`benzene:mesh`-topic descriptor middleware, trace middleware + log exporter, and the
-  issue feed's emitter half (`IssueMiddleware` + `PushIssueExporter`: source-side dedup by the
-  normative §4.1 classification + SHA-256 fingerprint, delta counts, liveness flush;
-  `ClassificationContractDrift` is exported for meshd's collector-derived §4.2 drift issues).
-  Schema derivation is the one sanctioned use of `reflect` - startup-only, never on the
-  dispatch path. Every feed is independent and optional - degradation (nil registry, nil
-  outbound registry, nil or failing exporter, unprovisioned descriptor endpoint) must reduce
-  the mesh, never break the service. The `benzene:mesh:*` wire topics and shapes (wire.go) are
-  shared with the
-  collector and promoted to the main repo's spec (`docs/specification/mesh.md` there, now
-  the normative text; `work/archive/mesh-spec-draft.md` is the historical draft), pinned by
-  the vendored `mesh-*.json` fixtures in `conformance/`. The descriptor is no longer what
-  `/benzene/spec` serves: R5 is the `contract` package's Contract Document (spec-0.3.0); the
-  descriptor stays on `benzene:mesh` until spec-0.4.0 folds it into that document.
+  drops the self-description (R5, R6's `benzene:spec`) per §4 exposure control. It composes the
+  existing pieces - a thin assembler; don't reimplement health/spec logic here, and don't let the
+  report over-claim conformance.
+- `mesh/` - the service side of the main repo's `docs/specification/mesh.md`. There is no mesh
+  self-description: the service describes itself once, with the `contract` package's Contract
+  Document on `benzene:spec`, and that document is the register body (spec-0.4.0 deleted the
+  `benzene:mesh` topic, the ServiceDescriptor and `descriptorHash`). `Announcer` (`announce.go`)
+  registers `Registration(doc)` (the document with a detected placement when it has none) over any
+  `Sender` and heartbeats `NewHeartbeat` - `serviceVersion` and the registered `registrationHash`,
+  with `healthcheck.Run`'s aggregate - retrying registration while the collector comes up; a nil
+  `Sender` is a nil, no-op `Announcer`. Also the trace middleware + log/push exporters, the outbound
+  `WithTraceContext`, and the issue feed's emitter half (`IssueMiddleware` + `PushIssueExporter`:
+  source-side dedup by the normative §4.1 classification + SHA-256 fingerprint, delta counts,
+  liveness flush; `ClassificationContractDrift` is exported for meshd's collector-derived §4.2 drift
+  issues). Every feed is independent and optional - degradation (nil sender, nil or failing
+  exporter, unreachable collector) must reduce the mesh, never break the service. The
+  `benzene:mesh:*` wire topics and shapes (wire.go) are shared with the collector and pinned by the
+  vendored `mesh-*.json` fixtures in `conformance/`.
 - `openapi/` - OpenAPI 3.0 document generation (zero-dep), the Go form of `Benzene.Schema.OpenApi`.
-  `Generate(desc, opts...)` turns a `mesh.Descriptor` into an OpenAPI 3.0 document: each registered
-  topic becomes a POST operation whose request body is the topic's request schema and whose
+  `Generate(doc contract.Document, opts...)` turns the Contract Document into an OpenAPI 3.0 document:
+  each request becomes a POST operation whose request body is the topic's request schema and whose
   responses carry the response schema (200) plus the framework failure vocabulary grouped by the
-  HTTP codes `httpstatus.ToHTTP` maps them to. It **reuses mesh's derived schemas** (the one
-  sanctioned reflection path) rather than deriving its own - the only reshaping is JSON Schema's
-  nullable type-array (`["string","null"]`) into OpenAPI 3.0's `nullable: true`, handled for both
-  the `[]string` (straight from `mesh.Describe`) and `[]any` (JSON-round-tripped) forms. `Handler`
+  HTTP codes `httpstatus.ToHTTP` maps them to. It derives nothing: the document is already in the
+  OpenAPI 3.0 dialect, so its `components.schemas` and `$ref`s carry over as they are (deep-copied,
+  reserved entries skipped). `Handler`
   serves the doc over a plain GET - an industry-standard view beside the Contract Document R5
   serves. A documentation view
   of the message contracts, not a claim every topic is HTTP-routed.
@@ -350,22 +346,27 @@ alongside the shared spec.
   `{"type":"null"}`), deep-copied so `Generate` never mutates the document. `Handler` serves it over
   a plain GET; `contract.WithDocumentType("asyncapi", "json", asyncapi.Generate(doc))` serves it on
   `benzene:spec` instead.
-- `meshd/` - the collector (main repo's `docs/specification/mesh.md` §4-§6, originally
-  Phases 3-4 of this repo's own `work/archive/mesh.md`): an ordinary Benzene service
+- `meshd/` - the collector (main repo's `docs/specification/mesh.md` §4-§6): an ordinary Benzene service
   (register/heartbeat/traces/issues ingest + `benzene:mesh:query:*` read models over an
   in-memory store with a bounded trace ring; the `benzene:mesh:issues` feed of mesh.md §4.1
   merges failure signatures by fingerprint and surfaces them on the fleet view) and the Mesh
   View (an embedded, self-contained HTML page - no JS framework, per the zero-dependency
-  stance). Per the main repo's 2026-08 revision: the producer/consumer graph (providers AND
-  consumers) is built from the latest registered ServiceDescriptor's `topics`/`consumes`
-  alone (`store.register`) - it is fully declared, present for a service with zero traffic,
-  and a redeploy replaces both edge sets wholesale. Trace parentage (`store.addEvents`) never
+  stance). A register body is a Contract Document read loosely (`newRegistration`): only `service`
+  is required - no dialect check, schemas never interpreted - and the raw body is kept for the
+  service view. The producer/consumer graph is built from the latest registration alone
+  (`store.register`): `requests` are the consumers, `events` ∪ `sends` the providers, `benzene:`
+  entries ignored; it is fully declared, present for a service with zero traffic, and a redeploy
+  replaces both edge sets wholesale. A member absent from the body, or named in its `degraded`, is
+  **unknown**: it declares no edge and is never the ground for a drift issue. The carried
+  `registrationHash` is trusted, and a heartbeat's is compared with the service's one registration -
+  meshd keys by `service` and does not implement Service Versions. Trace parentage (`store.addEvents`) never
   touches that graph; it instead feeds invocation stats plus two additive, observed-only
   signals (mesh.md §4.2): per-declared-edge last-observed-at (`ProviderActivity`/
   `ConsumerActivity` on `TopicSummary` - "Unobserved", a decommission candidate, not a fact)
   and `contract-drift` issues for a *registered* service's traffic on a topic it didn't
-  declare (`checkProviderDrift`/`checkConsumerDrift` - an anonymous/unregistered service is
-  never flagged, it has no contract to diverge from). It must accept partial fleets: a
+  declare (`checkHandlerDrift`/`checkSenderDrift` - an anonymous/unregistered service, an unknown
+  member and a reserved `benzene:` topic are never flagged: there is no declaration to diverge
+  from). It must accept partial fleets: a
   missing feed renders a service as reduced (`missingFeeds`), never fails ingestion or
   queries. There is deliberately **no**
   Kubernetes API service-discovery counterpart to .NET's `Benzene.Mesh.Discovery.Kubernetes`
