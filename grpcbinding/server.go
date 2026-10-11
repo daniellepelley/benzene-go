@@ -197,8 +197,9 @@ func resultError(code codes.Code, resp wire.Response) error {
 
 // fieldViolations maps a failed result's structured errors (§1.3, carried in the problem document
 // this dispatch produced) onto google.rpc.BadRequest field violations: message ->
-// FieldViolation.Description, field -> FieldViolation.Field, left unset rather than empty when the
-// error is not scoped to a field. Nothing else crosses: the spec does not say where an error's
+// FieldViolation.Description, field -> FieldViolation.Field converted from the §1.3 JSON Pointer to
+// gRPC's dotted path (dottedPath), left unset rather than empty when the error is not scoped to a
+// field. Nothing else crosses: the spec does not say where an error's
 // `code` goes, and a port inventing a home for it is how three ports end up with three shapes.
 //
 // A body that is not a problem document at all (or one with no errors member) yields no
@@ -213,11 +214,49 @@ func fieldViolations(resp wire.Response) []*errdetails.BadRequest_FieldViolation
 	violations := make([]*errdetails.BadRequest_FieldViolation, 0, len(payload.Errors))
 	for _, item := range payload.Errors {
 		violations = append(violations, &errdetails.BadRequest_FieldViolation{
-			Field:       item.Field,
+			Field:       dottedPath(item.Field),
 			Description: item.Message,
 		})
 	}
 	return violations
+}
+
+// dottedPath converts an errors[].field JSON Pointer (wire-contracts.md §1.3) to the dotted path
+// google.rpc.BadRequest's FieldViolation.field carries (§4.2): the pointer's reference tokens,
+// unescaped per RFC 6901 ("~1" is "/", "~0" is "~"), joined with ".", and a token made only of
+// decimal digits written as an index, "[n]" - so "/items/0/sku" becomes "items[0].sku". A field that
+// is not a pointer (it does not start with "/", e.g. one written before fields were pointers) is
+// passed through verbatim rather than guessed at, and an empty field stays empty.
+func dottedPath(pointer string) string {
+	if !strings.HasPrefix(pointer, "/") {
+		return pointer
+	}
+	var b strings.Builder
+	for _, token := range strings.Split(pointer[1:], "/") {
+		token = strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~")
+		if isIndex(token) {
+			b.WriteString("[" + token + "]")
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteByte('.')
+		}
+		b.WriteString(token)
+	}
+	return b.String()
+}
+
+// isIndex reports whether token is made only of decimal digits (and is not empty).
+func isIndex(token string) bool {
+	if token == "" {
+		return false
+	}
+	for _, r := range token {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // cancellationError reports the gRPC status a cancelled or deadline-exceeded context maps

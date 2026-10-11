@@ -464,7 +464,7 @@ func TestUnaryServerInterceptor_StructuredErrorsBecomeBadRequestDetails(t *testi
 	if len(violations) != 2 {
 		t.Fatalf("FieldViolations = %v, want one per error", violations)
 	}
-	wantFields := []string{"/name", "/greeting"}
+	wantFields := []string{"name", "greeting"} // the handler's pointers, as gRPC's dotted paths (§4.2)
 	wantDescriptions := []string{"name is required", "greeting is too long"}
 	for i, violation := range violations {
 		if violation.GetField() != wantFields[i] {
@@ -524,6 +524,44 @@ func TestUnaryServerInterceptor_SuccessAttachesNoErrorDetails(t *testing.T) {
 	}
 }
 
+func TestDottedPath(t *testing.T) {
+	tests := []struct{ pointer, want string }{
+		{"/items/0/sku", "items[0].sku"}, // wire-contracts.md §4.2's own example
+		{"/name", "name"},
+		{"/0", "[0]"},
+		{"/matrix/0/1", "matrix[0][1]"},
+		{"/a~1b/c~0d", "a/b.c~d"}, // unescaped per RFC 6901
+		{"/v2x/sku", "v2x.sku"},   // only digit-only tokens are indexes
+		{"", ""},
+		{"/a//b", "a..b"}, // an empty property name is a token, never an index
+		{"Name", "Name"},  // not a pointer: passed through verbatim
+	}
+	for _, tt := range tests {
+		if got := dottedPath(tt.pointer); got != tt.want {
+			t.Errorf("dottedPath(%q) = %q, want %q", tt.pointer, got, tt.want)
+		}
+	}
+}
+
+func TestPointerPath(t *testing.T) {
+	tests := []struct{ dotted, want string }{
+		{"items[0].sku", "/items/0/sku"},
+		{"name", "/name"},
+		{"[0]", "/0"},
+		{"matrix[0][1]", "/matrix/0/1"},
+		{"a~b", "/a~0b"},
+		{"a[b", "/a[b"}, // an unclosed bracket is part of the name
+		{"[b", "/[b"},
+		{"", ""},
+		{"/name", "/name"}, // already a pointer: kept
+	}
+	for _, tt := range tests {
+		if got := pointerPath(tt.dotted); got != tt.want {
+			t.Errorf("pointerPath(%q) = %q, want %q", tt.dotted, got, tt.want)
+		}
+	}
+}
+
 func TestFieldViolations(t *testing.T) {
 	t.Run("one violation per structured error", func(t *testing.T) {
 		resp := wire.Response{StatusCode: "validation-error", Body: `{"benzeneStatus":"validation-error","detail":"name is required","errors":[{"message":"name is required","field":"/name","code":"required"}]}`}
@@ -531,8 +569,8 @@ func TestFieldViolations(t *testing.T) {
 		if len(got) != 1 {
 			t.Fatalf("fieldViolations() = %v, want one", got)
 		}
-		if got[0].GetField() != "/name" || got[0].GetDescription() != "name is required" {
-			t.Errorf("fieldViolations()[0] = %v, want field /name and the message as description", got[0])
+		if got[0].GetField() != "name" || got[0].GetDescription() != "name is required" {
+			t.Errorf("fieldViolations()[0] = %v, want field name (the pointer /name, dotted) and the message as description", got[0])
 		}
 	})
 

@@ -20,6 +20,7 @@ import (
 	"github.com/daniellepelley/benzene-go/envelope"
 	"github.com/daniellepelley/benzene-go/grpcstatus"
 	"github.com/daniellepelley/benzene-go/httpstatus"
+	"github.com/daniellepelley/benzene-go/validation"
 	"github.com/daniellepelley/benzene-go/wire"
 )
 
@@ -228,6 +229,42 @@ func conformanceVersioned(version string) benzene.Handler[struct{}, conformanceV
 	}
 }
 
+// conformanceValidateRequest / conformanceValidate are the canonical `conformance:validate` handler,
+// validated through this port's own validation integration (validation.Validated) rather than by
+// hand in the handler: name non-empty, and every items[].sku present and non-empty. The validator
+// names each offending value with validation.Pointer over the request's json tags, which is what
+// the validation-error-fields-are-json-pointers case pins (wire-contracts.md §1.3).
+type conformanceValidateRequest struct {
+	Name  string `json:"name"`
+	Items []struct {
+		SKU string `json:"sku"`
+	} `json:"items"`
+}
+
+var conformanceValidate = validation.Validated(
+	validation.ValidatorFunc[conformanceValidateRequest](func(req conformanceValidateRequest) []benzene.Error {
+		var problems []benzene.Error
+		if req.Name == "" {
+			problems = append(problems, benzene.Error{Message: "name must not be empty", Field: validation.Pointer("name"), Code: "required"})
+		}
+		for i, item := range req.Items {
+			if item.SKU == "" {
+				problems = append(problems, benzene.Error{Message: "sku must not be empty", Field: validation.Pointer("items", i, "sku"), Code: "required"})
+			}
+		}
+		return problems
+	}),
+	func(context.Context, conformanceValidateRequest) benzene.Result[struct{}] {
+		return benzene.Ok(struct{}{})
+	},
+)
+
+// supportedCapabilities are the "requires" values (conformance/README.md) this port implements, so
+// the cases conditional on them run. A case requiring anything else is skipped, saying why.
+var supportedCapabilities = map[string]bool{
+	"validation": true, // validation.Validated + validation.Pointer run conformance:validate
+}
+
 // canonicalHandlerRegistry registers exactly the handlers conformance/README.md's "Canonical
 // handlers" table names, and nothing else - cases targeting any other topic are asserting the
 // router's not-found behavior, so an extra registration here would quietly weaken them.
@@ -239,31 +276,43 @@ func canonicalHandlerRegistry(t *testing.T) *benzene.Registry {
 	must(t, benzene.Register(registry, benzene.NewTopic("conformance:problem"), benzene.Handler[conformanceProblemRequest, struct{}](conformanceProblemHandler)))
 	must(t, benzene.Register(registry, benzene.NewTopic("conformance:versioned").WithVersion("v1"), conformanceVersioned("v1"), benzene.AsDefault()))
 	must(t, benzene.Register(registry, benzene.NewTopic("conformance:versioned").WithVersion("v2"), conformanceVersioned("v2")))
+	must(t, benzene.Register(registry, benzene.NewTopic("conformance:validate"), conformanceValidate))
 	return registry
 }
 
 type envelopeCaseFixture struct {
-	Cases []struct {
-		Name    string `json:"name"`
-		Request struct {
-			Topic   string            `json:"topic"`
-			Headers map[string]string `json:"headers"`
-			Body    string            `json:"body"`
-		} `json:"request"`
-		Expected struct {
-			StatusCode string            `json:"statusCode"`
-			Body       map[string]any    `json:"body,omitempty"`
-			Headers    map[string]string `json:"headers,omitempty"`
-			// IsSuccessful, when the fixture states it, is checked exactly against the response
-			// envelope's own member (§1.2) - not inferred from the status.
-			IsSuccessful *bool `json:"isSuccessful,omitempty"`
-			// BodyExclude names members that MUST NOT appear in the parsed body. It is how the
-			// fixtures pin the withdrawal of the old `status`-as-a-string member (§1.3): asserting
-			// the new members are present would otherwise pass even for a writer that also still
-			// emits the old one.
-			BodyExclude []string `json:"bodyExclude,omitempty"`
-		} `json:"expected"`
-	} `json:"cases"`
+	Cases []envelopeCase `json:"cases"`
+}
+
+type envelopeCase struct {
+	Name string `json:"name"`
+	// Requires names the capability a conditional case applies to (conformance/README.md).
+	Requires string `json:"requires"`
+	Request  struct {
+		Topic   string            `json:"topic"`
+		Headers map[string]string `json:"headers"`
+		Body    string            `json:"body"`
+	} `json:"request"`
+	Expected envelopeExpectation `json:"expected"`
+}
+
+// envelopeExpectation is the envelope case format's "expected" (conformance/README.md), shared by
+// envelope-cases.json, problem-details-cases.json's envelopeCases and httpRules.envelopeEndpoint.
+type envelopeExpectation struct {
+	StatusCode string            `json:"statusCode"`
+	Body       map[string]any    `json:"body,omitempty"`
+	Headers    map[string]string `json:"headers,omitempty"`
+	// IsSuccessful, when the fixture states it, is checked exactly against the response
+	// envelope's own member (§1.2) - not inferred from the status.
+	IsSuccessful *bool `json:"isSuccessful,omitempty"`
+	// BodyExclude names members that MUST NOT appear in the parsed body. It is how the
+	// fixtures pin the withdrawal of the old `status`-as-a-string member (§1.3): asserting
+	// the new members are present would otherwise pass even for a writer that also still
+	// emits the old one.
+	BodyExclude []string `json:"bodyExclude,omitempty"`
+	// ErrorFields, when present, is the set of errors[].field values the problem document must
+	// carry: every error has a field, and the set of them equals this list.
+	ErrorFields []string `json:"errorFields,omitempty"`
 }
 
 func TestConformance_EnvelopeCases(t *testing.T) {
@@ -285,55 +334,92 @@ func runEnvelopeCases(t *testing.T, fixture envelopeCaseFixture) {
 
 	for _, c := range fixture.Cases {
 		t.Run(c.Name, func(t *testing.T) {
+			if c.Requires != "" && !supportedCapabilities[c.Requires] {
+				t.Skipf("requires %q, which this port does not implement (conformance/README.md)", c.Requires)
+			}
 			resp := envelope.Dispatch(context.Background(), pipeline, container, wire.Request{
 				Topic:   c.Request.Topic,
 				Headers: c.Request.Headers,
 				Body:    c.Request.Body,
 			})
-
-			if resp.StatusCode != c.Expected.StatusCode {
-				t.Errorf("statusCode = %q, want %q", resp.StatusCode, c.Expected.StatusCode)
-			}
-
-			if c.Expected.Body != nil {
-				var actualBody map[string]any
-				if resp.Body != "" {
-					if err := json.Unmarshal([]byte(resp.Body), &actualBody); err != nil {
-						t.Fatalf("response body is not valid JSON: %v; body = %s", err, resp.Body)
-					}
-				}
-				for _, msg := range subsetMismatches(c.Expected.Body, actualBody) {
-					t.Errorf("body %s", msg)
-				}
-				for _, member := range c.Expected.BodyExclude {
-					if _, present := actualBody[member]; present {
-						t.Errorf("body must not contain %q: %s", member, resp.Body)
-					}
-				}
-			}
-
-			if c.Expected.IsSuccessful != nil {
-				if resp.IsSuccessful == nil {
-					t.Errorf("isSuccessful is absent, want %v stated outright (§1.2)", *c.Expected.IsSuccessful)
-				} else if *resp.IsSuccessful != *c.Expected.IsSuccessful {
-					t.Errorf("isSuccessful = %v, want %v", *resp.IsSuccessful, *c.Expected.IsSuccessful)
-				}
-			}
-
-			if c.Expected.Headers != nil {
-				actualHeaders := lowercaseKeys(resp.Headers)
-				for key, want := range c.Expected.Headers {
-					got, ok := actualHeaders[key]
-					if !ok {
-						t.Errorf("headers: missing key %q", key)
-						continue
-					}
-					if got != want {
-						t.Errorf("headers[%q] = %q, want %q", key, got, want)
-					}
-				}
-			}
+			checkEnvelope(t, resp, c.Expected)
 		})
+	}
+}
+
+// checkEnvelope applies one envelope case expectation to a response envelope.
+func checkEnvelope(t *testing.T, resp wire.Response, expected envelopeExpectation) {
+	t.Helper()
+
+	if resp.StatusCode != expected.StatusCode {
+		t.Errorf("statusCode = %q, want %q", resp.StatusCode, expected.StatusCode)
+	}
+
+	if expected.Body != nil || expected.ErrorFields != nil {
+		var actualBody map[string]any
+		if resp.Body != "" {
+			if err := json.Unmarshal([]byte(resp.Body), &actualBody); err != nil {
+				t.Fatalf("response body is not valid JSON: %v; body = %s", err, resp.Body)
+			}
+		}
+		for _, msg := range subsetMismatches(expected.Body, actualBody) {
+			t.Errorf("body %s", msg)
+		}
+		for _, member := range expected.BodyExclude {
+			if _, present := actualBody[member]; present {
+				t.Errorf("body must not contain %q: %s", member, resp.Body)
+			}
+		}
+		if expected.ErrorFields != nil {
+			checkErrorFields(t, actualBody, expected.ErrorFields)
+		}
+	}
+
+	if expected.IsSuccessful != nil {
+		if resp.IsSuccessful == nil {
+			t.Errorf("isSuccessful is absent, want %v stated outright (§1.2)", *expected.IsSuccessful)
+		} else if *resp.IsSuccessful != *expected.IsSuccessful {
+			t.Errorf("isSuccessful = %v, want %v", *resp.IsSuccessful, *expected.IsSuccessful)
+		}
+	}
+
+	if expected.Headers != nil {
+		actualHeaders := lowercaseKeys(resp.Headers)
+		for key, want := range expected.Headers {
+			got, ok := actualHeaders[key]
+			if !ok {
+				t.Errorf("headers: missing key %q", key)
+				continue
+			}
+			if got != want {
+				t.Errorf("headers[%q] = %q, want %q", key, got, want)
+			}
+		}
+	}
+}
+
+// checkErrorFields is expected.errorFields (conformance/README.md): every error in the problem
+// document carries a field, and the set of fields equals want - order, messages and codes are the
+// validation library's own and are not asserted.
+func checkErrorFields(t *testing.T, problem map[string]any, want []string) {
+	t.Helper()
+	errs, _ := problem["errors"].([]any)
+	got := make(map[string]bool, len(errs))
+	for i, item := range errs {
+		entry, _ := item.(map[string]any)
+		field, ok := entry["field"].(string)
+		if !ok || field == "" {
+			t.Errorf("errors[%d] carries no field: %v", i, item)
+			continue
+		}
+		got[field] = true
+	}
+	wanted := make(map[string]bool, len(want))
+	for _, field := range want {
+		wanted[field] = true
+	}
+	if !reflect.DeepEqual(got, wanted) {
+		t.Errorf("error fields = %v, want the set %v", got, wanted)
 	}
 }
 

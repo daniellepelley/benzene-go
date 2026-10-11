@@ -3,6 +3,7 @@ package grpcbinding
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/client"
@@ -103,7 +104,9 @@ func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[stri
 // recoverErrors rebuilds the failed result's structured errors from the gRPC error model
 // (wire-contracts.md §4.2): one benzene.Error per google.rpc.BadRequest FieldViolation carried in
 // the "grpc-status-details-bin" trailer, Description -> Message and Field -> Field, so the field a
-// message belongs to survives the hop instead of being flattened into prose.
+// message belongs to survives the hop instead of being flattened into prose. The violation's dotted
+// path is turned back into the JSON Pointer errors[].field is everywhere else (§1.3; pointerPath),
+// so a caller sees one form of field whichever transport the failure came over.
 //
 // A peer that attaches no such details - any non-Benzene gRPC server, or a Benzene one predating
 // this - falls back to the single message-only error built from the status message, which is
@@ -121,7 +124,7 @@ func recoverErrors(status *grpcstatuspkg.Status, detail string) []benzene.Error 
 		for _, violation := range badRequest.GetFieldViolations() {
 			errors = append(errors, benzene.Error{
 				Message: violation.GetDescription(),
-				Field:   violation.GetField(),
+				Field:   pointerPath(violation.GetField()),
 			})
 		}
 		return errors
@@ -139,3 +142,41 @@ func recoverStatus(code int, trailer metadata.MD) benzene.Status {
 }
 
 var _ client.Sender = (*Client)(nil)
+
+// pointerPath is dottedPath's inverse: a FieldViolation's dotted path ("items[0].sku") as the JSON
+// Pointer ("/items/0/sku") errors[].field carries (wire-contracts.md §1.3) - "." separates
+// properties, "[n]" is an index, and each token is escaped per RFC 6901. The spec states only the
+// server's direction; this is the client's reading of it, so a field a Benzene server sent round
+// trips exactly. A property name that itself contains "." or "[" cannot be told apart once dotted.
+// An empty path stays empty, and one that is already a pointer (it starts with "/" - a peer that
+// sent the §1.3 form unconverted) is kept as it is.
+func pointerPath(dotted string) string {
+	if dotted == "" || strings.HasPrefix(dotted, "/") {
+		return dotted
+	}
+	var tokens []string
+	for _, part := range strings.Split(dotted, ".") {
+		name, rest, _ := strings.Cut(part, "[")
+		if name != "" || rest == "" {
+			tokens = append(tokens, name)
+		}
+		for rest != "" {
+			index, after, ok := strings.Cut(rest, "]")
+			if !ok { // not an index after all: keep the text verbatim as part of the name
+				if len(tokens) == 0 {
+					tokens = append(tokens, "")
+				}
+				tokens[len(tokens)-1] += "[" + rest
+				break
+			}
+			tokens = append(tokens, index)
+			rest = strings.TrimPrefix(after, "[")
+		}
+	}
+	var b strings.Builder
+	for _, token := range tokens {
+		b.WriteByte('/')
+		b.WriteString(strings.ReplaceAll(strings.ReplaceAll(token, "~", "~0"), "/", "~1"))
+	}
+	return b.String()
+}

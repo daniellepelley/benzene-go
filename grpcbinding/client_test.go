@@ -325,14 +325,14 @@ func TestClient_Send_ForeignPeerWithoutDetailsIsUnaffected(t *testing.T) {
 func TestRecoverErrors(t *testing.T) {
 	t.Run("field violations become structured errors", func(t *testing.T) {
 		status, err := grpcstatuspkg.New(codes.InvalidArgument, "name is required").WithDetails(&errdetails.BadRequest{
-			FieldViolations: []*errdetails.BadRequest_FieldViolation{{Field: "/name", Description: "name is required"}},
+			FieldViolations: []*errdetails.BadRequest_FieldViolation{{Field: "items[0].sku", Description: "sku is required"}},
 		})
 		if err != nil {
 			t.Fatalf("WithDetails() error = %v", err)
 		}
-		got := recoverErrors(status, "name is required")
-		if len(got) != 1 || got[0].Message != "name is required" || got[0].Field != "/name" {
-			t.Errorf("recoverErrors() = %v, want one error carrying the field", got)
+		got := recoverErrors(status, "sku is required")
+		if len(got) != 1 || got[0].Message != "sku is required" || got[0].Field != "/items/0/sku" {
+			t.Errorf("recoverErrors() = %v, want one error carrying the field as a JSON Pointer", got)
 		}
 	})
 

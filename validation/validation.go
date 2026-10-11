@@ -21,14 +21,23 @@
 //
 // A validator reports benzene.Error values, so it can say WHICH field failed and WHICH rule
 // rejected it, and both reach the caller's problem document (wire-contracts.md §1.3) rather than
-// being flattened into prose the caller has to parse. A validator with nothing to add beyond the
-// message wraps a plain messages function with Messages:
+// being flattened into prose the caller has to parse. The Field is an RFC 6901 JSON Pointer into
+// the request as the caller sent it - JSON names (the struct's `json` tags), not Go field names -
+// so a caller can resolve it against its own body; Pointer builds one:
+//
+//	benzene.Error{Message: "sku is required", Field: validation.Pointer("items", i, "sku"), Code: "required"}
+//
+// A rule that cannot be pinned to one value (a cross-field rule, a rule on the whole request) leaves
+// Field empty rather than inventing one. A validator with nothing to add beyond the message wraps a
+// plain messages function with Messages:
 //
 //	validation.Validated(validation.Messages(orderMessages), createOrderHandler)
 package validation
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	benzene "github.com/daniellepelley/benzene-go"
 )
@@ -38,7 +47,8 @@ import (
 //
 // The errors are structured (benzene.Error): Message is the only required member, and a validator
 // that knows the Field the value came from and the Code of the rule that rejected it should say so -
-// both travel to the caller intact. Messages adapts a validator that only has messages.
+// both travel to the caller intact. Field is a JSON Pointer built with Pointer (wire-contracts.md
+// §1.3). Messages adapts a validator that only has messages.
 type Validator[T any] interface {
 	Validate(request T) []benzene.Error
 }
@@ -105,3 +115,28 @@ func Combine[T any](validators ...Validator[T]) Validator[T] {
 		return errors
 	})
 }
+
+// Pointer builds the RFC 6901 JSON Pointer a validation error's Field carries (wire-contracts.md
+// §1.3): one reference token per argument, addressing the offending value in the request's JSON form
+// - so the tokens are the names the service's JSON encoding writes (the struct's `json` tags), never
+// the Go field names, and an array element is its index:
+//
+//	validation.Pointer("name")             // "/name"
+//	validation.Pointer("items", 0, "sku")  // "/items/0/sku"
+//
+// A string token is escaped per RFC 6901 ("~" becomes "~0", "/" becomes "~1"); any other token is
+// formatted with fmt.Sprint, which writes an integer index in decimal. With no tokens it returns "",
+// the pointer to the whole request - but a rule on the whole request should leave Field empty
+// instead.
+func Pointer(tokens ...any) string {
+	var b strings.Builder
+	for _, token := range tokens {
+		b.WriteByte('/')
+		b.WriteString(pointerEscaper.Replace(fmt.Sprint(token)))
+	}
+	return b.String()
+}
+
+// pointerEscaper applies RFC 6901 §3's escaping: "~" first (as "~0"), so the "~1" written for "/"
+// is never re-escaped - strings.Replacer does both in one left-to-right pass.
+var pointerEscaper = strings.NewReplacer("~", "~0", "/", "~1")

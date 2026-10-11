@@ -8,8 +8,8 @@ import (
 )
 
 type createOrder struct {
-	ID     string
-	Amount float64
+	ID     string  `json:"id"`
+	Amount float64 `json:"amount"`
 }
 
 // orderMessages is an ordinary Go validation function that only has messages - the shape a service
@@ -30,10 +30,10 @@ func orderMessages(o createOrder) []string {
 func orderValidator(o createOrder) []benzene.Error {
 	var errs []benzene.Error
 	if o.ID == "" {
-		errs = append(errs, benzene.Error{Message: "id is required", Field: "ID", Code: "required"})
+		errs = append(errs, benzene.Error{Message: "id is required", Field: Pointer("id"), Code: "required"})
 	}
 	if o.Amount <= 0 {
-		errs = append(errs, benzene.Error{Message: "amount must be positive", Field: "Amount", Code: "positive"})
+		errs = append(errs, benzene.Error{Message: "amount must be positive", Field: Pointer("amount"), Code: "positive"})
 	}
 	return errs
 }
@@ -115,10 +115,10 @@ func TestValidated_StructuredErrorsReachTheResult(t *testing.T) {
 	if len(result.Errors) != 2 {
 		t.Fatalf("len(Errors) = %d, want 2", len(result.Errors))
 	}
-	if result.Errors[0].Field != "ID" || result.Errors[0].Code != "required" {
+	if result.Errors[0].Field != "/id" || result.Errors[0].Code != "required" {
 		t.Errorf("Errors[0] = %+v, want the field and code the validator stated", result.Errors[0])
 	}
-	if result.Errors[1].Field != "Amount" || result.Errors[1].Code != "positive" {
+	if result.Errors[1].Field != "/amount" || result.Errors[1].Code != "positive" {
 		t.Errorf("Errors[1] = %+v, want the field and code the validator stated", result.Errors[1])
 	}
 }
@@ -189,5 +189,28 @@ func TestValidated_ComposesThroughRegistry(t *testing.T) {
 	}
 	if !registry.Has(benzene.NewTopic("order:create")) {
 		t.Fatal("validated handler did not register as an ordinary handler")
+	}
+}
+
+func TestPointer(t *testing.T) {
+	tests := []struct {
+		name   string
+		tokens []any
+		want   string
+	}{
+		{"no tokens is the whole document", nil, ""},
+		{"one property", []any{"name"}, "/name"},
+		{"nested with an index", []any{"items", 0, "sku"}, "/items/0/sku"},
+		{"an empty property name is a token of its own", []any{""}, "/"},
+		{"tilde and slash are escaped", []any{"a~b/c"}, "/a~0b~1c"},
+		{"an escaped-looking name is escaped again", []any{"~1"}, "/~01"},
+		{"other integer types are decimal", []any{"items", int64(12), uint8(3)}, "/items/12/3"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Pointer(tt.tokens...); got != tt.want {
+				t.Errorf("Pointer(%v) = %q, want %q", tt.tokens, got, tt.want)
+			}
+		})
 	}
 }
