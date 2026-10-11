@@ -155,34 +155,40 @@ delivery order - just the current honest picture, kept up to date as things land
   (`docs/specification/cloud-service-profile.md` §2, §5), matching `Benzene.CloudService.Probe`
   (zero dependencies - `net/http`/`encoding/json`/`crypto/rand`). `Run(ctx, client, baseURL, opts...)`
   hits a running service over real HTTP and returns a tri-state `Report`
-  (`Satisfied`/`NotSatisfied`/`Inconclusive`) for R1-R8 - never a bool (which would overclaim), never
-  a panic or error (unreachability and shape mismatches are verdicts, matching the "never throws"
-  contract). The honesty rule is load-bearing: R8 (trace propagation) and half of R6
-  (register/heartbeat/trace delivery to a collector) are inherently unobservable by a single-service HTTP
-  probe and stay `Inconclusive`; R7 goes `Inconclusive` the moment the caller points the probe at
-  non-default paths. Deliberately independent of `httpbinding`/`healthcheck`/`mesh` - it keeps its
-  own `/benzene/*` path constants and parses the checked wire shapes (health `isHealthy`, the
-  `{statusCode,headers,body}` envelope, the Contract Document's `service`/`requests` read from
-  `benzene:spec` for R6's observable half) itself, because the
+  (`Satisfied`/`NotSatisfied`/`Inconclusive`) for the profile's R1-R5 and R7 - never a bool (which
+  would overclaim), never a panic or error (unreachability and shape mismatches are verdicts, matching
+  the "never throws" contract) - with the separate meshed-service claim (`mesh.md` §7.1) in
+  `Report.Mesh`. R5 needs both halves: `GET /benzene/spec` and the `benzene:spec` topic over
+  `/benzene/invoke`. The honesty rule is load-bearing: M1 (register/heartbeat/trace delivery to a
+  collector) and M2 (trace propagation) are inherently unobservable by a single-service HTTP probe and
+  stay `Inconclusive`, outside `IsFullyConformant()`; R7 goes `Inconclusive` the moment the caller
+  points the probe at non-default paths. Deliberately independent of `httpbinding`/`healthcheck`/`mesh`
+  - it keeps its own `/benzene/*` path constants and parses the checked wire shapes (health
+  `isHealthy`, the `{statusCode,headers,body}` envelope, the Contract Document's `service`/`requests`
+  read from `benzene:spec`) itself, because the
   profile is language-neutral and this tool must be able to audit ANY Benzene Cloud Service reachable
   over HTTP, a non-Go port included (the same rationale, and the same deliberate duplication, as the
   .NET package's `CloudServiceProbePaths`).
 - `cloudservice` - the one-call Cloud Service Profile *builder* (zero dependencies), matching
   `Benzene.CloudService` and the assembly counterpart of `cloudserviceprobe`. `New(name, registry,
-  opts...)` wires the profile's synchronous HTTP surface from a registry - R1 (hosted pipeline), R2
+  opts...)` wires the whole profile from a registry - R1 (hosted pipeline), R2
   (registry handlers via `RouterMiddleware`), R3 (`healthcheck.Middleware` + a `HealthPath` route),
   R4 (`EnvelopeHandler` at `EnvelopePath`, `/benzene/invoke`), R5 (the `contract` package's Contract
-  Document on `benzene:spec`, `httpbinding.SpecHandler` at `SpecPath` - also R6's self-description),
-  R7 (default `/benzene/*` paths) - over one `ApplicationBuilder`, with self-description/health
+  Document on `benzene:spec`, intercepted in the pipeline and so answered wherever the transport
+  carries a reply, and `httpbinding.SpecHandler` at `SpecPath`), R7 (default `/benzene/*`
+  paths) - over one `ApplicationBuilder`, with self-description/health
   interception ordered before `RouterMiddleware`. It returns the `http.Handler`, `Contract`,
-  `Builder`, and a wiring-time `ProfileReport` (which the document carries as its `profile`) - a full **R1-R8** checklist (`Requirement{ID,Name,Satisfied,Detail}`,
-  `Satisfied()`/`Unsatisfied()`), the inside "how far did this builder get me?" self-check that pairs
-  with `cloudserviceprobe`'s outside audit (`CloudServiceProfileReport` vs `.Probe` in .NET). It is
-  honest about scope: `New` deliberately does NOT wire R6's three feeds (register/heartbeat/traces
-  - they need a collector + `mesh.Announcer`/push-exporter lifecycle the app owns) or R8 (trace propagation -
-  `mesh.TraceMiddleware` inbound + the client `WithTraceContext` outbound), so `Satisfied()` is
-  false for a `New`-only build and `Unsatisfied()` is the exact to-do list to reach full conformance -
-  the report never reports the HTTP surface as if it were the whole profile. `WithoutDescriptor()`
+  `Builder`, and a wiring-time `ProfileReport` (which the document carries as its `profile`) - an
+  **R1-R5, R7** checklist (`Requirement{ID,Name,Satisfied,Detail}`, `Satisfied()`/`Unsatisfied()`)
+  plus the meshed-service claim's M1/M2 in `Report.Mesh` (`Meshed()` is both), the inside "how far
+  did this builder get me?" self-check that pairs with `cloudserviceprobe`'s outside audit
+  (`CloudServiceProfileReport` vs `.Probe` in .NET). It is honest about scope: `New` deliberately does
+  NOT wire M1 (register/heartbeat/traces - they need a collector + `mesh.Announcer`/push-exporter
+  lifecycle the app owns) or M2 (trace propagation - `mesh.TraceMiddleware` inbound + the client
+  `WithTraceContext` outbound), so `Satisfied()` is true but `Mesh.Satisfied()` is false for a
+  `New`-only build, and `Mesh.Unsatisfied()` is the exact to-do list to become meshed (a meshed
+  service is a Cloud Service first, so `Meshed()` needs both); M1/M2 never
+  appear in the document's `profile.missing`. `WithoutDescriptor()`
   drops the self-description per §4 exposure control. A thin assembler over existing pieces; nothing
   here spawns or owns a background goroutine.
 - `contract` - the spec-0.4.0 self-description (zero dependencies): `Derive` builds the Contract
@@ -269,9 +275,10 @@ delivery order - just the current honest picture, kept up to date as things land
   the Contract Document (`benzene:mesh:register`) and heartbeats its `registrationHash` and
   `serviceVersion` with `healthcheck.Run`'s aggregate, `TraceMiddleware` with W3C `traceparent`
   propagation (plus `WithTraceContext`, its outbound counterpart - the client decorator that
-  forwards the current span's `traceparent` onto outbound calls, so a collector derives
-  who-calls-whom without a declared edge), the `LogExporter`/`PushExporter` trace feeds, and the
-  issue feed's emitter
+  forwards the current span's `traceparent`, and the caller's `tracestate` unchanged, onto every
+  outbound message - sends and, through `responseevents.NewSenderPublisher`, published events - so
+  a collector can see a declared edge exercised; the graph itself comes from the registrations), the
+  `LogExporter`/`PushExporter` trace feeds, and the issue feed's emitter
   (`IssueMiddleware` + `PushIssueExporter`: source-side classification, SHA-256 fingerprint, delta
   aggregation, liveness flush - mesh.md §4.1) - every feed independent and optional.
 - `meshd` - the collector of the main repo's `docs/specification/mesh.md` (register/heartbeat/

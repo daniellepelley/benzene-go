@@ -279,32 +279,37 @@ alongside the shared spec.
   (`docs/specification/cloud-service-profile.md` §2, §5), matching `Benzene.CloudService.Probe`
   (zero-dep: `net/http`+`encoding/json`+`crypto/rand`). `Run(ctx, client, baseURL, opts...)` hits a
   running service over HTTP and returns a **tri-state** `Report` (`Satisfied`/`NotSatisfied`/
-  `Inconclusive`) for R1-R8 - never a bool, never a panic, never an error (unreachability and shape
-  mismatches are verdicts). R8 (trace propagation) and half of R6 (register/heartbeat) are
-  structurally unobservable from one service and stay `Inconclusive` by design; R7 goes
+  `Inconclusive`) for the profile's R1-R5 and R7 - never a bool, never a panic, never an error
+  (unreachability and shape mismatches are verdicts) - with the meshed-service claim (`mesh.md` §7.1)
+  apart in `Report.Mesh`. R5 is both `GET /benzene/spec` and the `benzene:spec` topic over the
+  envelope. M1 (register/heartbeat/traces) and M2 (trace propagation) are structurally unobservable
+  from one service and stay `Inconclusive` by design, outside `IsFullyConformant()`; R7 goes
   `Inconclusive` the moment non-default paths are used. Deliberately **independent** of
   `httpbinding`/`healthcheck`/`mesh` - it keeps its own `/benzene/*` path constants and parses the
   wire shapes itself, because the profile is language-neutral and this tool must audit ANY Benzene
   Cloud Service over HTTP (a non-Go port included); do not couple it back to this port's models.
 - `cloudservice/` - the one-call Cloud Service Profile *builder* (zero-dep), the assembly counterpart
   of `cloudserviceprobe` and the Go form of `Benzene.CloudService`. `New(name, registry, opts...)`
-  wires the **synchronous HTTP surface** of the profile from a registry: R1 (hosted pipeline), R2
+  wires the **whole profile** from a registry: R1 (hosted pipeline), R2
   (registry handlers via `RouterMiddleware`), R3 (`healthcheck.Middleware` + a `HealthPath` route),
   R4 (`EnvelopeHandler` at `EnvelopePath`, `/benzene/invoke`), R5 (`contract.Derive` +
-  `contract.Middleware` for `benzene:spec`, and `httpbinding.SpecHandler` at `SpecPath` - also R6's
-  self-description), R7 (default `/benzene/*` paths) - all over one `ApplicationBuilder`. Pipeline
+  `contract.Middleware` for `benzene:spec`, and `httpbinding.SpecHandler` at `SpecPath`), R7
+  (default `/benzene/*` paths) - all over one `ApplicationBuilder`. Pipeline
   order is self-description/health interception before `RouterMiddleware` so a reserved topic never
   falls through. Returns `(*Service, error)` - the derivation error (a component-name collision)
   fails before anything is served - with the `http.Handler`, the `Contract` document (placement
   detected unless `WithPlacement`, the report as its `profile`), the `Builder`, and a **wiring**
-  `ProfileReport` - a full **R1-R8** checklist
-  (`Requirement{ID,Name,Satisfied,Detail}`, `Satisfied()`/`Unsatisfied()`). Crucially it is **honest**:
-  `New` deliberately does not wire R6's three feeds (register/heartbeat/traces need a collector +
-  `mesh.Announcer`/push-exporter lifecycle the app owns) or R8 (trace propagation - `mesh.TraceMiddleware` inbound +
-  the client `WithTraceContext` outbound), so `Satisfied()` is **false** for a `New`-only build
-  and `Unsatisfied()` is the exact to-do list to reach full conformance (mirroring .NET's
-  `CloudServiceProfileReport` evaluating all of R1-R8, not just the HTTP surface). `WithoutDescriptor()`
-  drops the self-description (R5, R6's `benzene:spec`) per §4 exposure control. It composes the
+  `ProfileReport` - an **R1-R5, R7** checklist
+  (`Requirement{ID,Name,Satisfied,Detail}`, `Satisfied()`/`Unsatisfied()`, exactly the document's
+  `profile.missing`) plus the meshed-service claim's **M1/M2** in `Report.Mesh` (`Meshed()` = both).
+  Crucially it is **honest**: `New` deliberately does not wire M1 (register/heartbeat/traces need a
+  collector + `mesh.Announcer`/push-exporter lifecycle the app owns) or M2 (trace propagation -
+  `mesh.TraceMiddleware` inbound + `mesh.WithTraceContext` over every outbound `Sender`, the event
+  publisher's included, forwarding `traceparent` and `tracestate`), so `Mesh.Satisfied()` is
+  **false** for a `New`-only build and `Mesh.Unsatisfied()` is the exact to-do list to become
+  meshed, and `Meshed()` needs the profile too; M1/M2 never appear in `profile.missing` (R6/R8
+  are retired ids, never reused).
+  `WithoutDescriptor()` drops the self-description (R5) per §4 exposure control. It composes the
   existing pieces - a thin assembler; don't reimplement health/spec logic here, and don't let the
   report over-claim conformance.
 - `mesh/` - the service side of the main repo's `docs/specification/mesh.md`. There is no mesh
