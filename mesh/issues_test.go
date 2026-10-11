@@ -202,6 +202,20 @@ func (c *issueCaptureSender) last() IssueBatch {
 	return c.batches[len(c.batches)-1]
 }
 
+// sentIssues reports whether any batch sent so far carried exactly n issues. The ticker test needs
+// it rather than last(): the loop keeps flushing on its interval, and a liveness flush with no
+// issues can land after the one under test before the poll looks.
+func (c *issueCaptureSender) sentIssues(n int) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, batch := range c.batches {
+		if len(batch.Issues) == n {
+			return true
+		}
+	}
+	return false
+}
+
 func TestPushIssueExporter_AggregatesDeltasAndFlushes(t *testing.T) {
 	sender := &issueCaptureSender{}
 	at := time.Date(2026, 7, 25, 9, 0, 0, 0, time.UTC)
@@ -278,7 +292,7 @@ func TestPushIssueExporter_TickerFlushesOnInterval(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if len(sender.last().Issues) == 1 {
+		if sender.sentIssues(1) {
 			return
 		}
 		time.Sleep(2 * time.Millisecond)
