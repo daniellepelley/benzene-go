@@ -146,6 +146,9 @@ func TestRun_FullyConformantProfileIsSatisfiedAndMeshIsReportedApart(t *testing.
 	if !strings.Contains(verdictOf(t, report, "M2").Reason, "weak bonus signal") {
 		t.Errorf("M2 reason = %q, want the weak-bonus-signal note", verdictOf(t, report, "M2").Reason)
 	}
+	if strings.Contains(verdictOf(t, report, "M1").Reason, "also requires the Cloud Service Profile") {
+		t.Errorf("M1 reason = %q, want no profile-prerequisite note when the profile checks out", verdictOf(t, report, "M1").Reason)
+	}
 	if !strings.Contains(verdictOf(t, report, "M1").Reason, "which is R5, not M1") {
 		t.Errorf("M1 reason = %q, want the note that the served document is R5's evidence", verdictOf(t, report, "M1").Reason)
 	}
@@ -178,6 +181,12 @@ func TestRun_UnreachableServiceIsHonestlyNotSatisfied(t *testing.T) {
 	assertVerdict(t, report, "M2", Inconclusive)
 	if strings.Contains(verdictOf(t, report, "M1").Reason, "which is R5") {
 		t.Errorf("M1 reason = %q, want no served-document note when benzene:spec was unreachable", verdictOf(t, report, "M1").Reason)
+	}
+	// A meshed service is a Cloud Service first: the mesh section names the unmet profile.
+	for _, id := range []string{"M1", "M2"} {
+		if !strings.Contains(verdictOf(t, report, id).Reason, "also requires the Cloud Service Profile, and the probe observed R1, R3, R4, R5, R7 unmet") {
+			t.Errorf("%s reason = %q, want the profile-prerequisite note", id, verdictOf(t, report, id).Reason)
+		}
 	}
 }
 
@@ -227,8 +236,8 @@ func TestRun_Spec(t *testing.T) {
 	})
 }
 
-// R5's topic half: the service answers the reserved benzene:spec topic with its contract document on
-// every transport - observed here over the envelope endpoint.
+// R5's topic half: the service answers the reserved benzene:spec topic with its contract document
+// wherever the transport carries a reply - observed here over the envelope endpoint.
 func TestRun_SpecTopic(t *testing.T) {
 	t.Run("a document without a service field fails R5 and leaves R2 inconclusive", func(t *testing.T) {
 		report := Run(context.Background(), nil, (&fakeService{specTopicBody: `{"statusCode":"200","headers":{},"body":"{\"requests\":[]}"}`}).start(t))

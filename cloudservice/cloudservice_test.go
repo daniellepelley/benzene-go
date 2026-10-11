@@ -252,7 +252,7 @@ func TestProfileReport_StringForNewBuild(t *testing.T) {
 	if !strings.Contains(s, "Cloud Service Profile: 6/6 requirements wired") || !strings.Contains(s, "R4") {
 		t.Errorf("report String() = %q, want a 6/6 profile header and the R-numbered list", s)
 	}
-	if !strings.Contains(s, "Meshed service (mesh §7.1): 0/2 requirements wired") || !strings.Contains(s, "M2") {
+	if !strings.Contains(s, "Meshed service (mesh §7.1: the profile + M1, M2): 0/2 requirements wired") || !strings.Contains(s, "M2") {
 		t.Errorf("report String() = %q, want a 0/2 meshed-service header and the M-numbered list", s)
 	}
 	// The profile's ids are R1-R5 and R7; R6 and R8 are retired and never reused.

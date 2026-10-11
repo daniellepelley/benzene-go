@@ -40,7 +40,9 @@ type ProfileReport struct {
 }
 
 // MeshedReport is the meshed-service half of the wiring self-check: M1 (service-side feeds) and M2
-// (trace-context propagation) of mesh.md §7.1, formerly the profile's R6 and R8.
+// (trace-context propagation on every outbound message - sends and published events) of mesh.md
+// §7.1, formerly the profile's R6 and R8. Its Satisfied covers M1 and M2 alone; the meshed claim
+// requires the profile too, which ProfileReport.Meshed combines.
 type MeshedReport struct {
 	// Requirements holds M1 and M2, in order.
 	Requirements []Requirement
@@ -85,7 +87,7 @@ func (r ProfileReport) Profile() *contract.Profile {
 func (r ProfileReport) String() string {
 	var b strings.Builder
 	writeSection(&b, "Cloud Service Profile", r.Requirements)
-	writeSection(&b, "Meshed service (mesh §7.1)", r.Mesh.Requirements)
+	writeSection(&b, "Meshed service (mesh §7.1: the profile + M1, M2)", r.Mesh.Requirements)
 	return b.String()
 }
 
@@ -128,7 +130,7 @@ func unsatisfied(reqs []Requirement) []Requirement {
 // buildReport evaluates R1-R5 and R7, and the meshed-service M1 and M2, against the builder
 // configuration.
 func buildReport(cfg config) ProfileReport {
-	specDetail := "registry-derived Contract Document on benzene:spec (every transport), served at /benzene/spec through the pipeline"
+	specDetail := "registry-derived Contract Document: benzene:spec intercepted in the pipeline (answered wherever the transport carries a reply), and GET /benzene/spec"
 	if !cfg.descriptor {
 		specDetail = "disabled by WithoutDescriptor (profile §4 exposure control)"
 	}
@@ -144,7 +146,7 @@ func buildReport(cfg config) ProfileReport {
 		},
 		Mesh: MeshedReport{Requirements: []Requirement{
 			{ID: "M1", Name: "mesh service-side feeds", Satisfied: false, Detail: "not wired by this builder - run a mesh.Announcer over Service.Contract (register + heartbeats) and mesh.TraceMiddleware with a PushExporter (traces)"},
-			{ID: "M2", Name: "trace-context propagation", Satisfied: false, Detail: "not wired by this builder - add mesh.TraceMiddleware (inbound join) and the client WithTraceContext (outbound forward)"},
+			{ID: "M2", Name: "trace-context propagation", Satisfied: false, Detail: "not wired by this builder - add mesh.TraceMiddleware (inbound join) and wrap every outbound Sender, the event publisher's included, in mesh.WithTraceContext (outbound forward)"},
 		}},
 	}
 }

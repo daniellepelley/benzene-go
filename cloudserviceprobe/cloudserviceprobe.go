@@ -50,7 +50,8 @@ const (
 
 // The synthetic envelopes the probe POSTs to the invoke endpoint: a healthcheck round-trip for R4,
 // and the reserved benzene:spec topic - which R5 requires a service to answer with its contract
-// document on every transport - for R5's topic half. Both use the reserved benzene: topics.
+// document wherever the transport carries a reply, as the envelope endpoint does - for R5's topic
+// half. Both use the reserved benzene: topics.
 const (
 	healthcheckEnvelope = `{"topic":"benzene:healthcheck","headers":{},"body":"{}"}`
 	specEnvelope        = `{"topic":"benzene:spec","headers":{},"body":"{}"}`
@@ -93,7 +94,9 @@ type Report struct {
 	Requirements []Requirement
 	// Mesh holds the meshed-service claim's requirements (mesh.md §7.1), M1 and M2. Neither is
 	// observable from one service in isolation, so both are always Inconclusive here, with a reason
-	// saying what the probe did and did not see. They are not part of the profile verdict.
+	// saying what the probe did and did not see - including, since a meshed service is a Cloud
+	// Service first, any profile requirement observed unmet. They are not part of the profile
+	// verdict.
 	Mesh []Requirement
 }
 
@@ -181,7 +184,7 @@ func Run(ctx context.Context, client *http.Client, baseURL string, opts ...Optio
 	specTopic := probeSpecTopic(ctx, client, baseURL, cfg)
 	r5 := evaluateR5(spec, specTopic)
 
-	return &Report{
+	report := &Report{
 		Requirements: []Requirement{
 			evaluateR1(health, invoke, spec, specTopic),
 			evaluateR2(specTopic),
@@ -190,11 +193,22 @@ func Run(ctx context.Context, client *http.Client, baseURL string, opts ...Optio
 			r5,
 			evaluateR7(cfg, health, invoke, r5),
 		},
-		Mesh: []Requirement{
-			evaluateM1(specTopic),
-			evaluateM2(cfg, invoke, specTopic),
-		},
 	}
+	report.Mesh = []Requirement{
+		withProfilePrerequisite(report, evaluateM1(specTopic)),
+		withProfilePrerequisite(report, evaluateM2(cfg, invoke, specTopic)),
+	}
+	return report
+}
+
+// withProfilePrerequisite notes on a meshed-service requirement that the meshed claim requires the
+// Cloud Service Profile (mesh.md §7.1) when the probe observed some of it unmet - so a reader of the
+// mesh section alone is not left thinking only M1/M2 stand between the service and the claim.
+func withProfilePrerequisite(report *Report, m Requirement) Requirement {
+	if unmet := report.NotSatisfied(); len(unmet) > 0 {
+		m.Reason += fmt.Sprintf(". The meshed claim also requires the Cloud Service Profile, and the probe observed %s unmet", strings.Join(unmet, ", "))
+	}
+	return m
 }
 
 // probeOutcome is the internal result of probing one surface: its verdict (as a Requirement),
@@ -264,7 +278,7 @@ func probeSpec(ctx context.Context, client *http.Client, baseURL string, cfg con
 
 // probeSpecTopic is R5's topic half: POST the reserved benzene:spec topic over the envelope;
 // satisfied iff a 200 envelope wraps a contract document with a non-empty "service" field
-// (contract-document.md §1, §7) - the document R5 requires on every transport, and the body a
+// (contract-document.md §1, §7) - the document R5 requires wherever a reply exists, and the body a
 // meshed service registers (mesh.md §2). The document's request count is carried out for R2's
 // inferential check.
 func probeSpecTopic(ctx context.Context, client *http.Client, baseURL string, cfg config) probeOutcome {
@@ -290,9 +304,11 @@ func probeSpecTopic(ctx context.Context, client *http.Client, baseURL string, cf
 	}
 }
 
-// evaluateR5 combines the two halves of R5 (cloud-service-profile.md §2): the service answers the
-// reserved benzene:spec topic with its contract document on every transport - observable here over
-// the envelope endpoint - and, having an HTTP surface, serves it at the spec path. Both must hold.
+// evaluateR5 combines the two halves of R5 (cloud-service-profile.md §2): the service intercepts
+// the reserved benzene:spec topic and answers it with its contract document wherever the transport
+// carries a reply - observable here over the envelope endpoint, which does - and, having an HTTP
+// surface, serves it at the spec path. Both must hold. A one-way binding cannot answer, and the probe
+// never asks it to.
 func evaluateR5(spec, specTopic probeOutcome) Requirement {
 	verdict := Satisfied
 	if spec.req.Verdict != Satisfied || specTopic.req.Verdict != Satisfied {
