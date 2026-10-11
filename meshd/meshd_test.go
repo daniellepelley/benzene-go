@@ -403,6 +403,32 @@ func TestCollector_TraceParentageNeverAdmitsOrRemovesAGraphEdge(t *testing.T) {
 	}
 }
 
+// TestCollector_TopicWithNoTrafficOmitsLastSeen pins the topic read model's lastSeen: a declared
+// topic no trace has touched has no last-seen time, and on the wire that is an absent member, not
+// the zero time (0001-01-01T00:00:00Z) a reader would take for a real timestamp. Once traffic is
+// ingested the member appears with the ingest clock.
+func TestCollector_TopicWithNoTrafficOmitsLastSeen(t *testing.T) {
+	c := newTestCollector(t)
+	invoke[Ack](t, c, mesh.TopicRegister, testDocument("payments", "payments:capture"))
+
+	_, raw := invoke[json.RawMessage](t, c, mesh.TopicQueryTopic, TopicQuery{Topic: "payments:capture"})
+	if strings.Contains(string(raw), "lastSeen") {
+		t.Errorf("topic summary %s carries a lastSeen for a topic with no traffic, want it absent", raw)
+	}
+	_, topic := invoke[TopicSummary](t, c, mesh.TopicQueryTopic, TopicQuery{Topic: "payments:capture"})
+	if !topic.LastSeen.IsZero() {
+		t.Errorf("LastSeen = %v, want zero (no traffic)", topic.LastSeen)
+	}
+
+	invoke[Ack](t, c, mesh.TopicTraces, mesh.TraceBatch{Events: []mesh.TraceEvent{
+		event("trace-1", "span-payments", "", "payments", "payments:capture", "ok", 1),
+	}})
+	_, raw = invoke[json.RawMessage](t, c, mesh.TopicQueryTopic, TopicQuery{Topic: "payments:capture"})
+	if want := `"lastSeen":"` + testClock.Format(time.RFC3339Nano) + `"`; !strings.Contains(string(raw), want) {
+		t.Errorf("topic summary %s lacks %s once the topic has traffic", raw, want)
+	}
+}
+
 // TestCollector_UnobservedDeclaredEdgeReportsNoLastObservedAt and
 // TestCollector_ObservedDeclaredEdgeReportsLastObservedAt pin mesh.md §4.2 "Unobserved": a
 // declared edge's activity is reported per-edge (last observed at, or its absence) rather than

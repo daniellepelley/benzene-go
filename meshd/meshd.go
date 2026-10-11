@@ -115,6 +115,11 @@ type ServiceSummary struct {
 // parentage. ProviderActivity/ConsumerActivity are the additive, observed-only signal of mesh.md
 // §4.2 layered on top: per declared edge, the last time a trace actually observed it (absent
 // means never observed in the retention window - a decommission candidate, not a fact).
+//
+// LastSeen is the last time any traffic on the topic was ingested. A declared topic with no
+// traffic has none, and on the wire that is an absent lastSeen, never the zero time
+// (0001-01-01T00:00:00Z) a reader would take for a real, very old timestamp - omitzero, as for
+// EdgeActivity.LastObservedAt.
 type TopicSummary struct {
 	Topic            string                  `json:"topic"`
 	Version          string                  `json:"version,omitempty"`
@@ -126,7 +131,7 @@ type TopicSummary struct {
 	Errors           int64                   `json:"errors"`
 	AvgDurationMs    float64                 `json:"avgDurationMs"`
 	StatusCounts     map[string]int64        `json:"statusCounts,omitempty"`
-	LastSeen         time.Time               `json:"lastSeen"`
+	LastSeen         time.Time               `json:"lastSeen,omitzero"`
 }
 
 // EdgeActivity is one declared edge's observed-activity record (mesh.md §4.2 "Unobserved"): the
