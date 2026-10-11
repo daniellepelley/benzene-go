@@ -146,7 +146,7 @@ delivery order - just the current honest picture, kept up to date as things land
   scoped to the runtime capability: the .NET package's AsyncAPI/event-service spec-catalog and its
   build-time unmapped-response diagnostic are NOT ported. This port does have a spec generator -
   `asyncapi.Generate`/`asyncapi.Handler` - so the real gap is narrower: AsyncAPI's send side is
-  declared by hand via `asyncapi.WithSentEvent` rather than derived from the mappings here, which
+  taken from the `contract.RegisterEvent` declarations rather than derived from the mappings here, which
   are the very things that publish those events. Deriving one from the other is the open work
   (`Mapping.Covers` is kept for the diagnostic half of it). The nil-payload check is reflect-free (dispatch path), so a successful *typed*-nil
   pointer payload publishes JSON `null` - a documented divergence from .NET's reference-null semantics.
@@ -169,8 +169,8 @@ delivery order - just the current honest picture, kept up to date as things land
   `Benzene.CloudService` and the assembly counterpart of `cloudserviceprobe`. `New(name, registry,
   opts...)` wires the profile's synchronous HTTP surface from a registry - R1 (hosted pipeline), R2
   (registry handlers via `RouterMiddleware`), R3 (`healthcheck.Middleware` + a `HealthPath` route),
-  R4 (`EnvelopeHandler` at `EnvelopePath`, `/benzene/invoke`), R5 (`mesh.SpecHandler` at `SpecPath`),
-  R7 (default `/benzene/*` paths), plus `mesh.Describe`+`mesh.Middleware` for the `benzene:mesh`
+  R4 (`EnvelopeHandler` at `EnvelopePath`, `/benzene/invoke`), R5 (the `contract` package's Contract
+  Document on `benzene:spec`, `httpbinding.SpecHandler` at `SpecPath`), R7 (default `/benzene/*` paths), plus `mesh.Describe`+`mesh.Middleware` for the `benzene:mesh`
   descriptor - over one `ApplicationBuilder`, with descriptor/health interception ordered before
   `RouterMiddleware`. It returns the `http.Handler`, `Descriptor`, `Builder`, and a wiring-time
   `ProfileReport` - a full **R1-R8** checklist (`Requirement{ID,Name,Satisfied,Detail}`,
@@ -183,23 +183,29 @@ delivery order - just the current honest picture, kept up to date as things land
   the report never reports the HTTP surface as if it were the whole profile. `WithoutDescriptor()`
   additionally drops R5/R6 per §4 exposure control. A thin assembler over existing pieces; nothing
   here spawns or owns a background goroutine.
+- `contract` - the spec-0.3.0 self-description (zero dependencies): `Derive` builds the Contract
+  Document from the registry and the `RegisterEvent`/`RegisterSend` declarations (OpenAPI 3.0
+  dialect, named structs hoisted, a component-name collision failing at start-up,
+  `BenzeneSchemaName()` as the declared-name hook), `HashDocument` computes `contractHash` and
+  `registrationHash` over the hand-written RFC 8785 `internal/jcs` (fuzzed against `gowebpki/jcs` in
+  `codegen/jcsfuzz`), and `Middleware` answers `benzene:spec`, which `httpbinding.SpecHandler` serves
+  at `GET /benzene/spec` through the pipeline. Still to come with spec-0.4.0: the document as the
+  mesh register body (`descriptorHash` → `registrationHash`, heartbeats, the collector, the probe).
 - `openapi` - OpenAPI 3.0 document generation (zero dependencies), the Go form of the OpenAPI half
   of `Benzene.Schema.OpenApi`: `Generate(desc, opts...)` turns a `mesh.Descriptor` into an OpenAPI
   document (each registered topic a POST operation - request body = the topic's request schema,
   responses = the response schema at 200 plus the framework failure vocabulary grouped by the HTTP
-  codes `httpstatus.ToHTTP` maps them to), and `Handler` serves it over GET, the OpenAPI sibling of
-  `mesh.SpecHandler`. It reuses mesh's startup-derived schemas rather than deriving its own (no new
+  codes `httpstatus.ToHTTP` maps them to), and `Handler` serves it over GET. It reuses mesh's startup-derived schemas rather than deriving its own (no new
   reflection), converting only JSON Schema's nullable type-array to OpenAPI 3.0's `nullable: true`.
   A documentation view of the message contracts, not a claim every topic is HTTP-routed.
 - `asyncapi` - AsyncAPI 3.0 document generation (zero dependencies), the event-driven sibling of
-  `openapi` and the other half of `Benzene.Schema.OpenApi`. `Generate(desc, opts...)` maps Benzene
-  onto AsyncAPI 3.0's channels + `action: receive`/`send` operations like the .NET builder: every
-  handled topic is a `receive` operation with a `<topic>:<suffix>` reply channel (default `response`),
-  derived from the descriptor; a published event is a caller-declared `WithSentEvent(topic, payload)`
-  (a `send` operation), the send side the descriptor can't carry - so no sync-vs-event classification
-  is fabricated (the reason the split was deferred). Reuses mesh's derived schemas with no reshaping
-  (AsyncAPI 3.0 is JSON Schema Draft 7, so the nullable form is already valid). `Handler` serves it
-  over GET.
+  `openapi` and the other half of `Benzene.Schema.OpenApi`. `Generate(doc, opts...)` maps the
+  Contract Document onto AsyncAPI 3.0's channels + `action: receive`/`send` operations like the .NET
+  builder: every request is a `receive` operation (with a `<topic>:<suffix>` reply channel, default
+  `response`, when it declares a response); every declared event and send is a `send` operation
+  (spec-0.3.0 replaced the earlier caller-declared `WithSentEvent`). The document's named schemas
+  become AsyncAPI components, with OpenAPI 3.0's `nullable` rewritten as JSON Schema. `Handler`
+  serves it over GET.
 - `logging` - basic request logging/timing middleware using only `log/slog`: one structured
   line per invocation (topic/version, Benzene status, duration; Info/Warn/Error by outcome).
   The dependency-free visibility option alongside the `diagnostics` module's full OTel feed.
@@ -389,7 +395,7 @@ documented, genuinely-unreachable defensive branch - see each package's own comm
 An earlier wave (`client`, `cors`, `benzenetest`, `logging`) plus the large catch-up batch
 (`awskinesis`, `awss3`, `awskafka`, `azurefunctions.Timer`/`EventGrid`, `validation`,
 `idempotency`, `ratelimiting`, `auth`, `cache`, `resilience`, `saga`, `responseevents`,
-`healthcheck.TCP`/`HTTP`, `cloudserviceprobe`, the R5 `mesh.SpecHandler`, the `cloudservice`
+`healthcheck.TCP`/`HTTP`, `cloudserviceprobe`, the R5 spec endpoint (now the `contract` package), the `cloudservice`
 one-call profile builder, `openapi` OpenAPI generation, and `asyncapi` AsyncAPI generation) have all
 landed - see Done above.
 

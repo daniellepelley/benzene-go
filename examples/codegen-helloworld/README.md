@@ -2,15 +2,19 @@
 
 Dogfoods `benzene-codegen` (`codegen/cmd/benzene-codegen`, see
 [docs/codegen-client.md](../../docs/codegen-client.md)) against a real, committed Contract
-Document: `contracts/payments.spec.json`, vendored verbatim from the .NET reference implementation's
-own example (`examples/AwsMesh/Orders/contracts/payments.spec.json` in
-[benzene-dotnet](https://github.com/daniellepelley/benzene-dotnet)). It proves the same document a
-.NET service commits produces a working, typed Go client with no .NET SDK involved.
+Document: `contracts/payments.spec.json`, taken from the .NET reference implementation's own example
+(`examples/AwsMesh/Orders/contracts/payments.spec.json` in
+[benzene-dotnet](https://github.com/daniellepelley/benzene-dotnet)) and re-cut by hand to the
+spec-0.3.0 shape until that example re-emits it: `schemaDialect`/`service` instead of
+`openapi`/`info`, the reserved `benzene:spec` entry and its components dropped, the synthesized
+examples dropped, the `shipping:book` command moved from `events` to `sends` (payments sends it to a
+topic shipping defines; `payment:captured` stays an event), and both hashes recomputed. It proves a
+document another port produces gives a working, typed Go client with no .NET SDK involved.
 
 ## Layout
 
 ```
-contracts/payments.spec.json   the committed Contract Document (unmodified, from the .NET reference)
+contracts/payments.spec.json   the committed Contract Document (the .NET reference's, in the spec-0.3.0 shape)
 doc.go                          package doc + the //go:generate directive
 generate.sh                     what //go:generate actually runs (see its own comment for why)
 paymentscapture/                GENERATED, COMMITTED: a self-contained client for payments:capture only
@@ -18,12 +22,11 @@ main.go                         a runnable illustration - wires the generated cl
 main_test.go                    the actual dogfood proof - a fake client.Sender, no live service needed
 ```
 
-`payments.spec.json` has three request/response topics: `payments:capture`, `payments:get-all`, and
-the reserved `benzene:spec` (flagged `"reserved": true`). Generating a **topic-scoped** client for
-`payments:capture` only exercises both of contract-document.md §5's core rules at once: the reserved
-topic is excluded from scope by default, and the schema closure narrows `components` down to just
-`CapturePayment`/`PaymentDto` - `payments:get-all`'s and `benzene:spec`'s own schemas
-(`SpecRequest`/`RawStringMessage`) never appear in the generated output.
+`payments.spec.json` has two request topics, `payments:capture` and `payments:get-all`, an event
+(`payment:captured`) and a send (`shipping:book`). Generating a **topic-scoped** client for
+`payments:capture` exercises contract-document.md §5.3: the schema closure narrows `components` down
+to just `CapturePayment`/`PaymentDto` - `payments:get-all`'s `Void` and the outbound types never
+appear in the generated output - and the client embeds the projection's own `contractHash`.
 
 ## Regenerating
 

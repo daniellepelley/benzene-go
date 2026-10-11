@@ -38,13 +38,35 @@ alongside the shared spec.
   cycle; everything else imports it. Each capability here carries both rungs of
   core-concepts.md §11's shorthand rule, and the shorthand is always literally composed from the
   explicit form - keep it that way when adding to it: `Register` returns the error /
-  `MustRegister` panics with it (`mesh.RegisterOutbound`/`MustRegisterOutbound` mirror the pair);
+  `MustRegister` panics with it (`contract.RegisterEvent`/`RegisterSend` and their `Must*` twins mirror the pair);
   `UsePipeline` takes any pipeline / `UseDefaultPipeline` is one line of `UsePipeline(NewPipeline(
   RouterMiddleware(b.Registry, WithVersionKey(b.ReservedNames.Version()))))`, which `App.Run` also installs when `Configure` set no pipeline,
   so the common case needs no `Configure` phase at all. That default exists as a **start-up**
   check as much as an ergonomic one: a builder with a nil `Pipeline` used to nil-deref on the
   first message inside a binding. `benzenetest.NewHost` re-implements the lifecycle to get its
   `WithServices` seam and must keep the same default - if you change one, change both.
+- `contract/` - the service's self-description: the Contract Document of the main repo's
+  `docs/specification/contract-document.md`. `Derive(registry, outbound, Info)` builds it once at
+  start-up from the `Registry` (requests) and the `OutboundRegistry` (events and sends, declared
+  with `RegisterEvent[T]` / `RegisterSend[TReq](..., WithResponse[TRes]())` - one table, so a
+  (topic, version) declared as both is the ordinary duplicate error). Schemas are derived by
+  `reflect` (start-up only) in the OpenAPI 3.0 dialect: every named struct is hoisted into
+  `components` under its `BenzeneSchemaName()` (the declared-name hook) or Go name, an undeclared
+  generic instance is inlined, a pointer to a named struct is the `{"type":"object","nullable":
+  true,"allOf":[…]}` wrapper, an unnamed `struct{}` response is an absent `response`. Two different
+  shapes claiming one name fail `Derive` with `*NameCollisionError` (types, topics, remedy) -
+  never suffixed, never first-wins. `HashDocument`/`Projection` are the §6 hashes
+  (`contractHash`, `registrationHash`) over the dereferenced projection, canonicalized by
+  `internal/jcs` - the one implementation both the runtime and `codegen` use. `Middleware(doc)`
+  answers `benzene:spec` (`{type?, format?}`, unsupported -> `not-implemented`,
+  `WithDocumentType` for port extensions); `httpbinding.SpecHandler` is its `GET /benzene/spec`,
+  through the pipeline. It is a root package (not in `mesh`) so `mesh` can alias its
+  `OutboundRegistry` without an import cycle.
+- `internal/jcs/` - hand-written RFC 8785 canonicalization (the root module stays dependency-free;
+  ruling Q8 of the main repo's `work/self-description-design.md`). Rejects duplicate names, lone
+  surrogates and non-finite numbers; differentially fuzzed against `github.com/gowebpki/jcs` in
+  `codegen/jcsfuzz`, the one module that already depends on it. Keep it agreeing byte-for-byte:
+  the hashes are compared across ports.
 - `wire/` - the transport-neutral message envelope. Deliberately has **no dependency on the
   rest of this module** - keep it that way (see the package doc comment).
 - `httpstatus/` - the Benzene<->HTTP status mapping tables, cross-checked against
@@ -228,7 +250,7 @@ alongside the shared spec.
   `OnPublishError` hook (no forced logger dependency). The .NET package's AsyncAPI/spec-catalog and
   build-time unmapped-response diagnostic are **not** ported. This port DOES have a spec generator
   (`asyncapi.Generate`/`asyncapi.Handler`) - the gap is narrower than "no generator": its send side
-  is declared by hand with `WithSentEvent`, not derived from the `responseevents` mappings that
+  comes from the `contract.RegisterEvent` declarations, not from the `responseevents` mappings that
   actually produce those events, so the two never check each other. `Mapping.Covers` is kept for the
   diagnostic that would close it.
   Reflect-free nil-payload check (dispatch path), so a *typed*-nil pointer payload publishes JSON
@@ -236,20 +258,20 @@ alongside the shared spec.
 - `clienthealthcheck/` - the consumer-side dependency health check, matching
   `Benzene.Clients.HealthChecks` (zero-dep). A `ServiceCheck` (a `healthcheck.Check`) probes a
   downstream Benzene provider through an outbound `client.Sender` and reports the **contract
-  relationship**, not the provider's transient health: unreachable / serves no descriptor ->
+  relationship**, not the provider's transient health: unreachable / serves no contract ->
   `failed`, reachable+matching contract hash -> `ok`, reachable+drifted hash -> `warning` (degraded,
   does **not** flip the caller's health), reachable without drift-detection configured -> `ok`
-  (reachability only), reachable+hashless descriptor -> `ok` (drift unassessable, noted in `Data`).
-  Both reachability **and** the hash come from the provider's reserved `benzene:mesh` descriptor,
-  which `mesh.Middleware` serves with a success status *unconditionally* (health-independent) - so a
-  reachable-but-unhealthy provider still reads as reachable. Deliberately **not** the
+  (reachability only), reachable+hashless document -> `ok` (drift unassessable, noted in `Data`).
+  Both reachability **and** the hash come from the provider's reserved `benzene:spec` topic: the
+  **served** `contractHash` of its Contract Document, which `contract.Middleware` answers with a
+  success status *unconditionally* (health-independent). The check computes no hash of its own -
+  every private/provider-side hash is gone (spec-0.3.0). Deliberately **not** the
   `benzene:healthcheck` topic: its report carries the provider's own transient verdict (`isHealthy`),
-  and coupling this contract check to the provider's transient health is exactly what it must not do. .NET bakes the hash into a generated client; Go has none, so
-  `WithExpectedContractHash` supplies the consumer's built-against hash (a documented divergence
-  driven by the transport + the fact that Go's *descriptor*, not its health response, carries the
-  hash). Register it on a **contracts** diagnostic surface, not a liveness/readiness probe (it calls
-  a downstream). Its own package (not in `healthcheck`) so `healthcheck` keeps its net/net-http-only
-  footprint - this check additionally needs `client` + `mesh`.
+  and coupling this contract check to the provider's transient health is exactly what it must not
+  do. `WithExpectedContractHash` supplies the consumer's built-against hash - a generated client's
+  `ContractHash`. Register it on a **contracts** diagnostic surface, not a liveness/readiness probe
+  (it calls a downstream). Its own package (not in `healthcheck`) so `healthcheck` keeps its
+  net/net-http-only footprint - this check additionally needs `client` + `contract`.
 - `cloudserviceprobe/` - the external, black-box conformance checker for the Cloud Service Profile
   (`docs/specification/cloud-service-profile.md` §2, §5), matching `Benzene.CloudService.Probe`
   (zero-dep: `net/http`+`encoding/json`+`crypto/rand`). `Run(ctx, client, baseURL, opts...)` hits a
@@ -265,11 +287,14 @@ alongside the shared spec.
   of `cloudserviceprobe` and the Go form of `Benzene.CloudService`. `New(name, registry, opts...)`
   wires the **synchronous HTTP surface** of the profile from a registry: R1 (hosted pipeline), R2
   (registry handlers via `RouterMiddleware`), R3 (`healthcheck.Middleware` + a `HealthPath` route),
-  R4 (`EnvelopeHandler` at `EnvelopePath`, `/benzene/invoke`), R5 (`mesh.SpecHandler` at `SpecPath`),
-  R7 (default `/benzene/*` paths), plus `mesh.Describe`+`mesh.Middleware` for the `benzene:mesh`
-  descriptor - all over one `ApplicationBuilder`. Pipeline order is descriptor/health interception
-  before `RouterMiddleware` so a reserved topic never falls through. Returns the `http.Handler`, the
-  `Descriptor`, the `Builder`, and a **wiring** `ProfileReport` - a full **R1-R8** checklist
+  R4 (`EnvelopeHandler` at `EnvelopePath`, `/benzene/invoke`), R5 (`contract.Derive` +
+  `contract.Middleware` for `benzene:spec`, and `httpbinding.SpecHandler` at `SpecPath`), R7 (default
+  `/benzene/*` paths), plus `mesh.Describe`+`mesh.Middleware` for the `benzene:mesh` descriptor - all
+  over one `ApplicationBuilder`. Pipeline order is self-description/health interception before
+  `RouterMiddleware` so a reserved topic never falls through. Returns `(*Service, error)` - the
+  derivation error (a component-name collision) fails before anything is served - with the
+  `http.Handler`, the `Contract` document, the `Descriptor`, the `Builder`, and a **wiring**
+  `ProfileReport` - a full **R1-R8** checklist
   (`Requirement{ID,Name,Satisfied,Detail}`, `Satisfied()`/`Unsatisfied()`). Crucially it is **honest**:
   `New` deliberately does not wire R6's outbound feeds (register/heartbeat/traces need a collector +
   push-exporter lifecycle the app owns) or R8 (trace propagation - `mesh.TraceMiddleware` inbound +
@@ -282,10 +307,10 @@ alongside the shared spec.
   repo's `docs/specification/mesh.md` §§1-3: service `Descriptor` derived from the `Registry`
   (`topics` - what the service provides - + JSON Schemas derived at startup from the
   `TReq`/`TRes` types `Register` captures) AND from the `OutboundRegistry`
-  (`consumes` - what the service consumes, mesh.md §2.3, `RegisterOutbound[TReq,TRes]` -
-  mirrors `Registry`/`Register` exactly, minus the handler; a sender with no expected response
-  type registers `TRes` as `any`, which schema derivation already maps to the unconstrained
-  `{}` responseSchema), plus the contract `descriptorHash` (now sensitive to both lists),
+  (`produces` - what the service puts on the wire, mesh.md §2.3: its events and sends, declared
+  with `contract.RegisterEvent`/`RegisterSend` - `mesh.OutboundRegistry` is a deprecated alias of
+  `contract.OutboundRegistry`; an event or a one-way send gets the unconstrained `{}`
+  responseSchema), plus the contract `descriptorHash` (now sensitive to both lists),
   reserved-`benzene:mesh`-topic descriptor middleware, trace middleware + log exporter, and the
   issue feed's emitter half (`IssueMiddleware` + `PushIssueExporter`: source-side dedup by the
   normative §4.1 classification + SHA-256 fingerprint, delta counts, liveness flush;
@@ -297,12 +322,9 @@ alongside the shared spec.
   shared with the
   collector and promoted to the main repo's spec (`docs/specification/mesh.md` there, now
   the normative text; `work/archive/mesh-spec-draft.md` is the historical draft), pinned by
-  the vendored `mesh-*.json` fixtures in `conformance/`. `SpecHandler(descriptor)` serves the same
-  registry-derived descriptor as the Cloud Service Profile's R5 derived-spec document over a plain
-  GET (mounted at `httpbinding.SpecPath`, `/benzene/spec`) - the profile permits Benzene's own
-  derived format, and R5/R6 are then two surfaces onto the one registry-derived truth (GET spec vs
-  the reserved `benzene:mesh` topic). Opt-in like the descriptor middleware - don't mount it and R5
-  is simply reduced, per the profile's §4 exposure-control rule.
+  the vendored `mesh-*.json` fixtures in `conformance/`. The descriptor is no longer what
+  `/benzene/spec` serves: R5 is the `contract` package's Contract Document (spec-0.3.0); the
+  descriptor stays on `benzene:mesh` until spec-0.4.0 folds it into that document.
 - `openapi/` - OpenAPI 3.0 document generation (zero-dep), the Go form of `Benzene.Schema.OpenApi`.
   `Generate(desc, opts...)` turns a `mesh.Descriptor` into an OpenAPI 3.0 document: each registered
   topic becomes a POST operation whose request body is the topic's request schema and whose
@@ -311,22 +333,23 @@ alongside the shared spec.
   sanctioned reflection path) rather than deriving its own - the only reshaping is JSON Schema's
   nullable type-array (`["string","null"]`) into OpenAPI 3.0's `nullable: true`, handled for both
   the `[]string` (straight from `mesh.Describe`) and `[]any` (JSON-round-tripped) forms. `Handler`
-  serves the doc over a plain GET, the OpenAPI sibling of `mesh.SpecHandler` (R5 is already satisfied
-  by the derived descriptor; this is the richer industry-standard alternative). A documentation view
+  serves the doc over a plain GET - an industry-standard view beside the Contract Document R5
+  serves. A documentation view
   of the message contracts, not a claim every topic is HTTP-routed.
 - `asyncapi/` - AsyncAPI 3.0 document generation (zero-dep), the event-driven sibling of `openapi` and
-  the other half of `Benzene.Schema.OpenApi`. `Generate(desc, opts...)` maps Benzene onto AsyncAPI
-  3.0's channels + `action: receive`/`send` operations exactly as the .NET builder does: every
-  **handled** topic is a `receive` operation on a channel carrying the request, with the native
-  `reply` object pointing at a `<topic>:<suffix>` reply channel (default `response`,
-  `WithResponseTopicSuffix`) - derived entirely from the descriptor. What a service **sends** (a
-  fire-and-forget published event) is **not** in the descriptor, so it is a caller-declared input via
-  `WithSentEvent(topic, payload)` (a `send` operation) - the same explicit input the .NET builder
-  takes from broadcast-event/message-sender definitions, and the reason `openapi` deferred AsyncAPI
-  rather than fabricating a sync-vs-event classification. Reuses mesh's derived schemas with **no**
-  reshaping (AsyncAPI 3.0 schemas are JSON Schema Draft 7, so mesh's nullable `["T","null"]` form is
-  already valid - unlike OpenAPI 3.0), deep-copied so `Generate` never mutates the descriptor.
-  `Handler` serves it over a plain GET, the AsyncAPI sibling of `openapi.Handler`/`mesh.SpecHandler`.
+  the other half of `Benzene.Schema.OpenApi`. `Generate(doc contract.Document, opts...)` maps the
+  Contract Document onto AsyncAPI 3.0's channels + `action: receive`/`send` operations exactly as
+  the .NET builder does: every `requests[]` entry is a `receive` operation on a channel carrying the
+  request, with the native `reply` object pointing at a `<topic>:<suffix>` reply channel (default
+  `response`, `WithResponseTopicSuffix`) **only when the entry declares a response**; every
+  `events[]` entry is a `send` operation carrying the event, and every `sends[]` entry a `send`
+  operation (with a reply when one is declared). Nothing is declared twice: the send side is the
+  service's own `contract.RegisterEvent`/`RegisterSend` declarations. The document's named schemas
+  are carried into AsyncAPI `components.schemas` under the same names, with OpenAPI 3.0's
+  `nullable` rewritten into JSON Schema (`["T","null"]`; the nullable wrapper becomes `anyOf` with
+  `{"type":"null"}`), deep-copied so `Generate` never mutates the document. `Handler` serves it over
+  a plain GET; `contract.WithDocumentType("asyncapi", "json", asyncapi.Generate(doc))` serves it on
+  `benzene:spec` instead.
 - `meshd/` - the collector (main repo's `docs/specification/mesh.md` §4-§6, originally
   Phases 3-4 of this repo's own `work/archive/mesh.md`): an ordinary Benzene service
   (register/heartbeat/traces/issues ingest + `benzene:mesh:query:*` read models over an
@@ -601,8 +624,12 @@ alongside the shared spec.
   HTTP/Lambda/Azure-Functions host. The Go counterpart of `Benzene.Testing`/`BenzeneTestHost`; the
   `go-test-champion` agent owns hardening it. (This repo's own tests build an `InvocationContext`
   directly where that's clearer, rather than routing through the harness.)
-- `conformance/` - the fixture runner; `testdata/*.json` are vendored copies from the main
-  repo's `docs/specification/conformance/` (see `conformance/README.md` for how to re-sync).
+- `conformance/` - the fixture runner; `testdata/*.json` and `README.md` are vendored copies from
+  the main repo's `docs/specification/conformance/` (pinned by `SPEC_VERSION`). The contract-document
+  producer groups run here against `contract` (`contract_conformance_test.go`; the canonical
+  payload types are declared under their canonical names, and `internal/naming/...` holds the
+  two-package `Item` types the naming cases need); the client-generator groups run in
+  `codegen/conformance`.
 - `examples/` - runnable example services: `helloworld` (plain HTTP),
   `mesh-helloworld` (collector + two meshed services, the Phases 1-4 demo), and one
   `<provider>-helloworld` per cloud deployment target (`aws-lambda-helloworld`,

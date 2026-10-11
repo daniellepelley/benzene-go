@@ -145,8 +145,8 @@ In both forms `TReq`/`TRes` are inferred from the handler's signature. A
 function that already has the handler shape; write it only when you need to name the types for
 clarity.
 
-The mesh's outbound registry mirrors this exactly: `mesh.RegisterOutbound` returns the error,
-`mesh.MustRegisterOutbound` panics with it.
+The outbound declarations mirror this exactly: `contract.RegisterEvent` and `contract.RegisterSend`
+return the error, `contract.MustRegisterEvent` and `contract.MustRegisterSend` panic with it.
 
 `Register` is generic over `TReq`/`TRes`, but the registry stores handlers in a type-erased form so a
 transport binding can dispatch by topic alone without knowing the request type at compile time. At the

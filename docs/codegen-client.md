@@ -1,16 +1,16 @@
 # Generated clients (benzene-codegen)
 
 `benzene-codegen` turns a service's committed Contract Document (`{Service}.spec.json`, produced by
-that service's own port — the .NET `Benzene.Descriptor`, or this port's own mesh descriptor, see
-[the specification](https://benzene.app/docs/specification/contract-document.html)) into a typed Go
+that service's own port — the .NET `Benzene.Descriptor`, or this port's own `contract.Derive`, served
+on `benzene:spec` and `GET /benzene/spec`, see [the specification](https://benzene.app/docs/specification/contract-document.html)) into a typed Go
 client: one struct per request/response DTO, one method per topic, an embedded contract hash, and a
 `RequiredTopics` list — with **zero transport dependency**. It works against a Contract Document
 produced by *any* Benzene port, not only this one: a Go consumer of a .NET, TypeScript, or Python
 service gets the same typed, topic-scoped client this page describes.
 
 This is a Go port of the .NET repo's `Benzene.CodeGen.Client` (`benzene build`), implementing the
-same language-neutral generation rules — topic scoping, reserved-topic exclusion, the schema-closure
-walk, and the `contractHash` algorithm — from
+same language-neutral generation rules — the `schemaDialect` check, topic scoping, the schema-closure
+walk, and the `contractHash`/`registrationHash` algorithm — from
 [`contract-document.md`](https://benzene.app/docs/specification/contract-document.html). Method
 naming and file layout are **not** part of that specification (§5.5): the choices below are this
 port's own idiom, not a promise every language port makes the same ones.
@@ -18,18 +18,21 @@ port's own idiom, not a promise every language port makes the same ones.
 ## Where it lives, and why
 
 The generator (`codegen/`) is a **separate Go module** from the one this documentation otherwise
-describes, with its own `go.mod`: `github.com/daniellepelley/benzene-go/codegen`. It needs a JSON
-canonicalizer (`github.com/gowebpki/jcs`, for the `contractHash` algorithm's RFC 8785 step) — a
-dependency that must never leak into the root module or any of its dependency-free packages
-(`client`, `httpclient`, …), matching this repo's `awssqs`/`kafka`/`grpcbinding` pattern of giving a
-third-party dependency its own module. **A client generator has this dependency; the runtime it
+describes, with its own `go.mod`: `github.com/daniellepelley/benzene-go/codegen`. It hashes with the
+root module's `contract.HashDocument` — the same code a serving Go service hashes its own document
+with, over the hand-written RFC 8785 canonicalizer `internal/jcs` — and depends on
+`github.com/gowebpki/jcs` only to fuzz that canonicalizer against an independent implementation
+(`codegen/jcsfuzz`), a dependency that must never leak into the root module or any of its
+dependency-free packages (`client`, `httpclient`, …), matching this repo's `awssqs`/`kafka`/
+`grpcbinding` pattern of giving a third-party dependency its own module. **A client generator has this dependency; the runtime it
 generates code for does not** — a generated client's only import from this port is `client.Sender`,
 `httpclient.Unmarshal`, and `benzene.Result[T]`/`benzene.Topic`, all already dependency-free.
 
 ```
 codegen/
   contractdoc/   parses a Contract Document, applies topic scoping, walks the schema closure,
-                 computes contractHash — generic-JSON-only, no OpenAPI/JSON-Schema library needed
+                 hashes via contract.HashDocument — generic-JSON-only, no OpenAPI/JSON-Schema library
+  jcsfuzz/       differential fuzz test: internal/jcs against github.com/gowebpki/jcs
   gengo/         Go code generation: type mapping, naming, the two client shapes below
   cmd/
     benzene-codegen/   the CLI
@@ -53,10 +56,10 @@ go run github.com/daniellepelley/benzene-go/codegen/cmd/benzene-codegen build \
 | `-service` | service name → `{Service}Client`/`New{Service}Client` (mode=`service`) |
 | `-package` | generated Go package name, used exactly — must be a legal Go identifier, or the CLI fails loud |
 | `-topics` | comma-separated topic include-list (`contract-document.md` §5.2) |
-| `-include-reserved` | admit reserved `benzene:*` topics when `-topics` is not given |
 
 The CLI exits non-zero — with a message on stderr naming the problem — on an unknown flag, an
-unparseable document, or an include-listed topic the document doesn't have (the error names both the
+unparseable document, a `schemaDialect` other than `openapi-3.0` (`contract-document.md` §1: a
+consumer rejects a dialect it does not know), or an include-listed topic the document doesn't have (the error names both the
 unknown topic(s) and the document's actual topics, per §5.2's fail-loud rule).
 
 ## Two output shapes
@@ -75,9 +78,10 @@ func (c *PaymentsClient) CapturePayments(ctx context.Context, req CapturePayment
 func (c *PaymentsClient) CapturePaymentsWithHeaders(ctx context.Context, req CapturePayment, headers map[string]string) (benzene.Result[PaymentDto], error)
 ```
 
-By default this covers a service's **domain topics only** — reserved Benzene utility topics
-(`benzene:spec`, `benzene:healthcheck`, `benzene:mesh`, …) are excluded whether or not they carry an
-explicit `"reserved": true` flag (`contract-document.md` §5.1's flag-OR-prefix rule). `-topics` scopes
+By default this covers every `requests[]` topic. A producer never lists a reserved `benzene:` topic,
+and the generator ignores any such entry it meets (`contract-document.md` §5.1). A request with no
+`response` is a handler that returns no payload, generated as `benzene.Result[struct{}]`; `{}` is a
+payload of any shape, `benzene.Result[any]`. `-topics` scopes
 `RequiredTopics`/the generated methods to just the named topics; `components`/DTOs are **not**
 narrowed by an include-list (§5.2) — every schema in the document is still generated, even one
 reachable only from an excluded topic, matching the reference implementation exactly.
@@ -94,10 +98,8 @@ go run .../benzene-codegen build -file contracts/payments.spec.json -out . -mode
 Each topic client gets its **own directory/package** (`{clientName}`, derived from the topic via
 `TopicMethodName` below) so two independently-generated topic clients can never collide on a shared
 DTO name — mirroring the .NET reference's per-client namespace/folder. Its embedded `ContractHash`
-covers only that topic's projection: an explicitly-requested reserved topic survives in an atomic
-client's hash (only its `reserved` flag is stripped, not the entry) since asking for it by name makes
-it part of what's being hashed — see `contract-document.md` §6.2/§6.4 for the full rule and why a
-service-level hash and a topic-scoped hash are never comparable to each other.
+covers only that topic's projection (one request, no events or sends) — see `contract-document.md`
+§6.4 for why a service-level hash and a topic-scoped hash are never comparable to each other.
 
 ## Naming
 
@@ -149,25 +151,29 @@ pinned byte-for-byte by `docs/specification/conformance/contract-document-cases.
 
 ## The `contractHash`
 
-Every generated client embeds a `contractHash` (`contract-document.md` §6):
+Every generated client embeds a `contractHash` (`contract-document.md` §6) — the hash of the
+document it was generated from, or of its projection:
 
 ```
-"sha256:" + lowercase-hex(sha256(canonicalJSON(normalize(document))))
+contractHash     = "sha256:" + lowercase-hex(sha256(JCS(P({requests, events}))))
+registrationHash = "sha256:" + lowercase-hex(sha256(JCS(P({requests, events, sends}))))
 ```
 
-`canonicalJSON` is RFC 8785 (JCS), via `github.com/gowebpki/jcs` — the only third-party dependency in
-the whole `codegen` module. `normalize` strips every `example`, the top-level `messageEndpoint`/
-`transports`, and the `reserved` flag itself off every surviving request; a **whole-service or
-service-level** document additionally drops every request §5.1 detects as reserved *entirely* — a
-**topic-scoped** (atomic) document does not, if it was explicitly built for that one reserved topic.
-`codegen/conformance/conformance_test.go` runs this against
-`docs/specification/conformance/contract-hash-cases.json`'s cases byte-for-byte, including the two
-cases proving normalization actually strips decoration rather than hashing it verbatim.
+`P` is §6.2's projection: only `requests`/`events` (and `sends`) with their allow-listed members,
+`benzene:` entries dropped, every `$ref` dereferenced (a cycle cut to `{}`), annotations (`title`,
+`description`, `format`, `example`, `x-*`, …) and `discriminator.mapping` removed, `required` sorted,
+entries and `httpMappings` in canonical order — so component names, hoisting depth, entry order and
+documentation never move a hash. `JCS` is RFC 8785. Both are computed by the root module's
+`contract.HashDocument`, so a generated client and a Go service hash one way; `ApplyScope` and
+`TopicScopedProjection` recompute both hashes over the projection they return.
+`codegen/conformance/conformance_test.go` runs this against every case of
+`docs/specification/conformance/contract-hash-cases.json` byte-for-byte, projections included.
 
-Compare a client's embedded `ContractHash` against the producing service's own served contract hash
-(e.g. its `benzene:mesh` descriptor or `/benzene/spec` document) to detect drift between the client
-you hold and the service you're calling — the same comparison `clienthealthcheck.ServiceCheck`
-performs, using `WithExpectedContractHash` to supply the value this generator would have embedded.
+A default client (no include-list) embeds the whole-service `contractHash`, which equals the value
+the producing service serves on `benzene:spec`. Compare the two to detect drift between the client you
+hold and the service you're calling — the same comparison `clienthealthcheck.ServiceCheck` performs,
+with `WithExpectedContractHash(yourclient.ContractHash)`. An include-list or topic client's hash is
+only comparable with the same projection recomputed over the provider's current document (§6.4).
 
 ## The `go:generate` pattern
 
