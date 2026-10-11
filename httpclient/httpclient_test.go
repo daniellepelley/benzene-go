@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	benzene "github.com/daniellepelley/benzene-go"
@@ -30,6 +31,11 @@ func greetHandler(_ context.Context, req greetRequest) benzene.Result[greetRespo
 
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
+	return httptest.NewServer(httpbinding.EnvelopeHandler(newTestBuilder(t)))
+}
+
+func newTestBuilder(t *testing.T) *benzene.ApplicationBuilder {
+	t.Helper()
 	registry := benzene.NewRegistry()
 	if err := benzene.Register(registry, benzene.NewTopic("greet"), benzene.Handler[greetRequest, greetResponse](greetHandler)); err != nil {
 		t.Fatalf("Register() error = %v", err)
@@ -47,12 +53,11 @@ func newTestServer(t *testing.T) *httptest.Server {
 	if err := benzene.Register(registry, benzene.NewTopic("structured"), structuredHandler); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
-	builder := &benzene.ApplicationBuilder{
+	return &benzene.ApplicationBuilder{
 		Registry:  registry,
 		Container: benzene.NewContainer(),
 		Pipeline:  benzene.NewPipeline(benzene.RouterMiddleware(registry)),
 	}
-	return httptest.NewServer(httpbinding.EnvelopeHandler(builder))
 }
 
 func TestSend_SuccessRoundTrip(t *testing.T) {
@@ -246,6 +251,58 @@ func TestSend_NonEnvelopeResponseFallsBackToTheReverseHTTPTable(t *testing.T) {
 	result := stubResponse(200, `{"some":"json"}`).Send(context.Background(), benzene.NewTopic("greet"), nil, nil)
 	if result.Status != benzene.StatusOk || result.Payload == nil || string(*result.Payload) != `{"some":"json"}` {
 		t.Errorf("a JSON 200 that is not an envelope = %+v, want ok carrying the body", result)
+	}
+}
+
+// core-concepts.md §12 error fidelity: a failure that arrives as a bare problem document - the
+// application/problem+json body of a route-mapped HTTP binding, or a JSON problem from anything in
+// front of one - is read like the problem in a failure envelope, field and code intact.
+func TestSend_ProblemDocumentResponseRebuildsErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		code int
+		body string
+		want benzene.Result[json.RawMessage]
+	}{
+		{
+			name: "errors with field and code",
+			code: 422,
+			body: `{"type":"https://benzene.app/problems/validation-error","status":422,"benzeneStatus":"validation-error","detail":"Name must not be empty","errors":[{"message":"Name must not be empty","field":"/name","code":"NotEmptyValidator"}]}`,
+			want: benzene.Result[json.RawMessage]{Status: benzene.StatusValidationError, Errors: []benzene.Error{{Message: "Name must not be empty", Field: "/name", Code: "NotEmptyValidator"}}},
+		},
+		{
+			name: "detail only is one opaque error",
+			code: 409,
+			body: `{"type":"about:blank","status":409,"detail":"already exists, try another"}`,
+			want: benzene.Result[json.RawMessage]{Status: benzene.StatusConflict, Errors: []benzene.Error{{Message: "already exists, try another"}}},
+		},
+		{
+			name: "JSON with no problem members names the code",
+			code: 500,
+			body: `{"message":"Internal server error"}`,
+			want: benzene.Result[json.RawMessage]{Status: benzene.StatusUnexpectedError, Errors: []benzene.Error{{Message: "outbound request returned HTTP 500 with no response envelope"}}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := stubResponse(tt.code, tt.body).Send(context.Background(), benzene.NewTopic("greet"), nil, nil)
+			if result.Status != tt.want.Status {
+				t.Errorf("Status = %q, want %q", result.Status, tt.want.Status)
+			}
+			if !reflect.DeepEqual(result.Errors, tt.want.Errors) {
+				t.Errorf("Errors = %+v, want %+v", result.Errors, tt.want.Errors)
+			}
+		})
+	}
+
+	// The real thing: a route-mapped httpbinding answering its own problem+json.
+	builder := newTestBuilder(t)
+	server := httptest.NewServer(httpbinding.Handler(builder, []httpbinding.Route{{Method: http.MethodPost, Path: "/structured", Topic: benzene.NewTopic("structured")}}))
+	defer server.Close()
+	result := NewClient(server.URL+"/structured").Send(context.Background(), benzene.NewTopic("structured"), nil, []byte(`{}`))
+	want := []benzene.Error{{Message: "name is required", Field: "Name", Code: "required"}}
+	if result.Status != benzene.StatusValidationError || !reflect.DeepEqual(result.Errors, want) {
+		t.Errorf("Send() to a route = %+v, want validation-error with %+v", result, want)
 	}
 }
 
