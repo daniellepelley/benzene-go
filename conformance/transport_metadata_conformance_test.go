@@ -22,6 +22,7 @@ type transportMetadataFixture struct {
 	DefaultMetadataKeys struct {
 		Topic   string `json:"topic"`
 		Version string `json:"version"`
+		Headers string `json:"headers"`
 	} `json:"defaultMetadataKeys"`
 	MetadataCases []metadataCase `json:"metadataCases"`
 	OverrideCases []struct {
@@ -59,6 +60,10 @@ func TestConformance_TransportMetadata(t *testing.T) {
 	}
 	if wire.DefaultVersionKey != fixture.DefaultMetadataKeys.Version {
 		t.Errorf("wire.DefaultVersionKey = %q, want %q", wire.DefaultVersionKey, fixture.DefaultMetadataKeys.Version)
+	}
+	// The EventBridge embedded-headers key (awseventbridge.EmbeddedHeadersKey is this constant).
+	if wire.EmbeddedHeadersKey != fixture.DefaultMetadataKeys.Headers {
+		t.Errorf("wire.EmbeddedHeadersKey = %q, want %q", wire.EmbeddedHeadersKey, fixture.DefaultMetadataKeys.Headers)
 	}
 	var names wire.ReservedNames // the zero value is the defaults a service gets untouched
 	defaultKey := names.Topic()

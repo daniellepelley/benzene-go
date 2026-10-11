@@ -48,12 +48,12 @@ func TestHandler_DetailTypeTopicDispatches(t *testing.T) {
 }
 
 func TestHandler_EmbeddedHeadersDontBreakRequestMapping(t *testing.T) {
-	// The reserved _benzeneHeaders key, when present, is an extra field a request mapper's
+	// The reserved benzene-headers key, when present, is an extra field a request mapper's
 	// deserialization simply ignores (per spec) - it must not stop the handler's own
 	// request type from binding.
 	handler := Handler(newTestBuilder(t))
 
-	event := `{"id":"evt-2","detail-type":"greet","source":"com.example.orders","detail":{"name":"Bus","_benzeneHeaders":{"x-correlation-id":"abc"}}}`
+	event := `{"id":"evt-2","detail-type":"greet","source":"com.example.orders","detail":{"name":"Bus","benzene-headers":{"x-correlation-id":"abc"}}}`
 	if _, err := handler(context.Background(), json.RawMessage(event)); err != nil {
 		t.Errorf("handler() error = %v, want nil", err)
 	}
@@ -128,24 +128,24 @@ func TestResolveRequest(t *testing.T) {
 			},
 		},
 		{
-			name:        "embedded _benzeneHeaders lifted out, body stays the raw detail",
-			rule:        ruleEvent{ID: "evt-2", DetailType: "greet", Detail: json.RawMessage(`{"name":"x","_benzeneHeaders":{"x-correlation-id":"abc","traceparent":"00-1-2-01"}}`)},
+			name:        "embedded benzene-headers lifted out, body stays the raw detail",
+			rule:        ruleEvent{ID: "evt-2", DetailType: "greet", Detail: json.RawMessage(`{"name":"x","benzene-headers":{"x-correlation-id":"abc","traceparent":"00-1-2-01"}}`)},
 			wantTopic:   "greet",
-			wantBody:    `{"name":"x","_benzeneHeaders":{"x-correlation-id":"abc","traceparent":"00-1-2-01"}}`,
+			wantBody:    `{"name":"x","benzene-headers":{"x-correlation-id":"abc","traceparent":"00-1-2-01"}}`,
 			wantHeaders: map[string]string{"eventbridge-id": "evt-2", "eventbridge-detail-type": "greet", "x-correlation-id": "abc", "traceparent": "00-1-2-01"},
 		},
 		{
 			name:        "embedded header wins over eventbridge- prefixed key on collision",
-			rule:        ruleEvent{ID: "evt-3", Source: "original-source", DetailType: "greet", Detail: json.RawMessage(`{"eventbridge-source":"ignored","_benzeneHeaders":{"eventbridge-source":"embedded-wins"}}`)},
+			rule:        ruleEvent{ID: "evt-3", Source: "original-source", DetailType: "greet", Detail: json.RawMessage(`{"eventbridge-source":"ignored","benzene-headers":{"eventbridge-source":"embedded-wins"}}`)},
 			wantTopic:   "greet",
-			wantBody:    `{"eventbridge-source":"ignored","_benzeneHeaders":{"eventbridge-source":"embedded-wins"}}`,
+			wantBody:    `{"eventbridge-source":"ignored","benzene-headers":{"eventbridge-source":"embedded-wins"}}`,
 			wantHeaders: map[string]string{"eventbridge-id": "evt-3", "eventbridge-source": "embedded-wins", "eventbridge-detail-type": "greet"},
 		},
 		{
 			name:        "non-string embedded values are skipped",
-			rule:        ruleEvent{ID: "evt-4", DetailType: "greet", Detail: json.RawMessage(`{"_benzeneHeaders":{"good":"kept","bad":3,"worse":{"x":1}}}`)},
+			rule:        ruleEvent{ID: "evt-4", DetailType: "greet", Detail: json.RawMessage(`{"benzene-headers":{"good":"kept","bad":3,"worse":{"x":1}}}`)},
 			wantTopic:   "greet",
-			wantBody:    `{"_benzeneHeaders":{"good":"kept","bad":3,"worse":{"x":1}}}`,
+			wantBody:    `{"benzene-headers":{"good":"kept","bad":3,"worse":{"x":1}}}`,
 			wantHeaders: map[string]string{"eventbridge-id": "evt-4", "eventbridge-detail-type": "greet", "good": "kept"},
 		},
 		{
@@ -193,7 +193,7 @@ func TestEmbeddedHeaders(t *testing.T) {
 		{name: "no detail at all", detail: `not json`, want: nil},
 		{name: "detail is a JSON array, not an object", detail: `[1,2,3]`, want: nil},
 		{name: "object with no embedded key", detail: `{"name":"x"}`, want: nil},
-		{name: "embedded key present but not an object", detail: `{"_benzeneHeaders":"not an object"}`, want: nil},
+		{name: "embedded key present but not an object", detail: `{"benzene-headers":"not an object"}`, want: nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -202,5 +202,17 @@ func TestEmbeddedHeaders(t *testing.T) {
 				t.Errorf("embeddedHeaders() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestEmbeddedHeadersKey pins the D14 rename: the embedded-headers member is spelled like a header,
+// "benzene-headers" (transport-metadata-cases.json defaultMetadataKeys.headers), with no dual-accept
+// of the old "_benzeneHeaders".
+func TestEmbeddedHeadersKey(t *testing.T) {
+	if EmbeddedHeadersKey != "benzene-headers" {
+		t.Errorf("EmbeddedHeadersKey = %q, want %q", EmbeddedHeadersKey, "benzene-headers")
+	}
+	if got := embeddedHeaders(json.RawMessage(`{"_benzeneHeaders":{"x-correlation-id":"abc"}}`)); len(got) != 0 {
+		t.Errorf("embeddedHeaders() read the old _benzeneHeaders key: %v", got)
 	}
 }

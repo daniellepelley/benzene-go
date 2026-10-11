@@ -470,7 +470,7 @@ The event's `detail-type` is the topic verbatim — EventBridge's own native rou
 `benzene.NewTopic("order.created")` handles events published with that detail-type — and `detail` is
 the body. Envelope metadata (`id`, `source`, `account`, `region`, `time`, `detail-type`) is exposed
 as `eventbridge-`-prefixed headers, and Benzene wire headers embedded by an outbound EventBridge
-client are lifted from the reserved `_benzeneHeaders` key inside `detail`. Like SNS, delivery is
+client are read from the reserved `benzene-headers` key inside `detail` (which reaches your handler unchanged, that member included). Like SNS, delivery is
 fire-and-forget and one event per invocation; a non-success result returns a Go error, triggering
 AWS's async-invoke retry. The `awseventbridge` module also has an outbound `Client` (via `PutEvents`).
 

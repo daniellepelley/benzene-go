@@ -20,6 +20,14 @@ const DefaultTopicKey = "topic"
 // configurable via ReservedNames.
 const DefaultCorrelationKey = "x-correlation-id"
 
+// EmbeddedHeadersKey is the reserved member of an EventBridge event's detail that carries the wire
+// headers (wire-contracts.md §2, tier D): EventBridge has no per-message metadata channel, so the
+// outbound client embeds the headers as a string->string object under this key - only when the
+// payload is a JSON object - and the inbound binding reads them back into the header dictionary,
+// leaving detail itself unchanged. It names a header rather than being one of the payload's own
+// fields, so it is spelled like every other header: lowercase kebab-case with the benzene- marker.
+const EmbeddedHeadersKey = "benzene-headers"
+
 // DefaultVersionKey is the header a message's version travels under (wire-contracts.md §2, tier
 // A): the one signal that selects the handler (core-concepts.md §2). There is deliberately no
 // fallback list - a producer's own "version" or "x-version" header (an API or client SDK version,

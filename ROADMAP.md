@@ -324,10 +324,10 @@ delivery order - just the current honest picture, kept up to date as things land
   `Handler` for a Lambda invoked by an EventBridge rule (zero dependencies; topic is
   `detail-type` verbatim - EventBridge's own native routing key, no bolted-on `topic`
   attribute - body is the raw `detail` JSON, and headers are `eventbridge-`-prefixed envelope
-  metadata plus any wire headers embedded under the reserved `_benzeneHeaders` key inside
+  metadata plus any wire headers embedded under the reserved `benzene-headers` key inside
   `detail`, since EventBridge has no native per-message attributes; a failed event returns a
   Go error triggering AWS's async-invoke retry - the same posture as `awssns`), and an
-  outbound `Client` publishing via `PutEvents` (embeds headers under `_benzeneHeaders` when
+  outbound `Client` publishing via `PutEvents` (embeds headers under `benzene-headers` when
   the payload is a JSON object, mirroring `Benzene.Clients.Aws.EventBridge`; needs
   `aws-sdk-go-v2/service/eventbridge`).
 - `diagnostics` - OpenTelemetry-based diagnostics middleware, in its **own Go module** (see

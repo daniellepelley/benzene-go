@@ -11,9 +11,9 @@
 //   - Topic: the event's detail-type, verbatim - EventBridge's own native routing key, so
 //     this binding needs no bolted-on "topic" attribute. source is metadata, not part of the
 //     topic.
-//   - Body: the raw JSON of detail (the domain payload) - EmbeddedHeadersKey, when present,
-//     is an extra field a request mapper's deserialization simply ignores, exactly as the
-//     spec notes.
+//   - Body: the raw JSON of detail (the domain payload), unchanged - EmbeddedHeadersKey, when
+//     present, stays in it as an extra member a request type's deserialization simply ignores
+//     (wire-contracts.md §2: the handler's body is detail unchanged).
 //   - Headers: envelope metadata under "eventbridge-"-prefixed keys (id/source/account/
 //     region/time/detail-type), plus Benzene wire headers lifted from the reserved
 //     EmbeddedHeadersKey object inside detail (wire-contracts.md §2) - EventBridge has no
@@ -38,11 +38,10 @@ import (
 	"github.com/daniellepelley/benzene-go/wire"
 )
 
-// EmbeddedHeadersKey is the reserved key inside detail that carries embedded Benzene wire
-// headers - must match the main repo's
-// Benzene.Aws.Lambda.EventBridge.EventBridgeMessageHeadersGetter.EmbeddedHeadersKey /
-// Benzene.Clients.Aws.EventBridge.EventBridgeContextConverter.EmbeddedHeadersKey.
-const EmbeddedHeadersKey = "_benzeneHeaders"
+// EmbeddedHeadersKey is the reserved key inside detail that carries embedded Benzene wire headers,
+// "benzene-headers" (wire.EmbeddedHeadersKey, wire-contracts.md §2) - shared with every other port's
+// EventBridge binding.
+const EmbeddedHeadersKey = wire.EmbeddedHeadersKey
 
 // ruleEvent mirrors the fields this adapter needs from the event an EventBridge rule
 // delivers to Lambda - see
@@ -104,7 +103,7 @@ func Handler(builder *benzene.ApplicationBuilder, opts ...Option) awslambda.Hand
 
 // resolveRequest resolves the event per the package doc's mapping: topic is detail-type
 // verbatim, body is the raw detail JSON, and headers are the eventbridge-prefixed envelope
-// metadata with any _benzeneHeaders object inside detail lifted on top (embedded wins on key
+// metadata with any EmbeddedHeadersKey object inside detail read on top (embedded wins on key
 // collision, matching the main repo's EventBridgeMessageHeadersGetter).
 func resolveRequest(rule ruleEvent) wire.Request {
 	headers := map[string]string{}

@@ -497,7 +497,7 @@ alongside the shared spec.
   Lambda `Handler` for a stream event source mapping. Topic is `{tableName}:{eventName}` (table
   parsed from the stream ARN + INSERT/MODIFY/REMOVE), body is the record's image unmarshalled
   from DynamoDB AttributeValue format into plain JSON (NewImage, else OldImage, else Keys),
-  headers are `dynamodb-`-prefixed metadata (no `_benzeneHeaders` - these come from table writes,
+  headers are `dynamodb-`-prefixed metadata (no `benzene-headers` - these come from table writes,
   not a Benzene publisher). No outbound half exists (writing to the table is the publish; the
   stream is read-only), so no SDK and no separate module. Records are ordered CDC, so processing
   is **sequential and stops at the first failure**, reporting that record's `SequenceNumber` for
@@ -557,9 +557,9 @@ alongside the shared spec.
   `PutEvents` client; the inbound rule-invoked `Handler` is zero-dependency), matching the
   main repo's spec exactly: topic is `detail-type` verbatim, body is the raw `detail` JSON,
   headers are `eventbridge-`-prefixed envelope metadata plus any wire headers embedded under
-  the reserved `_benzeneHeaders` key inside `detail` (EventBridge has no native per-message
+  the reserved `benzene-headers` key inside `detail` (EventBridge has no native per-message
   attributes, so that's the only channel headers can travel on - embedded headers win on
-  collision). `Client` embeds `_benzeneHeaders` only when the payload is a JSON object.
+  collision). `Client` embeds `benzene-headers` only when the payload is a JSON object.
   Failure returns a Go error - async-invoke retry, like `awssns`.
 - `kafka/` - Kafka binding, in **its own Go module** (`kafka/go.mod`, needs
   `segmentio/kafka-go` - a broker wire protocol isn't hand-rollable), matching
