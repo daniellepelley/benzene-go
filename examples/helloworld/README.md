@@ -42,7 +42,8 @@ curl -X POST localhost:8080/benzene/invoke \
 - **Health check interception**: `healthcheck.Middleware` short-circuits the pipeline for the
   reserved `healthcheck` topic before the router ever sees it.
 - **Both HTTP entry points**: `httpbinding.Handler` (an explicit route table, native HTTP status
-  codes) and `httpbinding.EnvelopeHandler` (the wire envelope, always HTTP 200).
+  codes) and `httpbinding.EnvelopeHandler` (the wire envelope: HTTP 200 for every envelope it processed, 400
+  for one that is not an envelope).
 - **The default service standard** (the main repo's `docs/specification/design-principles.md`
   §5): the framework surfaces mount on the well-known `/benzene/`-prefixed paths -
   `httpbinding.HealthPath` and `httpbinding.EnvelopePath` - so they read as infrastructure,

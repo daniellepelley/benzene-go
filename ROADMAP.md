@@ -346,9 +346,10 @@ delivery order - just the current honest picture, kept up to date as things land
   or `detail-type`, Kafka's own topic already is that routing key - headers pass through
   verbatim in both directions, and the message value is the body verbatim, no envelope
   wrapping. A `Consumer` loop over a consumer group (one pipeline invocation + DI scope per
-  record, explicit commits; Kafka has no broker-side redelivery/DLQ, so a failed message goes
-  to the `OnFailure` hook - dead-letter publish, log - and is then committed past, keeping
-  the partition moving) and an outbound `Client` satisfying `client.Sender` (writes to the
+  record, explicit commits; Kafka has no broker-side redelivery/DLQ, so by default a failed
+  message goes to the `OnFailure` hook - dead-letter publish, log - and is then committed past,
+  keeping the partition moving; `Settlement: envelope.Settlement{Delivery: envelope.AtLeastOnce}`
+  instead re-dispatches it in place until it succeeds) and an outbound `Client` satisfying `client.Sender` (writes to the
   Kafka topic named after the Benzene topic, per message - mirroring
   `KafkaClientMiddleware.HandleAsync`'s `ProduceAsync(context.Topic, ...)`). Needs
   `github.com/segmentio/kafka-go` (chosen over `franz-go` for its narrow Reader/Writer

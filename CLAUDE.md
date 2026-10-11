@@ -54,7 +54,12 @@ alongside the shared spec.
   gRPC status codes (not `google.golang.org/grpc/codes.Code`), so it stays zero-dependency
   like `httpstatus`; `grpcbinding` wraps the result as `codes.Code(...)`.
 - `envelope/` - dispatches a `wire.Request` through a `Pipeline`, shared by `httpbinding`,
-  `httpclient`, and `conformance`.
+  `httpclient`, and `conformance`. Also the two halves every binding shares: `Settlement` (the
+  one-way acknowledgement policy of transport-bindings §1 obligation 8 - zero value = redeliver any
+  failure, `AtMostOnce` override, `IgnoreUnmatchedTopics`; handler constructors take it as
+  `WithSettlement`, self-hosted workers as a `Settlement` field - keep that split uniform when adding
+  a binding) and `ToResult` (the receiver rule every envelope client uses: `isSuccessful` decides, a
+  missing one is a failure, never reclassify from `statusCode`).
 - `httpbinding/` - the HTTP transport binding (native + envelope-over-HTTP entry points). `Route`
   matching supports a `"{name}"` placeholder per segment, optionally with a literal prefix/suffix
   in the same segment (e.g. `"v{version}"`); a `"{version}"` placeholder is additionally
@@ -82,7 +87,9 @@ alongside the shared spec.
   `Benzene.Http/Cors`). CORS is an HTTP-transport concern (Origin, preflight OPTIONS, `Access-Control-*`
   headers), so unlike the pipeline middlewares this is an ordinary `net/http` middleware wrapping an
   `http.Handler` in front of `httpbinding.Handler`.
-- `healthcheck/` - reserved-topic health-check interception middleware, plus ready-made `Check`
+- `healthcheck/` - reserved-topic health-check interception middleware (the result is `ok` whenever
+  the checks ran; `isHealthy` is the verdict, and `httpstatus.Response` turns `isHealthy: false` into
+  a 503 on a route mapped to a health topic - wire-contracts §5), plus ready-made `Check`
   implementations for probing a dependency's reachability: `TCPCheck` (opens a TCP connection -
   `Benzene.HealthChecks.Tcp`) and `HTTPPingCheck` (GETs a URL, healthy only on 200, credentials
   stripped from the reported URL - `Benzene.HealthChecks.Http`). Both zero-dep (net/net-http) and
@@ -354,7 +361,10 @@ alongside the shared spec.
   environment, so the mesh Lambda pins `reserved_concurrent_executions = 1` in Terraform to keep
   that state a single consistent instance - see that example's README for the full story.
 - `awslambda/` - AWS Lambda binding: a hand-rolled Lambda Runtime API bootstrap loop, plus
-  HTTP (API Gateway v2 / Function URL) and envelope adapters.
+  HTTP (API Gateway v2 / Function URL) and envelope adapters. Two envelope entry points, because the
+  Runtime API does not reveal the invocation type: `EnvelopeHandler` (synchronous - the caller reads
+  failures from the envelope) and `AsyncEnvelopeHandler` (`Event` invokes - a failure fails the
+  invocation so Lambda retries).
 - `azurefunctions/` - Azure Functions custom-handler binding (the Data/Metadata JSON contract
   the Functions host forwards invocations over - Azure has no native Go worker): `Handler` for
   HTTP-triggered functions, `QueueHandler` for queue-shaped triggers (Storage Queue, Service
@@ -427,7 +437,9 @@ alongside the shared spec.
   `Consumer` reads over a narrow `Receiver` interface and hands checkpointing back to a **caller-owned
   `Checkpoint` hook** (Event Hubs checkpointing needs a blob-store checkpoint store the app owns - the
   worker deliberately does not implement it, a documented divergence). Topic/header/body resolution
-  matches the Service Bus worker.
+  matches the Service Bus worker. A failed event is redelivered **in place**: the partition receiver
+  has already moved past the batch, so the `Consumer` holds the failed event and the rest of its
+  batch and re-dispatches them before receiving anything new - never receive again past a failure.
 - `azureeventgrid/` - Azure Event Grid binding, in its **own Go module** (needs
   `azure-sdk-for-go/.../eventgrid/azeventgrid`), matching `Benzene.Clients.Azure.EventGrid`. Outbound
   CloudEvents `Client` (satisfies `client.Sender`): topic → CloudEvent `Type`, body → `Data` carried
@@ -565,8 +577,9 @@ alongside the shared spec.
   `segmentio/kafka-go` - a broker wire protocol isn't hand-rollable), matching
   `Benzene.Kafka.Core` exactly: one Kafka topic = one Benzene topic (verbatim, not a header
   or envelope), headers pass through verbatim both directions, body verbatim. `Consumer` loop
-  (one scope per record, explicit commits; no broker-side redelivery/DLQ exists, so failures
-  go to the `OnFailure` hook and are committed past) + outbound `Client` satisfying
+  (one scope per record, explicit commits; no broker-side redelivery/DLQ exists, so by default
+  failures go to the `OnFailure` hook and are committed past - skip-and-continue,
+  `kafka.DefaultDelivery` - while `envelope.AtLeastOnce` re-dispatches a failed message in place) + outbound `Client` satisfying
   `client.Sender` (writes to the Kafka topic named after the Benzene topic, per message).
   Both halves depend on narrow interfaces (`MessageSource`, `MessageWriter`) so tests run
   against fakes, no live broker.

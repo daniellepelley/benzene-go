@@ -77,6 +77,27 @@ can carry two independent handlers, so multiple versions of a contract coexist w
 `Topic` is a comparable struct used directly as a map key, and its `String()` renders `id` or
 `id@version`.
 
+### Versions: which handler a message reaches
+
+The router reads a message's version from its `benzene-version` header (an HTTP `/v{version}` route
+segment supplies it the same way; rename the header in one place with
+`builder.UseReservedNames(wire.ReservedNames{VersionKey: ...})`). A message **with** a version runs
+the handler registered for exactly that `(ID, Version)` or is `not-found`, naming both — there is no
+"nearest" or "highest available" fallback, and no fallback to the unversioned handler. A message
+**without** one runs the topic's default handler: the unversioned one, else the version you declared
+with `benzene.AsDefault()`:
+
+```go
+benzene.MustRegister(registry, benzene.NewTopic("order:create").WithVersion("v1"), createV1, benzene.AsDefault())
+benzene.MustRegister(registry, benzene.NewTopic("order:create").WithVersion("v2"), createV2)
+```
+
+A topic whose handlers are all versioned with none declared default is valid, but every unversioned
+message to it is `not-found`; the router logs a warning for each such topic when it is built
+(`Registry.TopicsWithoutDefault` lists them, for a start-up test). A plain `version` or `x-version`
+header is an ordinary header and selects nothing
+([core-concepts §2](https://benzene.app/docs/specification/core-concepts.html)).
+
 Registration is **explicit** — you call `benzene.Register` for each handler. There is no
 reflection-based assembly or package scanning: Go has no attribute-scanning idiom like C#'s
 `[Message("topic")]`, and the spec already requires explicit registration to be a first-class path in
@@ -380,7 +401,10 @@ application-level outcome; every case becomes a `Result`, so every caller reads 
 uniformly:
 
 - **Missing topic** → `ValidationError` (`"topic is missing"`).
-- **No handler for the topic** → `NotFound`.
+- **No handler for the topic** → `NotFound` (`benzene.IsUnmatchedTopic` recognises this one, so a
+  one-way binding can acknowledge it on request); **no handler for the version sent**, or none for
+  a message without a version → `NotFound` naming the topic and version.
+- **`benzene:ping`**, the reserved reachability probe → `Ok` with no payload, unless you register it.
 - **Request-conversion failure** (e.g. a body that won't unmarshal into `TReq`) → `BadRequest`.
 - **Handler panic** → recovered and mapped to `ServiceUnavailable` — a handler panic MUST NOT crash
   the transport adapter (see

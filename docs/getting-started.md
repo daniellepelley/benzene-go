@@ -212,9 +212,11 @@ func main() {
 - **`httpbinding.Handler`** — the native REST-style front door. It maps a matched route to a topic,
   dispatches through the pipeline, and maps the result back to a real HTTP status code and JSON body.
 - **`httpbinding.EnvelopeHandler`** at `httpbinding.EnvelopePath` (`/benzene/invoke`) — the raw wire
-  envelope carried over HTTP (always HTTP 200; the real outcome is inside the envelope's own
-  `statusCode`). It's for service-to-service calls where there's no route table to agree on. It's
-  optional — drop it if you don't need it.
+  envelope carried over HTTP (HTTP 200 for every envelope it processed, failures included; the real
+  outcome is the envelope's own `statusCode` and `isSuccessful`, and only a body that is not an
+  envelope gets a 400). It's for service-to-service calls where there's no route table to agree on,
+  and it reaches every registered topic, so restrict it with `httpbinding.WithTopicFilter` if it is
+  exposed beyond your own services. It's optional — drop it if you don't need it.
 
 ## 6. Run it
 

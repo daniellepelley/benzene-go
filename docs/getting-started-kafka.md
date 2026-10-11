@@ -197,9 +197,11 @@ via a fake `kafka.MessageWriter`.
   `Consumer`.
 - **`Topic must not be specified for both Writer and Message`** — your `*kafka.Writer` was
   constructed with a `Topic`; leave it empty and let the `Client` set it per message.
-- **Failures seem to disappear** — with a nil `OnFailure`, non-success dispatch results are simply
-  committed past. Set an `OnFailure` (log or dead-letter) unless your pipeline middleware already
-  records failures.
+- **Failures seem to disappear** — the consumer's default is skip-and-continue: with a nil
+  `OnFailure`, non-success dispatch results are simply committed past. Set an `OnFailure` (log or
+  dead-letter) unless your pipeline middleware already records failures, or set
+  `Settlement: envelope.Settlement{Delivery: envelope.AtLeastOnce}` to re-dispatch a failed message
+  in place until it succeeds (the partition waits behind it).
 
 ## See Also
 

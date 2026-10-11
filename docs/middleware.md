@@ -210,9 +210,11 @@ builder.UsePipeline(benzene.NewPipeline(
 
 A `Check` is any type with `Name() string` and `Check(ctx) CheckResult`; `healthcheck.NamedCheck`
 adapts a name + plain function when you don't need a dedicated type. Each check reports one of
-`healthcheck.StatusOk`, `StatusWarning`, or `StatusFailed`. A healthy report becomes `benzene.Ok`
-(HTTP 200); any failed check flips the aggregate to `ServiceUnavailable` (HTTP 503) while still
-rendering the report body. A check that panics is recorded as `StatusFailed` rather than crashing the
+`healthcheck.StatusOk`, `StatusWarning`, or `StatusFailed`. The result is `benzene.Ok` whenever the
+checks ran: any failed check flips the report's `isHealthy` to `false` (a warning does not), and a
+route mapped to the health topic - `GET /benzene/health` - answers HTTP 503 with the report as its
+body when `isHealthy` is false, 200 otherwise. A non-HTTP caller (the envelope, a queue) reads
+`isHealthy` from the payload. A check that panics is recorded as `StatusFailed` rather than crashing the
 endpoint. Behavior follows
 [wire-contracts §5](https://benzene.app/docs/specification/wire-contracts.html).
 
