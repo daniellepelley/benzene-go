@@ -90,26 +90,7 @@ func Middleware(checks []Check, aliases ...string) benzene.Middleware {
 			return next(ctx)
 		}
 
-		results := make([]CheckResult, len(checks))
-		var wg sync.WaitGroup
-		wg.Add(len(checks))
-		for i, check := range checks {
-			go func(i int, check Check) {
-				defer wg.Done()
-				results[i] = runCheck(ctx, check)
-			}(i, check)
-		}
-		wg.Wait()
-
-		response := Response{IsHealthy: true, HealthChecks: make(map[string]CheckResult, len(checks))}
-		for i, check := range checks {
-			key := dedupeKey(response.HealthChecks, check.Name())
-			result := results[i]
-			response.HealthChecks[key] = result
-			if result.Status == StatusFailed {
-				response.IsHealthy = false
-			}
-		}
+		response := Run(ctx, checks)
 
 		// ok whenever the checks ran, healthy or not: an unhealthy service is still a successful
 		// health query, and IsHealthy carries the verdict (wire-contracts.md §5). The HTTP binding
@@ -119,6 +100,35 @@ func Middleware(checks []Check, aliases ...string) benzene.Middleware {
 		ic.Result = benzene.Ok(response)
 		return nil
 	}
+}
+
+// Run runs every check concurrently and aggregates the results into the wire Response
+// (wire-contracts.md §5): IsHealthy is false when any check failed (a warning does not flip it), a
+// check that panics is recorded as StatusFailed, and duplicate names are suffixed -2, -3, ... It is
+// what Middleware answers the reserved topic with, and what a mesh heartbeat (mesh.Announcer)
+// carries, byte-for-byte.
+func Run(ctx context.Context, checks []Check) Response {
+	results := make([]CheckResult, len(checks))
+	var wg sync.WaitGroup
+	wg.Add(len(checks))
+	for i, check := range checks {
+		go func(i int, check Check) {
+			defer wg.Done()
+			results[i] = runCheck(ctx, check)
+		}(i, check)
+	}
+	wg.Wait()
+
+	response := Response{IsHealthy: true, HealthChecks: make(map[string]CheckResult, len(checks))}
+	for i, check := range checks {
+		key := dedupeKey(response.HealthChecks, check.Name())
+		result := results[i]
+		response.HealthChecks[key] = result
+		if result.Status == StatusFailed {
+			response.IsHealthy = false
+		}
+	}
+	return response
 }
 
 func runCheck(ctx context.Context, check Check) (result CheckResult) {
