@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -70,6 +71,9 @@ type templateRoute struct {
 // Response headers: headers set during the invocation - by middleware on
 // InvocationContext.ResponseHeaders, or by a handler via benzene.SetResponseHeader - come
 // back on the wire.Response and are written as real HTTP response headers here.
+//
+// A bodiless request on a Route mapped to the reserved benzene:spec topic dispatches its "type"
+// and "format" query parameters as the {type?, format?} request, as SpecHandler does (RouteBody).
 func Handler(builder *benzene.ApplicationBuilder, routes []Route) http.Handler {
 	table := NewRouteTable(routes)
 
@@ -94,7 +98,7 @@ func Handler(builder *benzene.ApplicationBuilder, routes []Route) http.Handler {
 			topic = topic.WithVersion(version)
 		}
 
-		resp, _ := envelope.DispatchTopicResult(r.Context(), builder.Pipeline, builder.Container, topic, headers, string(body))
+		resp, _ := envelope.DispatchTopicResult(r.Context(), builder.Pipeline, builder.Container, topic, headers, RouteBody(topic, string(body), r.URL.Query()))
 		writeNativeResponse(w, topic, resp)
 	})
 }
@@ -237,19 +241,37 @@ func SpecHandler(builder *benzene.ApplicationBuilder) http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		request := map[string]string{}
-		query := r.URL.Query()
-		for _, name := range []string{"type", "format"} {
-			if query.Has(name) {
-				request[name] = query.Get(name)
-			}
-		}
-		body, _ := json.Marshal(request) // a map of strings always marshals
-
 		topic := benzene.NewTopic(contract.TopicID)
-		resp, _ := envelope.DispatchTopicResult(r.Context(), builder.Pipeline, builder.Container, topic, headersFrom(r.Header), string(body))
+		resp, _ := envelope.DispatchTopicResult(r.Context(), builder.Pipeline, builder.Container, topic, headersFrom(r.Header), SpecRequestBody(r.URL.Query()))
 		writeNativeResponse(w, topic, resp)
 	})
+}
+
+// SpecRequestBody is the benzene:spec request an HTTP query carries (contract-document.md §7): a
+// {type?, format?} object holding the "type" and "format" parameters that are present. SpecHandler
+// dispatches it; Handler, awslambda.HTTPHandler and azurefunctions.Handler dispatch it for a
+// bodiless request on a Route mapped to benzene:spec, so ?type= and ?format= reach
+// contract.Middleware on every HTTP front door.
+func SpecRequestBody(query url.Values) string {
+	request := map[string]string{}
+	for _, name := range []string{"type", "format"} {
+		if query.Has(name) {
+			request[name] = query.Get(name)
+		}
+	}
+	body, _ := json.Marshal(request) // a map of strings always marshals
+	return string(body)
+}
+
+// RouteBody is the body a Route-based HTTP handler dispatches for topic: the request body as sent,
+// except that a bodiless request on a Route mapped to benzene:spec carries its query as the
+// {type?, format?} request (SpecRequestBody). awslambda.HTTPHandler and azurefunctions.Handler
+// share it with Handler.
+func RouteBody(topic benzene.Topic, body string, query url.Values) string {
+	if topic.ID == contract.TopicID && strings.TrimSpace(body) == "" {
+		return SpecRequestBody(query)
+	}
+	return body
 }
 
 // EnvelopeOption configures EnvelopeHandler.

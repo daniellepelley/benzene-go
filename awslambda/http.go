@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	benzene "github.com/daniellepelley/benzene-go"
@@ -33,28 +34,66 @@ import (
 type httpEvent struct {
 	// v2.0 / Function URL fields.
 	RawPath        string `json:"rawPath"`
+	RawQueryString string `json:"rawQueryString"`
 	RequestContext struct {
 		HTTP struct {
 			Method string `json:"method"`
 			Path   string `json:"path"`
 		} `json:"http"`
+		// ELB is present only on an Application Load Balancer event.
+		ELB json.RawMessage `json:"elb"`
 	} `json:"requestContext"`
 
 	// v1.0 / ALB fields.
-	HTTPMethod        string              `json:"httpMethod"`
-	Path              string              `json:"path"`
-	MultiValueHeaders map[string][]string `json:"multiValueHeaders"`
+	HTTPMethod                      string              `json:"httpMethod"`
+	Path                            string              `json:"path"`
+	MultiValueHeaders               map[string][]string `json:"multiValueHeaders"`
+	MultiValueQueryStringParameters map[string][]string `json:"multiValueQueryStringParameters"`
 
 	// Shared fields.
-	Headers         map[string]string `json:"headers"`
-	Body            string            `json:"body"`
-	IsBase64Encoded bool              `json:"isBase64Encoded"`
+	Headers               map[string]string `json:"headers"`
+	QueryStringParameters map[string]string `json:"queryStringParameters"`
+	Body                  string            `json:"body"`
+	IsBase64Encoded       bool              `json:"isBase64Encoded"`
 }
 
 // isV1 reports whether the event is the REST/v1.0/ALB shape. Only that shape has a top-level
 // httpMethod; v2.0 nests the method under requestContext.http.
 func (e *httpEvent) isV1() bool {
 	return e.HTTPMethod != ""
+}
+
+// query returns the request's query parameters, decoded: v2.0's rawQueryString when present, else
+// the v1.0/ALB parameter maps (multi-value first). API Gateway decodes those maps; an ALB passes
+// them as sent, still URL-encoded, so an ALB event's are unescaped here (a value that does not
+// unescape is kept as sent).
+func (e *httpEvent) query() url.Values {
+	if e.RawQueryString != "" {
+		query, _ := url.ParseQuery(e.RawQueryString) // a malformed pair is skipped, the rest kept
+		return query
+	}
+	decode := func(s string) string {
+		if e.RequestContext.ELB == nil {
+			return s
+		}
+		if unescaped, err := url.QueryUnescape(s); err == nil {
+			return unescaped
+		}
+		return s
+	}
+	query := url.Values{}
+	if e.MultiValueQueryStringParameters != nil {
+		for name, values := range e.MultiValueQueryStringParameters {
+			for _, value := range values {
+				query.Add(decode(name), decode(value))
+			}
+		}
+		return query
+	}
+	for name, value := range e.QueryStringParameters {
+		query.Set(decode(name), decode(value))
+	}
+	return query
 }
 
 // usedMultiValueHeaders reports whether the caller is an ALB target group with multi-value
@@ -88,7 +127,9 @@ type httpV1Response struct {
 // Balancer target group. The event shape is detected per invocation (see httpEvent), the
 // response uses the matching shape, and either way the invocation carries real HTTP status
 // codes via httpstatus.Response, dispatched through envelope.DispatchTopicResult exactly like
-// httpbinding.Handler.
+// httpbinding.Handler - including its rule for a Route mapped to benzene:spec: a bodiless request
+// carries its "type" and "format" query parameters as the {type?, format?} request
+// (httpbinding.RouteBody).
 func HTTPHandler(builder *benzene.ApplicationBuilder, routes []httpbinding.Route) HandlerFunc {
 	table := httpbinding.NewRouteTable(routes)
 
@@ -130,6 +171,7 @@ func HTTPHandler(builder *benzene.ApplicationBuilder, routes []httpbinding.Route
 			topic = topic.WithVersion(version)
 		}
 
+		body = httpbinding.RouteBody(topic, body, req.query())
 		resp, _ := envelope.DispatchTopicResult(ctx, builder.Pipeline, builder.Container, topic, headers, body)
 
 		// The same §4.1 rendering httpbinding uses - in particular, a failure's problem document

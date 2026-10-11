@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 
@@ -35,11 +36,36 @@ type invocationRequest struct {
 	Data map[string]json.RawMessage `json:"Data"`
 }
 
-// httpTriggerData is the "req" entry inside Data for an HTTP-triggered function.
+// httpTriggerData is the "req" entry inside Data for an HTTP-triggered function. Url is the
+// request's full URL and Query its parameters, read by query.
 type httpTriggerData struct {
+	URL     string            `json:"Url"`
 	Method  string            `json:"Method"`
+	Query   json.RawMessage   `json:"Query"`
 	Headers map[string]string `json:"Headers"`
 	Body    string            `json:"Body"`
+}
+
+// query returns the request's query parameters: the Query object (each value a string or a list of
+// strings) when it holds any, else those of Url. A part that does not parse is simply absent - the
+// request is still served, without that parameter.
+func (d *httpTriggerData) query() url.Values {
+	query := url.Values{}
+	var single map[string]string
+	var multi map[string][]string
+	switch {
+	case json.Unmarshal(d.Query, &single) == nil && len(single) > 0:
+		for name, value := range single {
+			query.Set(name, value)
+		}
+	case json.Unmarshal(d.Query, &multi) == nil && len(multi) > 0:
+		query = multi
+	default:
+		if parsed, err := url.Parse(d.URL); err == nil {
+			query, _ = url.ParseQuery(parsed.RawQuery)
+		}
+	}
+	return query
 }
 
 // invocationResponse is the JSON body the custom handler must respond with.
@@ -105,7 +131,8 @@ func Handler(builder *benzene.ApplicationBuilder, routes []httpbinding.Route) ht
 			topic = topic.WithVersion(version)
 		}
 
-		resp, _ := envelope.DispatchTopicResult(r.Context(), builder.Pipeline, builder.Container, topic, headers, trigger.Body)
+		request := httpbinding.RouteBody(topic, trigger.Body, trigger.query())
+		resp, _ := envelope.DispatchTopicResult(r.Context(), builder.Pipeline, builder.Container, topic, headers, request)
 
 		// The same §4.1 rendering httpbinding uses - in particular, a failure's problem document
 		// reaches Outputs.res carrying the `status` member equal to the statusCode being sent,

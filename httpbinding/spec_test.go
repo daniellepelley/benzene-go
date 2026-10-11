@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 
 	benzene "github.com/daniellepelley/benzene-go"
@@ -84,5 +86,45 @@ func TestSpecHandler_RejectsOtherMethods(t *testing.T) {
 	SpecHandler(specBuilder(t, &seen)).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, SpecPath, nil))
 	if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != "GET, HEAD" || seen != "" {
 		t.Errorf("status = %d, Allow = %q, dispatched = %q", rec.Code, rec.Header().Get("Allow"), seen)
+	}
+}
+
+// TestHandler_SpecRouteCarriesTheQuery: a Route mapped to benzene:spec - the way a service mounts
+// its self-description on a path of its own - dispatches the query's type and format as the
+// request, like SpecHandler; a request that brings a body keeps it.
+func TestHandler_SpecRouteCarriesTheQuery(t *testing.T) {
+	var seen string
+	handler := Handler(specBuilder(t, &seen), []Route{
+		{Method: http.MethodGet, Path: "/spec", Topic: benzene.NewTopic(contract.TopicID)},
+		{Method: http.MethodPost, Path: "/spec", Topic: benzene.NewTopic(contract.TopicID)},
+	})
+
+	cases := []struct {
+		name, method, target, body string
+		status                     int
+		request                    string
+	}{
+		{"query copied", http.MethodGet, "/spec?type=benzene&format=json", "", http.StatusOK, `{"format":"json","type":"benzene"}`},
+		{"unsupported type", http.MethodGet, "/spec?type=openapi", "", http.StatusNotImplemented, `{"type":"openapi"}`},
+		{"no query is the default", http.MethodGet, "/spec", "", http.StatusOK, `{}`},
+		{"a body wins", http.MethodPost, "/spec?type=openapi", `{"type":"benzene"}`, http.StatusOK, `{"type":"benzene"}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			seen = ""
+			req := httptest.NewRequest(c.method, c.target, strings.NewReader(c.body))
+			req.Header.Set("Authorization", "let-me-in")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != c.status || seen != c.request {
+				t.Errorf("status %d, request %q; want %d, %q (body %s)", rec.Code, seen, c.status, c.request, rec.Body)
+			}
+		})
+	}
+}
+
+func TestRouteBody_LeavesOtherTopicsAlone(t *testing.T) {
+	if got := RouteBody(benzene.NewTopic("order:create"), "", url.Values{"type": {"x"}}); got != "" {
+		t.Errorf("RouteBody = %q, want the empty body untouched", got)
 	}
 }
