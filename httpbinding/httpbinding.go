@@ -14,6 +14,7 @@ package httpbinding
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"strings"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/contract"
 	"github.com/daniellepelley/benzene-go/envelope"
 	"github.com/daniellepelley/benzene-go/httpstatus"
 	"github.com/daniellepelley/benzene-go/wire"
@@ -216,10 +218,39 @@ const (
 	EnvelopePath = "/benzene/invoke"
 	// HealthPath is the standard mount for a Route serving the reserved healthcheck topic.
 	HealthPath = "/benzene/health"
-	// SpecPath is the standard mount for a mesh.SpecHandler serving the derived spec document
-	// (the Cloud Service Profile's R5).
+	// SpecPath is the standard mount for SpecHandler, which serves the Contract Document (the
+	// Cloud Service Profile's R5) on the reserved benzene:spec topic.
 	SpecPath = "/benzene/spec"
 )
+
+// SpecHandler serves the reserved benzene:spec topic over HTTP (contract-document.md §7): a GET
+// copies its "type" and "format" query parameters onto a {type?, format?} request and dispatches it
+// through builder's pipeline - so GET /benzene/spec runs the same middleware, authentication
+// included, as every other topic, and the pipeline's contract.Middleware answers it. The result
+// maps to HTTP like any route's: 200 with the document, 501 for a type or format the service does
+// not serve. The default service standard mounts it at SpecPath. Methods other than GET and HEAD
+// are answered 405.
+func SpecHandler(builder *benzene.ApplicationBuilder) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		request := map[string]string{}
+		query := r.URL.Query()
+		for _, name := range []string{"type", "format"} {
+			if query.Has(name) {
+				request[name] = query.Get(name)
+			}
+		}
+		body, _ := json.Marshal(request) // a map of strings always marshals
+
+		topic := benzene.NewTopic(contract.TopicID)
+		resp, _ := envelope.DispatchTopicResult(r.Context(), builder.Pipeline, builder.Container, topic, headersFrom(r.Header), string(body))
+		writeNativeResponse(w, topic, resp)
+	})
+}
 
 // EnvelopeOption configures EnvelopeHandler.
 type EnvelopeOption func(*envelopeConfig)
