@@ -136,7 +136,7 @@ func HTTPHandler(builder *benzene.ApplicationBuilder, routes []httpbinding.Route
 		// leaves this binding carrying the `status` member equal to the statusCode being sent,
 		// which a response assembled by hand here used to omit while still calling itself
 		// application/problem+json.
-		code, respBody, respHeaders := httpstatus.Response(resp)
+		code, respBody, respHeaders := httpstatus.Response(topic, resp)
 		return marshalResponse(&req, code, respHeaders, respBody)
 	}
 }

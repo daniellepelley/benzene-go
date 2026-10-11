@@ -3,6 +3,8 @@
 package httpstatus
 
 import (
+	"encoding/json"
+
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/wire"
 )
@@ -10,11 +12,10 @@ import (
 // ToHTTP maps a Benzene status to its HTTP status code (wire-contracts.md §4.1, forward).
 //
 // A status in the §3 vocabulary maps by its own row regardless of anything else. The optional
-// isSuccessful decides only for an APPLICATION-DEFINED status, which has no row: a failed one
-// maps to 500, and one carried on a result explicitly marked successful (the
-// Set(status, payload, isSuccessful) escape hatch) maps to 200 rather than being reported as a
-// server error. Omitted, an unknown status is treated as a failure - the safe default for a
-// caller that cannot tell. Variadic so every existing single-argument call still compiles.
+// isSuccessful decides only for an APPLICATION-DEFINED status, which has no row: the generic
+// success code (200) for a successful result and the generic error code (500) for a failed one
+// (core-concepts.md §5). Omitted, an unknown status is treated as a failure - the safe default for
+// a caller that cannot tell. Variadic so every existing single-argument call still compiles.
 func ToHTTP(status benzene.Status, isSuccessful ...bool) int {
 	switch status {
 	case benzene.StatusOk, benzene.StatusIgnored:
@@ -94,9 +95,9 @@ func FromHTTP(code int) benzene.Status {
 	}
 }
 
-// Response renders a wire.Response as the three things an HTTP binding has to send: the response
-// code, the body, and the headers. Every HTTP binding in this port goes through it, so none of
-// them can quietly disagree about wire-contracts.md §4.1.
+// Response renders the wire.Response of a route-mapped topic as the three things an HTTP binding
+// has to send: the response code, the body, and the headers. Every HTTP binding in this port goes
+// through it, so none of them can quietly disagree about wire-contracts.md §4.1.
 //
 // The code is ToHTTP's, honouring the response's own IsSuccessful (§1.2) rather than re-deriving
 // success from the status. On a failure whose body is a problem document, the document's `status`
@@ -105,13 +106,25 @@ func FromHTTP(code int) benzene.Status {
 // member out (§1.3), because most transports have no HTTP response for it to equal, so an HTTP
 // binding is the only place it can be filled in.
 //
+// The one exception to "the code comes from the status" is a route mapped to a health topic
+// (benzene:healthcheck, benzene:liveness, benzene:readiness - matched by topic id alone): its
+// result is ok whenever the checks ran, so the code comes from the report instead - 200 when
+// isHealthy is true and 503 when it is false, the report as the body either way, in its ordinary
+// JSON content type (transport-bindings.md §1). That is what lets a load balancer that reads only
+// the status line drain an unhealthy instance. A health invocation that itself failed maps through
+// §4.1 as usual. A route to an app-chosen health alias is an ordinary route; map the HTTP surface
+// to the reserved topic id to get the health rule.
+//
 // The returned header map is a copy: the caller may write to it, and resp is left untouched.
-func Response(resp wire.Response) (code int, body string, headers map[string]string) {
+func Response(topic benzene.Topic, resp wire.Response) (code int, body string, headers map[string]string) {
 	successful := !benzene.Status(resp.StatusCode).IsFailure()
 	if resp.IsSuccessful != nil {
 		successful = *resp.IsSuccessful
 	}
 	code = ToHTTP(benzene.Status(resp.StatusCode), successful)
+	if successful && healthTopics[topic.ID] && reportsUnhealthy(resp.Body) {
+		code = 503
+	}
 
 	headers = make(map[string]string, len(resp.Headers)+1)
 	for name, value := range resp.Headers {
@@ -126,4 +139,24 @@ func Response(resp wire.Response) (code int, body string, headers map[string]str
 		}
 	}
 	return code, body, headers
+}
+
+// healthTopics are the reserved health topics of wire-contracts.md §7, whose HTTP routes answer
+// from the report's isHealthy rather than the result's status.
+var healthTopics = map[string]bool{
+	"benzene:healthcheck": true,
+	"benzene:liveness":    true,
+	"benzene:readiness":   true,
+}
+
+// reportsUnhealthy reports whether body is a health response (wire-contracts.md §5) saying
+// isHealthy: false. A body that is not one - or that omits the member - is left to the status.
+func reportsUnhealthy(body string) bool {
+	var report struct {
+		IsHealthy *bool `json:"isHealthy"`
+	}
+	if err := json.Unmarshal([]byte(body), &report); err != nil || report.IsHealthy == nil {
+		return false
+	}
+	return !*report.IsHealthy
 }

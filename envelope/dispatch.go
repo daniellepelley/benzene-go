@@ -25,14 +25,11 @@ func Dispatch(ctx context.Context, pipeline *benzene.Pipeline, container *benzen
 	return resp
 }
 
-// DispatchResult is Dispatch plus the invocation's in-process success flag (the result's
-// IsSuccessful). The wire.Response is identical and unchanged - the flag is a separate return,
-// never part of the serialized envelope (the wire contract carries only the status). It exists
-// for in-process bindings that must decide acknowledge-vs-retry the way the .NET applications do:
-// on the result's success flag, not the wire status class. The two coincide for framework
-// statuses but differ for an application-defined failure status (Fail, unsuccessful) and the
-// health-check "service-unavailable but successful" shape (SetResult), where classifying by the
-// status alone would nack a message the handler acked, or ack one it failed.
+// DispatchResult is Dispatch plus the invocation's success flag (the result's IsSuccessful, the
+// envelope's isSuccessful). It exists for bindings that decide acknowledge-vs-retry: they settle on
+// the result's own flag, never on the status text (wire-contracts.md §1.2), which for an
+// application-defined status is the only signal there is. The flag is false for a failure result,
+// for no result at all, and for an error the pipeline returned.
 func DispatchResult(ctx context.Context, pipeline *benzene.Pipeline, container *benzene.Container, req wire.Request) (wire.Response, bool) {
 	return DispatchTopicResult(ctx, pipeline, container, benzene.NewTopic(req.Topic), req.Headers, req.Body)
 }
@@ -88,11 +85,9 @@ func withResponseHeaders(resp wire.Response, ic *benzene.InvocationContext) wire
 
 func toResponse(result benzene.ResultInfo) wire.Response {
 	status := result.ResultStatus()
-	// A framework failure status renders as an error payload; a success status and an
-	// application-defined (unknown) status both carry their payload, matching .NET's
-	// IsSuccessful (= !IsFailure) so custom statuses flow through untouched. A result may also
-	// set its success flag explicitly (SetResult) - e.g. the health check returning
-	// service-unavailable but rendering its report body - which this honours over the status.
+	// The branch is on the result's isSuccessful (wire-contracts.md §1.3), never the status text:
+	// a framework failure status and a failed application-defined status (Fail) render a problem
+	// document; a success status and a plain application-defined status carry their payload.
 	successful := !status.IsFailure()
 	if s, ok := result.(interface{ ResultIsSuccessful() bool }); ok {
 		successful = s.ResultIsSuccessful()
@@ -119,9 +114,8 @@ func toResponse(result benzene.ResultInfo) wire.Response {
 		StatusCode: string(status),
 		Headers:    map[string]string{"content-type": "application/json"},
 		Body:       string(body),
-		// Stated outright (§1.2) rather than left for a peer to infer from the status. It is what
-		// lets an application-defined status ride on a SUCCESSFUL result - the escape hatch a few
-		// health-check-shaped results use - without a reader classifying it as a failure.
+		// Stated outright (§1.2) rather than left for a peer to infer from the status: for an
+		// application-defined status it is the only signal of success a receiver has.
 		IsSuccessful: boolPtr(true),
 	}
 }

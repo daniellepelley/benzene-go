@@ -35,12 +35,11 @@ type Response struct {
 	// Body is the pre-serialized response payload: on success, the handler's response
 	// payload; on failure, the serialized ErrorPayload (§1.3).
 	Body string `json:"body"`
-	// IsSuccessful, when set, states outright whether the result succeeded (§1.2), rather than
-	// leaving a reader to classify StatusCode against a vocabulary it may not fully share. It is
-	// what lets an application-defined status be carried on a SUCCESSFUL result - the
-	// Set(status, payload, isSuccessful) escape hatch - without a peer mistaking it for a failure.
-	// A pointer so it is omitted rather than emitted as false when a writer does not set it, and
-	// so a reader can tell "absent" (fall back to classifying the status) from "explicitly false".
+	// IsSuccessful is the success/failure signal (§1.2), set by whoever set the status: for a
+	// status in the vocabulary it equals that status's class, and for an application-defined
+	// status it is the only signal there is. A receiver takes it as authoritative and never
+	// reclassifies from StatusCode. Every writer in this port sets it; it is a pointer so a reader
+	// can tell an envelope that omits it (a non-conformant peer) from one that says false.
 	IsSuccessful *bool `json:"isSuccessful,omitempty"`
 }
 

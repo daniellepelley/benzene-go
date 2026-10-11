@@ -375,7 +375,7 @@ func TestListenAddr(t *testing.T) {
 func TestWriteNativeResponse_HTTPFailureCarriesTheHTTPStatusAndProblemContentType(t *testing.T) {
 	rec := httptest.NewRecorder()
 	failed := false
-	writeNativeResponse(rec, wire.Response{
+	writeNativeResponse(rec, benzene.NewTopic("t"), wire.Response{
 		StatusCode:   "not-found",
 		Headers:      map[string]string{"content-type": "application/json"},
 		Body:         `{"type":"https://benzene.app/problems/not-found","benzeneStatus":"not-found","detail":"missing"}`,
@@ -404,7 +404,7 @@ func TestWriteNativeResponse_HTTPFailureCarriesTheHTTPStatusAndProblemContentTyp
 func TestWriteNativeResponse_SuccessIsUntouched(t *testing.T) {
 	rec := httptest.NewRecorder()
 	ok := true
-	writeNativeResponse(rec, wire.Response{
+	writeNativeResponse(rec, benzene.NewTopic("t"), wire.Response{
 		StatusCode:   "ok",
 		Headers:      map[string]string{"content-type": "application/json"},
 		Body:         `{"greeting":"hello"}`,

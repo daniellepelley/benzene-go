@@ -294,11 +294,11 @@ func TestMiddleware_UnsuccessfulEmptyStatusRecordsFailureResult(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 
-	// SetResult with an explicit successful=false and an empty status - unusual, but the
-	// exact edge case observability-conventions.md §3 calls "failure": an unsuccessful
-	// result whose status string is empty, distinct from "<missing>" (no result at all).
+	// FailWith with an empty status - unusual, but the exact edge case
+	// observability-conventions.md §3 calls "failure": an unsuccessful result whose status
+	// string is empty, distinct from "<missing>" (no result at all).
 	setsEmptyFailure := benzene.Middleware(func(ctx context.Context, ic *benzene.InvocationContext, next func(context.Context) error) error {
-		ic.Result = benzene.SetResult(benzene.Status(""), struct{}{}, false)
+		ic.Result = benzene.FailWith[struct{}](benzene.Status(""))
 		return next(ctx)
 	})
 	pipeline := benzene.NewPipeline(Middleware(WithMeterProvider(mp)), setsEmptyFailure)

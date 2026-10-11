@@ -48,26 +48,14 @@ func TestResult_ApplicationDefinedStatusIsSuccessful(t *testing.T) {
 	}
 }
 
-func TestSetResult_ExplicitSuccessDecoupledFromStatus(t *testing.T) {
-	// The health-check shape: service-unavailable (503 to probes) but explicitly successful so
-	// the report body renders. Mirrors .NET BenzeneResult.Set(status, payload, isSuccessful).
-	payload := greeting{Message: "report"}
-	r := SetResult(StatusServiceUnavailable, payload, true)
-	if !r.IsSuccessful() {
-		t.Error("IsSuccessful() = false, want true (explicit flag overrides the failure status)")
+func TestIsSuccessful_VocabularyStatusesFollowTheirClass(t *testing.T) {
+	// wire-contracts.md §1.2: for a vocabulary status isSuccessful equals the status's class, with
+	// no exceptions - every constructor that can carry a vocabulary status agrees with it.
+	if !Ok(greeting{}).IsSuccessful() || (Result[greeting]{Status: StatusDeleted}).IsSuccessful() == false {
+		t.Error("a success-class status must be successful")
 	}
-	if r.Status != StatusServiceUnavailable {
-		t.Errorf("Status = %q, want %q", r.Status, StatusServiceUnavailable)
-	}
-	if r.Payload == nil || r.Payload.Message != "report" {
-		t.Errorf("Payload = %+v, want the report payload", r.Payload)
-	}
-	if r.ResultIsSuccessful() != r.IsSuccessful() {
-		t.Error("ResultIsSuccessful() must mirror IsSuccessful() on the type-erased path")
-	}
-	// The inverse: explicitly not-successful despite a success status.
-	if SetResult(StatusOk, payload, false).IsSuccessful() {
-		t.Error("IsSuccessful() = true, want false when explicitly set false")
+	if ServiceUnavailable[greeting]("down").IsSuccessful() || (Result[greeting]{Status: StatusNotFound}).IsSuccessful() {
+		t.Error("a failure-class status must be unsuccessful")
 	}
 }
 

@@ -38,7 +38,7 @@ type Result[T any] struct {
 	Status  Status  // the Benzene status (see the vocabulary below)
 	Payload *T      // present on success; a pointer so "absent" is representable
 	Errors  []Error // structured errors, populated on failure
-	// unexported: an explicit success flag (SetResult) and an authored problem document
+	// unexported: the failure flag Fail/FailWith set and an authored problem document
 	// (ProblemResult)
 }
 ```
@@ -75,11 +75,12 @@ if r.Payload != nil {    // nil on failure; check before dereferencing
 }
 ```
 
-`IsSuccessful()` derives from the status class unless an explicit flag was set (via
-[`SetResult`](#setresult--decouple-success-from-status)): it returns `!r.Status.IsFailure()`. So a framework success status and an
-*application-defined* status both count as successful and carry their payload, while only a
-framework **failure** status does not — that is the extensibility promise that custom statuses flow
-through untouched.
+`IsSuccessful()` derives from the status class unless the result was built by `Fail`/`FailWith`/
+`ProblemResult`, which are always unsuccessful: it returns `!r.Status.IsFailure()`. So a framework
+success status and a plain *application-defined* status both count as successful and carry their
+payload, while a framework **failure** status - and an application-defined one built with `Fail` -
+does not; that is the extensibility promise that custom statuses flow through untouched (see
+[success is the status's class](#success-is-the-statuss-class--no-exceptions)).
 
 ### The type-erased view: `ResultInfo`
 
@@ -103,7 +104,7 @@ never breaks an external implementation of `ResultInfo`:
 
 | Interface | Method | What it recovers |
 |---|---|---|
-| — | `ResultIsSuccessful() bool` | an explicit success flag (`SetResult`) surviving type erasure |
+| — | `ResultIsSuccessful() bool` | an application-defined failure status (`Fail`) surviving type erasure as a failure |
 | `ProblemInfo` | `ResultProblems() []Error` | the structured errors, so a `field` and a `code` are not flattened to prose |
 | `ProblemDocumentInfo` | `ResultProblemDocument() *Problem` | an application-authored problem document (`ProblemResult`), emitted verbatim |
 
@@ -163,18 +164,16 @@ that `IsFailure` does not recognise — which is what makes a custom failure sta
 a queue and render its errors rather than being mistaken for a success. `Fail` **panics** if given a
 framework success-class status, since that would produce a self-contradictory result.
 
-### `SetResult` — decouple success from status
+### Success is the status's class — no exceptions
 
-```go
-func SetResult[T any](status Status, payload T, successful bool) Result[T]
-```
-
-`SetResult` sets the success classification explicitly, independent of the status class. The intended
-use is the reserved health check returning `StatusServiceUnavailable` — so an HTTP probe sees `503`
-and a load balancer drains the instance — while still rendering its report body (`successful=true`)
-rather than an error payload. For ordinary results prefer the constructors above and the
-status-derived default; reach for this only when the transport outcome and the body's meaning
-genuinely diverge.
+A result's `IsSuccessful` is what reaches the wire as the envelope's `isSuccessful`, and for a status
+in the vocabulary it always equals that status's class ([wire-contracts §1.2](https://github.com/daniellepelley/Benzene/blob/main/docs/specification/wire-contracts.md#12-response)):
+there is no way to build a successful `service-unavailable` or a failed `ok`. For an
+application-defined status it is the only signal a receiver has: `Fail`/`FailWith`/`ProblemResult`
+build an unsuccessful one, a plain `Result[T]{Status: "partly-done", Payload: &p}` a successful one.
+(`SetResult`, which decoupled the two for the old 503-health shape, is gone: a health check now
+returns `ok` with `isHealthy` in its report, and the HTTP health route maps `isHealthy: false` to
+`503`.)
 
 ## The status vocabulary
 

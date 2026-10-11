@@ -89,41 +89,10 @@ func TestDispatch_ApplicationDefinedStatusCarriesPayload(t *testing.T) {
 	}
 }
 
-func TestDispatch_ExplicitlySuccessfulFailureStatusCarriesPayload(t *testing.T) {
-	// A result set explicitly successful (SetResult) with a failure status - the health-check
-	// 503-but-render-the-body shape - carries its payload rather than an error payload, and the
-	// envelope's statusCode is the failure status (which maps to HTTP 503 for a probe).
-	registry := benzene.NewRegistry()
-	if err := benzene.Register(registry, benzene.NewTopic("health"),
-		benzene.Handler[greetRequest, greetResponse](func(_ context.Context, _ greetRequest) benzene.Result[greetResponse] {
-			return benzene.SetResult(benzene.StatusServiceUnavailable, greetResponse{Greeting: "degraded"}, true)
-		})); err != nil {
-		t.Fatalf("Register() error = %v", err)
-	}
-	container := benzene.NewContainer()
-	pipeline := benzene.NewPipeline(benzene.RouterMiddleware(registry))
-
-	resp := Dispatch(context.Background(), pipeline, container, wire.Request{
-		Topic: "health", Headers: map[string]string{}, Body: `{"name":"x"}`,
-	})
-
-	if resp.StatusCode != string(benzene.StatusServiceUnavailable) {
-		t.Errorf("StatusCode = %q, want %q", resp.StatusCode, benzene.StatusServiceUnavailable)
-	}
-	var payload greetResponse
-	if err := json.Unmarshal([]byte(resp.Body), &payload); err != nil {
-		t.Fatalf("body is not the payload (rendered as error?): %v; body = %s", err, resp.Body)
-	}
-	if payload.Greeting != "degraded" {
-		t.Errorf("Greeting = %q, want %q", payload.Greeting, "degraded")
-	}
-}
-
 func TestDispatchResult_SuccessFlagMatchesTheResultNotJustTheStatus(t *testing.T) {
 	// The in-process success flag a queue binding acks/nacks on must follow the result's
-	// IsSuccessful, which diverges from the wire status class for an application-defined failure
-	// (Fail -> nack, not ack -> no silent message loss) and the health-check shape (SetResult
-	// service-unavailable but successful -> ack, not a needless retry).
+	// IsSuccessful, which an application-defined status carries on its own (Fail -> nack, not
+	// ack -> no silent message loss; a struct-literal custom status -> ack).
 	cases := []struct {
 		name       string
 		handler    benzene.Handler[greetRequest, greetResponse]
@@ -139,9 +108,9 @@ func TestDispatchResult_SuccessFlagMatchesTheResultNotJustTheStatus(t *testing.T
 		{"application-defined Fail is not successful", func(context.Context, greetRequest) benzene.Result[greetResponse] {
 			return benzene.Fail[greetResponse](benzene.Status("partial-failure"), "boom")
 		}, false, benzene.Status("partial-failure")},
-		{"health-shape service-unavailable-but-successful is successful", func(context.Context, greetRequest) benzene.Result[greetResponse] {
-			return benzene.SetResult(benzene.StatusServiceUnavailable, greetResponse{Greeting: "degraded"}, true)
-		}, true, benzene.StatusServiceUnavailable},
+		{"application-defined status on a plain result is successful", func(context.Context, greetRequest) benzene.Result[greetResponse] {
+			return benzene.Result[greetResponse]{Status: "partly-done", Payload: &greetResponse{Greeting: "hi"}}
+		}, true, benzene.Status("partly-done")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

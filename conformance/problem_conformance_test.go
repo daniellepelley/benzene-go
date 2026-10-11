@@ -12,6 +12,7 @@ import (
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/awslambda"
 	"github.com/daniellepelley/benzene-go/azurefunctions"
+	"github.com/daniellepelley/benzene-go/healthcheck"
 	"github.com/daniellepelley/benzene-go/httpbinding"
 	"github.com/daniellepelley/benzene-go/wire"
 )
@@ -43,6 +44,20 @@ type problemDetailsFixture struct {
 			HTTPStatus    int    `json:"httpStatus"`
 			ContentType   string `json:"contentType"`
 		} `json:"successCase"`
+		HealthEndpoint struct {
+			Path  string `json:"path"`
+			Cases []struct {
+				Name   string `json:"name"`
+				Checks []struct {
+					Name   string `json:"name"`
+					Status string `json:"status"`
+				} `json:"checks"`
+				Expected struct {
+					HTTPStatus int            `json:"httpStatus"`
+					Body       map[string]any `json:"body"`
+				} `json:"expected"`
+			} `json:"cases"`
+		} `json:"healthEndpoint"`
 	} `json:"httpRules"`
 }
 
@@ -107,12 +122,25 @@ func TestConformance_ProblemEnvelopeCases(t *testing.T) {
 	runEnvelopeCases(t, cases)
 }
 
-// httpBinding is one shipped HTTP binding, reduced to what §4.1 is about: give it a request body
-// for the canonical conformance:status handler, get back the response code, headers and body that
-// binding actually puts on the wire.
+// httpBinding is one shipped HTTP binding, reduced to what the httpRules group is about: give it
+// an application (builder + routes) and one request, get back the response code, headers and body
+// that binding actually puts on the wire.
 type httpBinding struct {
 	name   string
-	invoke func(t *testing.T, body string) httpBindingResponse
+	invoke func(t *testing.T, app httpApp, method, path, body string) httpBindingResponse
+}
+
+// httpApp is the service an httpRules case asks every binding to expose.
+type httpApp struct {
+	builder *benzene.ApplicationBuilder
+	routes  []httpbinding.Route
+}
+
+// statusApp is the canonical conformance:status handler on one POST route - the failure and
+// success cases' service.
+func statusApp(t *testing.T) httpApp {
+	t.Helper()
+	return httpApp{builder: conformanceBuilder(t), routes: conformanceRoutes()}
 }
 
 // httpBindingResponse is a binding's response, normalized across the three native shapes (a
@@ -154,7 +182,7 @@ func TestConformance_ProblemHTTPRules(t *testing.T) {
 		t.Run(binding.name, func(t *testing.T) {
 			for _, c := range fixture.HTTPRules.FailureCases {
 				t.Run(c.BenzeneStatus, func(t *testing.T) {
-					resp := binding.invoke(t, `{"status":"`+c.BenzeneStatus+`","errors":["boom"]}`)
+					resp := binding.invoke(t, statusApp(t), http.MethodPost, "/status", `{"status":"`+c.BenzeneStatus+`","errors":["boom"]}`)
 
 					if resp.statusCode != c.HTTPStatus {
 						t.Errorf("response status = %d, want %d", resp.statusCode, c.HTTPStatus)
@@ -194,7 +222,7 @@ func TestConformance_ProblemHTTPSuccessUnaffected(t *testing.T) {
 
 	for _, binding := range httpBindings() {
 		t.Run(binding.name, func(t *testing.T) {
-			resp := binding.invoke(t, `{"status":"`+success.BenzeneStatus+`"}`)
+			resp := binding.invoke(t, statusApp(t), http.MethodPost, "/status", `{"status":"`+success.BenzeneStatus+`"}`)
 
 			if resp.statusCode != success.HTTPStatus {
 				t.Errorf("response status = %d, want %d", resp.statusCode, success.HTTPStatus)
@@ -210,6 +238,55 @@ func TestConformance_ProblemHTTPSuccessUnaffected(t *testing.T) {
 				if _, present := payload[member]; present {
 					t.Errorf("a success body must carry no problem member, found %q: %s", member, resp.body)
 				}
+			}
+		})
+	}
+}
+
+// TestConformance_ProblemHTTPHealthEndpoint is httpRules.healthEndpoint (transport-bindings.md §1,
+// wire-contracts.md §5): a route mapped to the health topic answers 200 when the report says
+// isHealthy and 503 when it does not, the report as the body either way - on every HTTP binding.
+func TestConformance_ProblemHTTPHealthEndpoint(t *testing.T) {
+	fixture := loadProblemFixture(t)
+	health := fixture.HTTPRules.HealthEndpoint
+	requireCases(t, len(health.Cases), "problem-details-cases", "httpRules.healthEndpoint.cases")
+	if health.Path != httpbinding.HealthPath {
+		t.Errorf("httpbinding.HealthPath = %q, want the default %q", httpbinding.HealthPath, health.Path)
+	}
+
+	for _, binding := range httpBindings() {
+		t.Run(binding.name, func(t *testing.T) {
+			for _, c := range health.Cases {
+				t.Run(c.Name, func(t *testing.T) {
+					// Exactly the case's checks, in place of any other (conformance/README.md).
+					checks := make([]healthcheck.Check, 0, len(c.Checks))
+					for _, check := range c.Checks {
+						result := healthcheck.CheckResult{Status: healthcheck.Status(check.Status), Type: "conformance"}
+						checks = append(checks, healthcheck.NamedCheck(check.Name, func(context.Context) healthcheck.CheckResult { return result }))
+					}
+					registry := canonicalHandlerRegistry(t)
+					app := httpApp{
+						builder: &benzene.ApplicationBuilder{
+							Registry:  registry,
+							Container: benzene.NewContainer(),
+							Pipeline:  benzene.NewPipeline(healthcheck.Middleware(checks), benzene.RouterMiddleware(registry)),
+						},
+						routes: []httpbinding.Route{{Method: http.MethodGet, Path: health.Path, Topic: benzene.NewTopic(healthcheck.ReservedTopic)}},
+					}
+
+					resp := binding.invoke(t, app, http.MethodGet, health.Path, "")
+
+					if resp.statusCode != c.Expected.HTTPStatus {
+						t.Errorf("response status = %d, want %d", resp.statusCode, c.Expected.HTTPStatus)
+					}
+					var report map[string]any
+					if err := json.Unmarshal([]byte(resp.body), &report); err != nil {
+						t.Fatalf("body is not the health report: %v; body = %s", err, resp.body)
+					}
+					for _, msg := range subsetMismatches(c.Expected.Body, report) {
+						t.Errorf("body %s", msg)
+					}
+				})
 			}
 		})
 	}
@@ -241,12 +318,12 @@ func conformanceRoutes() []httpbinding.Route {
 // response inside an HTTP 200, so its response line says nothing about the Benzene status. §4.1 is
 // a rule about the HTTP binding's own response line and its own body agreeing, which only the
 // route-based handler produces.
-func invokeOverHTTP(t *testing.T, body string) httpBindingResponse {
+func invokeOverHTTP(t *testing.T, app httpApp, method, path, body string) httpBindingResponse {
 	t.Helper()
 
-	handler := httpbinding.Handler(conformanceBuilder(t), conformanceRoutes())
+	handler := httpbinding.Handler(app.builder, app.routes)
 
-	req := httptest.NewRequest(http.MethodPost, "/status", strings.NewReader(body))
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("content-type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -262,16 +339,16 @@ func invokeOverHTTP(t *testing.T, body string) httpBindingResponse {
 }
 
 // lambdaV2Event is the API Gateway HTTP API v2.0 / Function URL request shape.
-func lambdaV2Event(body string) string {
+func lambdaV2Event(method, path, body string) string {
 	encoded, _ := json.Marshal(body)
-	return `{"rawPath":"/status","headers":{"content-type":"application/json"},` +
-		`"requestContext":{"http":{"method":"POST","path":"/status"}},"body":` + string(encoded) + `}`
+	return `{"rawPath":"` + path + `","headers":{"content-type":"application/json"},` +
+		`"requestContext":{"http":{"method":"` + method + `","path":"` + path + `"}},"body":` + string(encoded) + `}`
 }
 
 // lambdaV1Event is the API Gateway REST / HTTP API v1.0 / ALB request shape.
-func lambdaV1Event(body string) string {
+func lambdaV1Event(method, path, body string) string {
 	encoded, _ := json.Marshal(body)
-	return `{"httpMethod":"POST","path":"/status","headers":{"content-type":"application/json"},` +
+	return `{"httpMethod":"` + method + `","path":"` + path + `","headers":{"content-type":"application/json"},` +
 		`"body":` + string(encoded) + `}`
 }
 
@@ -291,11 +368,11 @@ func lambdaProxyResponse(t *testing.T, raw json.RawMessage) httpBindingResponse 
 }
 
 // invokeOverLambda drives the canonical handler through awslambda.HTTPHandler for one event shape.
-func invokeOverLambda(event func(string) string, read func(*testing.T, json.RawMessage) httpBindingResponse) func(*testing.T, string) httpBindingResponse {
-	return func(t *testing.T, body string) httpBindingResponse {
+func invokeOverLambda(event func(method, path, body string) string, read func(*testing.T, json.RawMessage) httpBindingResponse) func(*testing.T, httpApp, string, string, string) httpBindingResponse {
+	return func(t *testing.T, app httpApp, method, path, body string) httpBindingResponse {
 		t.Helper()
-		handler := awslambda.HTTPHandler(conformanceBuilder(t), conformanceRoutes())
-		raw, err := handler(context.Background(), json.RawMessage(event(body)))
+		handler := awslambda.HTTPHandler(app.builder, app.routes)
+		raw, err := handler(context.Background(), json.RawMessage(event(method, path, body)))
 		if err != nil {
 			t.Fatalf("awslambda handler returned an error: %v", err)
 		}
@@ -306,15 +383,15 @@ func invokeOverLambda(event func(string) string, read func(*testing.T, json.RawM
 // invokeOverAzureFunctions drives the canonical handler through the Azure Functions custom-handler
 // binding. The outer HTTP response is always 200 by that platform's contract - the invocation's
 // real outcome is in Outputs.res, which is what §4.1 is about here.
-func invokeOverAzureFunctions(t *testing.T, body string) httpBindingResponse {
+func invokeOverAzureFunctions(t *testing.T, app httpApp, method, path, body string) httpBindingResponse {
 	t.Helper()
 
-	handler := azurefunctions.Handler(conformanceBuilder(t), conformanceRoutes())
+	handler := azurefunctions.Handler(app.builder, app.routes)
 
 	trigger, err := json.Marshal(map[string]any{
 		"Data": map[string]any{
 			"req": map[string]any{
-				"Method":  http.MethodPost,
+				"Method":  method,
 				"Headers": map[string]string{"content-type": "application/json"},
 				"Body":    body,
 			},
@@ -324,7 +401,7 @@ func invokeOverAzureFunctions(t *testing.T, body string) httpBindingResponse {
 		t.Fatalf("marshal invocation payload: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/status", strings.NewReader(string(trigger)))
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(trigger)))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 

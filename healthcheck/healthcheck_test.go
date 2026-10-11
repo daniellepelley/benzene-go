@@ -72,9 +72,9 @@ func TestMiddleware_FailedCheckMakesResponseUnhealthy(t *testing.T) {
 	}
 }
 
-func TestMiddleware_ResultStatusReflectsHealth(t *testing.T) {
-	// Healthy -> ok (HTTP 200). Unhealthy -> service-unavailable (HTTP 503 to probes) but still
-	// carries the report body (the result is explicitly successful). A warning stays ok.
+func TestMiddleware_ResultIsOkWhateverTheVerdict(t *testing.T) {
+	// wire-contracts.md §5: the result is ok whenever the checks ran - an unhealthy service is still
+	// a successful health query - and IsHealthy carries the verdict. A warning stays healthy.
 	failing := NamedCheck("db", func(context.Context) CheckResult {
 		return CheckResult{Status: StatusFailed, Type: "database"}
 	})
@@ -93,13 +93,9 @@ func TestMiddleware_ResultStatusReflectsHealth(t *testing.T) {
 	}
 
 	unhealthy, _ := runMiddleware(t, []Check{okCheck("cache"), failing}, "benzene:healthcheck")
-	if got := unhealthy.Result.ResultStatus(); got != benzene.StatusServiceUnavailable {
-		t.Errorf("unhealthy status = %q, want %q", got, benzene.StatusServiceUnavailable)
+	if got := unhealthy.Result.ResultStatus(); got != benzene.StatusOk {
+		t.Errorf("unhealthy status = %q, want %q", got, benzene.StatusOk)
 	}
-	if !unhealthy.Result.(interface{ IsSuccessful() bool }).IsSuccessful() {
-		t.Error("unhealthy result must be explicitly successful so the report body renders, not an error payload")
-	}
-	// The report body is still present at 503.
 	if resp := resultPayload(t, unhealthy); resp.IsHealthy {
 		t.Error("IsHealthy = true in an unhealthy report body")
 	}

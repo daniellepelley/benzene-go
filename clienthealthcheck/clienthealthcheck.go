@@ -12,11 +12,9 @@
 // Reachability and the contract hash are both read from the provider's reserved benzene:mesh
 // descriptor, which mesh.Middleware serves with a success status *unconditionally* - a reachable but
 // transiently-unhealthy provider still serves its descriptor. This is deliberately NOT the
-// benzene:healthcheck topic: that returns a failure status when the provider's own checks are merely
-// failing, and the envelope transport drops a failure response's body (httpclient.toResult), so a
-// healthcheck probe could not tell "unhealthy" from "down" - and coupling this check to the
-// provider's transient health is exactly what it must not do (only an unreachable provider, or one
-// that serves no contract to verify, is our failure). This diverges from the .NET reference, which
+// benzene:healthcheck topic: its report carries the provider's own transient verdict (isHealthy), and
+// coupling this check to the provider's transient health is exactly what it must not do (only an
+// unreachable provider, or one that serves no contract to verify, is our failure). This diverges from the .NET reference, which
 // keys reachability on its generated client's health-call payload; Go's descriptor carries the hash
 // and is health-independent, so it is the faithful signal here.
 //

@@ -91,7 +91,7 @@ func Handler(builder *benzene.ApplicationBuilder, routes []Route) http.Handler {
 		}
 
 		resp, _ := envelope.DispatchTopicResult(r.Context(), builder.Pipeline, builder.Container, topic, headers, string(body))
-		writeNativeResponse(w, resp)
+		writeNativeResponse(w, topic, resp)
 	})
 }
 
@@ -269,11 +269,11 @@ func headersFrom(h http.Header) map[string]string {
 	return flat
 }
 
-func writeNativeResponse(w http.ResponseWriter, resp wire.Response) {
+func writeNativeResponse(w http.ResponseWriter, topic benzene.Topic, resp wire.Response) {
 	// httpstatus.Response, not a rendering of our own: the status code, the problem document's
 	// `status` member and the problem content type are wire-contracts.md §4.1's business, shared
 	// with every other HTTP binding in this port so none of them can drift.
-	code, body, headers := httpstatus.Response(resp)
+	code, body, headers := httpstatus.Response(topic, resp)
 	for key, value := range headers {
 		w.Header().Set(key, value)
 	}

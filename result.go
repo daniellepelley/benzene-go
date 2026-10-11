@@ -54,8 +54,9 @@ type Result[T any] struct {
 	// reach for FailWith/ValidationErrorWith when the producer knows a Field or a Code.
 	Errors []Error
 	// successful, when non-nil, overrides the status-derived success classification (see
-	// SetResult and IsSuccessful). Unexported so the only way to set it is the deliberate
-	// SetResult constructor; a plain struct literal leaves it nil and derives from the status.
+	// IsSuccessful). Unexported, and set only by the failure constructors (FailWith,
+	// ProblemResult), which is what keeps an application-defined failure status unsuccessful; a
+	// plain struct literal leaves it nil and derives from the status.
 	successful *bool
 	// problem, when non-nil, is an application-authored problem document that the wire edge emits
 	// verbatim instead of deriving one from the status - otherwise an application's own `type` URI
@@ -65,11 +66,12 @@ type Result[T any] struct {
 	unmatched bool
 }
 
-// IsSuccessful reports whether this result should be treated as a success. Unless an explicit
-// flag was set via SetResult, it is derived from the status class as "not a failure"
-// (core-concepts.md §5), so a framework success status and an application-defined status both
-// count as successful and carry their payload, while only a framework failure status does not -
-// the extensibility promise that custom statuses flow through untouched (design-principles.md).
+// IsSuccessful reports whether this result is a success - the value that reaches the wire as the
+// envelope's isSuccessful (wire-contracts.md §1.2). For a status in the vocabulary it always equals
+// that status's class: there is no way to build a successful result with a failure status, or the
+// reverse. For an application-defined status it is the only signal of success: a result built with
+// Fail, FailWith or ProblemResult is unsuccessful, and any other (e.g. a struct literal) is
+// successful, so custom statuses flow through untouched (design-principles.md).
 func (r Result[T]) IsSuccessful() bool {
 	if r.successful != nil {
 		return *r.successful
@@ -79,8 +81,8 @@ func (r Result[T]) IsSuccessful() bool {
 
 // ResultIsSuccessful exposes IsSuccessful on the type-erased ResultInfo path. A transport
 // binding renders the payload vs an error body from the ResultInfo it holds, and this lets an
-// explicit success flag (SetResult) survive type erasure; a binding checks for it via the
-// optional interface { ResultIsSuccessful() bool } and falls back to the status otherwise.
+// application-defined failure status survive type erasure as a failure; a binding checks for it
+// via the optional interface { ResultIsSuccessful() bool } and falls back to the status otherwise.
 func (r Result[T]) ResultIsSuccessful() bool { return r.IsSuccessful() }
 
 // ResultInfo is the type-erased view of a Result[T], implemented by every instantiation.
@@ -158,16 +160,6 @@ func ProblemsOf(result ResultInfo) []Error {
 
 func success[T any](status Status, payload T) Result[T] {
 	return Result[T]{Status: status, Payload: &payload}
-}
-
-// SetResult builds a Result whose success classification is set explicitly, decoupled from the
-// status class. The intended use is the reserved health check returning StatusServiceUnavailable -
-// so an HTTP probe sees 503 and a load balancer drains the instance - while still rendering its
-// report body (successful=true) rather than an error payload. For ordinary results prefer Ok/Fail
-// and the status-derived default; reach for this only when the transport outcome and the body's
-// meaning genuinely diverge.
-func SetResult[T any](status Status, payload T, successful bool) Result[T] {
-	return Result[T]{Status: status, Payload: &payload, successful: &successful}
 }
 
 // Ok returns a successful Result with StatusOk.

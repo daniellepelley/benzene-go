@@ -236,10 +236,8 @@ alongside the shared spec.
   Both reachability **and** the hash come from the provider's reserved `benzene:mesh` descriptor,
   which `mesh.Middleware` serves with a success status *unconditionally* (health-independent) - so a
   reachable-but-unhealthy provider still reads as reachable. Deliberately **not** the
-  `benzene:healthcheck` topic: that returns a failure status when the provider's own checks fail, and
-  the envelope transport drops a failure body (`httpclient.toResult`), so a healthcheck probe could
-  not tell "unhealthy" from "down" - and coupling this contract check to the provider's transient
-  health is exactly what it must not do. .NET bakes the hash into a generated client; Go has none, so
+  `benzene:healthcheck` topic: its report carries the provider's own transient verdict (`isHealthy`),
+  and coupling this contract check to the provider's transient health is exactly what it must not do. .NET bakes the hash into a generated client; Go has none, so
   `WithExpectedContractHash` supplies the consumer's built-against hash (a documented divergence
   driven by the transport + the fact that Go's *descriptor*, not its health response, carries the
   hash). Register it on a **contracts** diagnostic surface, not a liveness/readiness probe (it calls

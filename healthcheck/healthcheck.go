@@ -70,8 +70,10 @@ type Response struct {
 }
 
 // Middleware intercepts the reserved benzene:healthcheck topic (plus any additional aliases) and
-// short-circuits the pipeline (core-concepts.md §5) with the aggregate Response, running
-// every check concurrently. A check that panics is recorded as StatusFailed rather than
+// short-circuits the pipeline (core-concepts.md §5) with the aggregate Response as an ok result,
+// running every check concurrently. The result is ok whether or not the service is healthy - the
+// verdict is the Response's IsHealthy (wire-contracts.md §5), which an HTTP health route maps to
+// 200 or 503. Interception is by topic id alone, ignoring version (wire-contracts.md §7). A check that panics is recorded as StatusFailed rather than
 // crashing the invocation - a health check reporting its own failure is exactly the
 // information a caller needs, and one broken check must not take down the whole endpoint.
 //
@@ -109,15 +111,12 @@ func Middleware(checks []Check, aliases ...string) benzene.Middleware {
 			}
 		}
 
-		// Healthy -> ok (HTTP 200). Unhealthy -> service-unavailable so an HTTP probe sees 503
-		// and a load balancer drains the instance, but explicitly successful so the report body
-		// still renders instead of an error payload (wire-contracts.md §5; mirrors the .NET
-		// HealthCheckProcessor). A warning does not flip IsHealthy, so it stays 200.
-		if response.IsHealthy {
-			ic.Result = benzene.Ok(response)
-		} else {
-			ic.Result = benzene.SetResult(benzene.StatusServiceUnavailable, response, true)
-		}
+		// ok whenever the checks ran, healthy or not: an unhealthy service is still a successful
+		// health query, and IsHealthy carries the verdict (wire-contracts.md §5). The HTTP binding
+		// turns IsHealthy: false into a 503 on a health route (httpstatus.Response), so a load
+		// balancer reading only the status line still drains the instance. A warning does not
+		// flip IsHealthy.
+		ic.Result = benzene.Ok(response)
 		return nil
 	}
 }
