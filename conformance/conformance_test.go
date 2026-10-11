@@ -215,6 +215,19 @@ func conformanceProblemHandler(_ context.Context, req conformanceProblemRequest)
 	return benzene.ValidationErrorWith[struct{}](problemError)
 }
 
+// conformanceVersionedResponse / conformanceVersioned are the canonical `conformance:versioned`
+// handler: registered twice, at v1 (declared the topic's default with benzene.AsDefault) and at v2,
+// each answering with its own version - version selection (core-concepts.md §2) made observable.
+type conformanceVersionedResponse struct {
+	Version string `json:"version"`
+}
+
+func conformanceVersioned(version string) benzene.Handler[struct{}, conformanceVersionedResponse] {
+	return func(context.Context, struct{}) benzene.Result[conformanceVersionedResponse] {
+		return benzene.Ok(conformanceVersionedResponse{Version: version})
+	}
+}
+
 // canonicalHandlerRegistry registers exactly the handlers conformance/README.md's "Canonical
 // handlers" table names, and nothing else - cases targeting any other topic are asserting the
 // router's not-found behavior, so an extra registration here would quietly weaken them.
@@ -224,6 +237,8 @@ func canonicalHandlerRegistry(t *testing.T) *benzene.Registry {
 	must(t, benzene.Register(registry, benzene.NewTopic("conformance:greet"), benzene.Handler[conformanceGreetRequest, conformanceGreetResponse](conformanceGreetHandler)))
 	must(t, benzene.Register(registry, benzene.NewTopic("conformance:status"), benzene.Handler[conformanceStatusRequest, conformanceStatusResponse](conformanceStatusHandler)))
 	must(t, benzene.Register(registry, benzene.NewTopic("conformance:problem"), benzene.Handler[conformanceProblemRequest, struct{}](conformanceProblemHandler)))
+	must(t, benzene.Register(registry, benzene.NewTopic("conformance:versioned").WithVersion("v1"), conformanceVersioned("v1"), benzene.AsDefault()))
+	must(t, benzene.Register(registry, benzene.NewTopic("conformance:versioned").WithVersion("v2"), conformanceVersioned("v2")))
 	return registry
 }
 

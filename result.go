@@ -61,6 +61,8 @@ type Result[T any] struct {
 	// verbatim instead of deriving one from the status - otherwise an application's own `type` URI
 	// would be overwritten by the registry URI on the way out. Set only by ProblemResult.
 	problem *Problem
+	// unmatched marks RouterMiddleware's not-found for a topic no handler serves (IsUnmatchedTopic).
+	unmatched bool
 }
 
 // IsSuccessful reports whether this result should be treated as a success. Unless an explicit

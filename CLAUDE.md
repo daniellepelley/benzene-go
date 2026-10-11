@@ -40,7 +40,7 @@ alongside the shared spec.
   explicit form - keep it that way when adding to it: `Register` returns the error /
   `MustRegister` panics with it (`mesh.RegisterOutbound`/`MustRegisterOutbound` mirror the pair);
   `UsePipeline` takes any pipeline / `UseDefaultPipeline` is one line of `UsePipeline(NewPipeline(
-  RouterMiddleware(b.Registry)))`, which `App.Run` also installs when `Configure` set no pipeline,
+  RouterMiddleware(b.Registry, WithVersionKey(b.ReservedNames.Version()))))`, which `App.Run` also installs when `Configure` set no pipeline,
   so the common case needs no `Configure` phase at all. That default exists as a **start-up**
   check as much as an ergonomic one: a builder with a nil `Pipeline` used to nil-deref on the
   first message inside a binding. `benzenetest.NewHost` re-implements the lifecycle to get its

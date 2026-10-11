@@ -32,9 +32,9 @@ func TestRegister_AndResolve(t *testing.T) {
 		t.Fatal("Has() = false after Register()")
 	}
 
-	handler, ok := r.resolve(topic)
-	if !ok {
-		t.Fatal("resolve() = (_, false), want (_, true)")
+	handler, found := r.lookup(topic)
+	if found != selected {
+		t.Fatalf("lookup() selection = %v, want selected", found)
 	}
 
 	result, err := handler(context.Background(), helloRequest{Name: "World"})
@@ -75,10 +75,10 @@ func TestRegister_DifferentVersionsAreIndependent(t *testing.T) {
 	}
 }
 
-func TestResolve_UnregisteredTopic(t *testing.T) {
+func TestLookup_UnregisteredTopic(t *testing.T) {
 	r := NewRegistry()
-	if _, ok := r.resolve(NewTopic("nope")); ok {
-		t.Error("resolve() of an unregistered topic should return ok = false")
+	if _, found := r.lookup(NewTopic("nope")); found != unknownTopic {
+		t.Errorf("lookup() of an unregistered topic = %v, want unknownTopic", found)
 	}
 	if r.Has(NewTopic("nope")) {
 		t.Error("Has() of an unregistered topic should be false")
@@ -92,7 +92,7 @@ func TestErasedHandler_WrongRequestType(t *testing.T) {
 		t.Fatalf("Register() error = %v", err)
 	}
 
-	handler, _ := r.resolve(topic)
+	handler, _ := r.lookup(topic)
 	_, err := handler(context.Background(), 42)
 	if err == nil {
 		t.Fatal("calling the erased handler with the wrong request type should return an error")
@@ -106,7 +106,7 @@ func TestErasedHandler_JSONBytesConvertedToTypedRequest(t *testing.T) {
 		t.Fatalf("Register() error = %v", err)
 	}
 
-	handler, _ := r.resolve(topic)
+	handler, _ := r.lookup(topic)
 	result, err := handler(context.Background(), []byte(`{"Name":"JSON"}`))
 	if err != nil {
 		t.Fatalf("handler() error = %v", err)
@@ -124,7 +124,7 @@ func TestErasedHandler_MalformedJSONIsAnError(t *testing.T) {
 		t.Fatalf("Register() error = %v", err)
 	}
 
-	handler, _ := r.resolve(topic)
+	handler, _ := r.lookup(topic)
 	if _, err := handler(context.Background(), []byte(`{not valid json`)); err == nil {
 		t.Fatal("malformed JSON body should return an error")
 	}
@@ -286,4 +286,73 @@ func TestMustRegister(t *testing.T) {
 				mustReq, mustRes, mustOK, regReq, regRes, regOK)
 		}
 	})
+}
+
+func TestRegister_AsDefaultDeclaresTheTopicDefault(t *testing.T) {
+	r := NewRegistry()
+	h := Handler[helloRequest, helloResponse](helloHandler)
+	MustRegister(r, NewTopic("t").WithVersion("v1"), h, AsDefault())
+	MustRegister(r, NewTopic("t").WithVersion("v2"), h)
+
+	if version, ok := r.DefaultVersion("t"); !ok || version != "v1" {
+		t.Errorf("DefaultVersion(t) = (%q, %v), want (v1, true)", version, ok)
+	}
+	if ids := r.TopicsWithoutDefault(); len(ids) != 0 {
+		t.Errorf("TopicsWithoutDefault() = %v, want none", ids)
+	}
+}
+
+func TestRegister_SecondDeclaredDefaultIsAStartupError(t *testing.T) {
+	r := NewRegistry()
+	h := Handler[helloRequest, helloResponse](helloHandler)
+	MustRegister(r, NewTopic("t").WithVersion("v1"), h, AsDefault())
+
+	err := Register(r, NewTopic("t").WithVersion("v2"), h, AsDefault())
+	if err == nil || !strings.Contains(err.Error(), `"v1"`) || !strings.Contains(err.Error(), `"v2"`) {
+		t.Fatalf("second AsDefault Register() error = %v, want one naming both versions", err)
+	}
+	if r.Has(NewTopic("t").WithVersion("v2")) {
+		t.Error("a rejected registration was stored")
+	}
+}
+
+func TestRegister_AsDefaultOnAnUnversionedTopicChangesNothing(t *testing.T) {
+	r := NewRegistry()
+	h := Handler[helloRequest, helloResponse](helloHandler)
+	MustRegister(r, NewTopic("t"), h, AsDefault())
+	MustRegister(r, NewTopic("t").WithVersion("v2"), h, AsDefault())
+
+	// The unversioned handler is the default by definition; the v2 declaration is still recorded,
+	// but only consulted while no unversioned handler exists.
+	if version, ok := r.DefaultVersion("t"); !ok || version != "" {
+		t.Errorf("DefaultVersion(t) = (%q, %v), want (\"\", true)", version, ok)
+	}
+}
+
+func TestRegistry_TopicsWithoutDefault(t *testing.T) {
+	r := NewRegistry()
+	h := Handler[helloRequest, helloResponse](helloHandler)
+	MustRegister(r, NewTopic("b").WithVersion("v1"), h)
+	MustRegister(r, NewTopic("a").WithVersion("v1"), h)
+	MustRegister(r, NewTopic("a").WithVersion("v2"), h)
+	MustRegister(r, NewTopic("c"), h)
+
+	got := r.TopicsWithoutDefault()
+	if want := []string{"a", "b"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("TopicsWithoutDefault() = %v, want %v", got, want)
+	}
+	if _, ok := r.DefaultVersion("unknown"); ok {
+		t.Error("DefaultVersion(unknown) ok = true, want false")
+	}
+}
+
+func TestRegistry_ZeroValueIsUsable(t *testing.T) {
+	var r Registry
+	if r.Has(NewTopic("t")) || len(r.Topics()) != 0 || len(r.TopicsWithoutDefault()) != 0 {
+		t.Fatal("zero Registry is not empty")
+	}
+	MustRegister(&r, NewTopic("t"), Handler[helloRequest, helloResponse](helloHandler))
+	if !r.Has(NewTopic("t")) {
+		t.Error("Has() = false after registering on a zero Registry")
+	}
 }

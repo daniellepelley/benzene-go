@@ -4,11 +4,11 @@ package benzene
 // docs/specification/core-concepts.md §2 in the main Benzene repo (the spec this
 // package implements).
 //
-// A (ID, Version) pair maps to at most one handler. When a message arrives without
-// a version, the unversioned handler (Version == "") handles it; versioned handlers
-// are selected only by an exact match. RouterMiddleware reads an inbound message's
-// version off the wire (wire-contracts.md §2 tier C) and, when a signalled version has
-// no exact handler, falls back to the unversioned one - see its doc.
+// A (ID, Version) pair maps to at most one handler. A message carrying a version is
+// handled only by an exact (ID, Version) match; a message without one goes to the topic's
+// default handler - the unversioned handler (Version == ""), else the one registered with
+// AsDefault. RouterMiddleware reads an inbound message's version off the benzene-version
+// header (wire-contracts.md §2) - see its doc.
 type Topic struct {
 	ID      string
 	Version string

@@ -29,12 +29,12 @@ func TestReservedNames_AccessorsDefaultWhenUnset(t *testing.T) {
 		t.Errorf("partial.Correlation() = %q, want the default %q", got, DefaultCorrelationKey)
 	}
 
-	if got := zero.Version(); !reflect.DeepEqual(got, DefaultVersionKeys) {
-		t.Errorf("zero.Version() = %v, want the default %v", got, DefaultVersionKeys)
+	if got := zero.Version(); got != DefaultVersionKey {
+		t.Errorf("zero.Version() = %q, want the default %q", got, DefaultVersionKey)
 	}
-	narrowed := ReservedNames{VersionKeys: []string{"benzene-version"}}
-	if got := narrowed.Version(); !reflect.DeepEqual(got, []string{"benzene-version"}) {
-		t.Errorf("narrowed.Version() = %v, want %v", got, []string{"benzene-version"})
+	renamed := ReservedNames{VersionKey: "schema-version"}
+	if got := renamed.Version(); got != "schema-version" {
+		t.Errorf("renamed.Version() = %q, want %q", got, "schema-version")
 	}
 }
 
@@ -42,23 +42,23 @@ func TestResolveVersion(t *testing.T) {
 	tests := []struct {
 		name    string
 		headers map[string]string
-		keys    []string
+		key     string
 		want    string
 	}{
-		{"absent is empty (no version signalled)", map[string]string{"other": "x"}, DefaultVersionKeys, ""},
-		{"nil headers is empty", nil, DefaultVersionKeys, ""},
-		{"benzene-version read", map[string]string{"benzene-version": "3"}, DefaultVersionKeys, "3"},
-		{"earlier key wins over later", map[string]string{"benzene-version": "3", "version": "9"}, DefaultVersionKeys, "3"},
-		{"fallback to version when benzene-version absent", map[string]string{"version": "9"}, DefaultVersionKeys, "9"},
-		{"fallback to x-version last", map[string]string{"x-version": "7"}, DefaultVersionKeys, "7"},
-		{"case-insensitive on read", map[string]string{"Benzene-Version": "3"}, DefaultVersionKeys, "3"},
-		{"present-but-empty is skipped", map[string]string{"benzene-version": "", "version": "9"}, DefaultVersionKeys, "9"},
-		{"narrowed list ignores an unlisted name", map[string]string{"version": "9"}, []string{"benzene-version"}, ""},
-		{"no keys is empty", map[string]string{"benzene-version": "3"}, nil, ""},
+		{"absent is empty (no version signalled)", map[string]string{"other": "x"}, DefaultVersionKey, ""},
+		{"nil headers is empty", nil, DefaultVersionKey, ""},
+		{"benzene-version read", map[string]string{"benzene-version": "3"}, DefaultVersionKey, "3"},
+		{"case-insensitive on read", map[string]string{"Benzene-Version": "3"}, DefaultVersionKey, "3"},
+		{"present-but-empty is absent", map[string]string{"benzene-version": ""}, DefaultVersionKey, ""},
+		// D10: one name, no fallback list - a producer's own version header selects nothing.
+		{"a bare version header is not a version", map[string]string{"version": "9"}, DefaultVersionKey, ""},
+		{"an x-version header is not a version", map[string]string{"x-version": "7"}, DefaultVersionKey, ""},
+		{"a renamed key replaces the default", map[string]string{"schema-version": "4", "benzene-version": "3"}, "schema-version", "4"},
+		{"a renamed key stops the default being read", map[string]string{"benzene-version": "3"}, "schema-version", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := ResolveVersion(tt.headers, tt.keys); got != tt.want {
+			if got := ResolveVersion(tt.headers, tt.key); got != tt.want {
 				t.Errorf("ResolveVersion() = %q, want %q", got, tt.want)
 			}
 		})

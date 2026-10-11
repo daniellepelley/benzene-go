@@ -11,9 +11,9 @@ delivery order - just the current honest picture, kept up to date as things land
 - `wire` - the transport-neutral envelope, plus `ResolveMetadataTopic` (the shared native-metadata
   topic resolver every queue-shaped binding delegates to) and `ReservedNames` - the single
   injectable value for the configurable reserved names of `wire-contracts.md` §2 (the `topic`
-  metadata key, the `x-correlation-id` header, and the ordered `benzene-version`→`version`→
-  `x-version` payload-version fallback list `ResolveVersion` reads and `RouterMiddleware`/
-  `WithVersionKeys` route on). A service sets it once on the
+  metadata key, the `x-correlation-id` header, and the one `benzene-version` header
+  `ResolveVersion` reads and `RouterMiddleware`/`WithVersionKey` route on - no fallback list, so a
+  producer's own `version`/`x-version` header selects nothing). A service sets it once on the
   `ApplicationBuilder` (`UseReservedNames`) for its inbound bindings and on its outbound clients'
   `ReservedNames` field / `WithCorrelationIDKey`, so a colliding key is renamed in one
   place for both directions; the defaults carry the interop baseline.
@@ -483,26 +483,18 @@ equivalent to port, not gaps in this port:
 Honest record of where this port stops short of the .NET reference on purpose, so the boundary
 is a decision rather than a surprise:
 
-- **Inbound handler-version selection is wired for both the header and the HTTP route segment,
-  exact-match only; exact-else-highest remains deferred.** `RouterMiddleware` reads the
-  `benzene-version` header off the wire (the ordered, configurable fallback list
-  `benzene-version` → `version` → `x-version` of `wire-contracts.md` §2 / `versioning.md` §2.1,
-  overridable via `benzene.WithVersionKeys` / `ReservedNames.VersionKeys`) and dispatches to the
-  exact `(id, version)` handler, so a versioned handler is reachable from an inbound message on
-  every transport - the previously-skipped `version-travels-alongside-the-topic` conformance case
-  runs. `httpbinding.Handler` (and `awslambda.HTTPHandler`/`azurefunctions.Handler`, which share
-  its `Route`/`RouteTable` matching) additionally honours versioning.md §2.1's HTTP-primary
-  carrier: a `"{version}"` route segment - e.g. `Path: "/v{version}/orders/{id}"`, the literal `v`
-  prefix supported alongside the placeholder like any other prefixed/suffixed route parameter -
-  sets the dispatched topic's version directly and wins over the header; a route with no such
-  segment falls back to the header, matching the spec's "falls back... if the matched route
-  declares no version parameter." Selection stays **exact-match** (`core-concepts.md` §2) on both
-  carriers, with one non-regressive fallback: a signalled version with no exact handler routes to
-  the unversioned (default-version) handler if one exists, so a stray version header/segment on an
-  unversioned-only service still routes. **Exact-else-highest-supported** selection
-  (`versioning.md` §3 / the .NET `VersionSelector`), which `core-concepts.md` §2's "exact match
-  only" contradicts, stays deferred - that upstream spec disagreement should settle before a Go
-  implementation picks the richer selector over the conservative exact-match this port ships.
+- **Inbound handler-version selection follows `core-concepts.md` §2, without the cast step.**
+  `RouterMiddleware` reads the version from the one `benzene-version` header (`wire-contracts.md`
+  §2; renamed in one place via `ReservedNames.VersionKey`, which `UseDefaultPipeline` passes as
+  `benzene.WithVersionKey`) or from an HTTP `"{version}"` route segment - sugar for the header,
+  shared by `httpbinding.Handler`, `awslambda.HTTPHandler` and `azurefunctions.Handler`, winning
+  over a header on the same request. A message carrying a version runs the exact `(id, version)`
+  handler or is `not-found` naming both - no highest-available fallback, and no fallback to the
+  unversioned handler. A message without one runs the topic's default handler: the unversioned one,
+  else the version registered with `benzene.AsDefault()`; a topic whose handlers are all versioned
+  with none declared default is logged as a warning when the router is built
+  (`Registry.TopicsWithoutDefault`). The spec's cast-reachable step does not apply: this port ships
+  no payload casting (next bullet).
 - **Transparent payload up/down-casting (`versioning.md` §4, "Mechanism B") is not
   implemented.** It is explicitly opt-in in the spec (a topic without it "behaves exactly as an
   unversioned topic"), a conforming service needs neither versioning axis, and the .NET

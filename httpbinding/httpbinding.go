@@ -35,12 +35,12 @@ import (
 // The "route-" prefix is written after the inbound HTTP headers are flattened, so a client
 // sending a literal "route-id" header can never spoof a path parameter.
 //
-// A "{version}" segment is additionally special-cased as the HTTP-primary payload schema
-// version carrier (versioning.md §2.1, e.g. Path: "/v{version}/orders/{id}"): its captured
-// value sets the dispatched topic's version directly, taking priority over any
-// benzene-version/version/x-version header on the same request. A route with no "{version}"
-// segment falls back to that header list, matching the spec's "falls back... if the matched
-// route declares no version parameter."
+// A "{version}" segment is additionally special-cased as the HTTP version carrier
+// (versioning.md §2.1, e.g. Path: "/v{version}/orders/{id}"): sugar for the benzene-version
+// header, its captured value sets the dispatched topic's version exactly as if the header had
+// been sent, taking priority over a benzene-version header on the same request. A route with no
+// "{version}" segment reads the header instead, so one topic can have a path-versioned and a
+// header-versioned surface without duplicating routes.
 type Route struct {
 	Method string
 	Path   string

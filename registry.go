@@ -75,21 +75,66 @@ type handlerRegistration struct {
 // attribute scanning, and core-concepts §9 already requires explicit registration to be a
 // first-class path in every language regardless - so there is nothing to defer to later
 // here, this is simply the Go idiom.
+//
+// The zero value is an empty Registry ready to use; NewRegistry is the same thing spelled as a
+// constructor.
 type Registry struct {
 	handlers map[Topic]handlerRegistration
+	// versions counts the registrations per topic id, so the router can tell a topic nobody serves
+	// (an unmatched topic, transport-bindings.md §1 obligation 8) from a version nobody serves.
+	versions map[string]int
+	// defaults holds the version each topic id declared as its default handler (AsDefault).
+	defaults map[string]string
 }
 
 // NewRegistry returns an empty Registry.
 func NewRegistry() *Registry {
-	return &Registry{handlers: make(map[Topic]handlerRegistration)}
+	return &Registry{}
+}
+
+// RegisterOption configures one Register call.
+type RegisterOption func(*registerConfig)
+
+type registerConfig struct {
+	asDefault bool
+}
+
+// AsDefault declares the handler being registered as its topic's default handler: the one a message
+// that carries no version goes to (core-concepts.md §2). A topic whose handlers are all versioned
+// needs one, or every unversioned message to it is not-found; declaring the oldest version the topic
+// still accepts is what keeps producers that predate versioning working (versioning.md §2.2).
+//
+//	benzene.MustRegister(registry, benzene.NewTopic("order:create").WithVersion("v1"), createV1, benzene.AsDefault())
+//	benzene.MustRegister(registry, benzene.NewTopic("order:create").WithVersion("v2"), createV2)
+//
+// An unversioned handler is always its topic's default, so AsDefault on an unversioned topic changes
+// nothing, and a declared default is only used while the topic has no unversioned handler. Declaring
+// two versions of one topic default is a registration error.
+func AsDefault() RegisterOption {
+	return func(c *registerConfig) { c.asDefault = true }
 }
 
 // Register adds handler for topic. Returns an error if topic is already registered -
 // registering two handlers for the same (id, version) pair is a startup error, not a
-// runtime dispatch ambiguity (core-concepts.md §2).
-func Register[TReq, TRes any](r *Registry, topic Topic, handler Handler[TReq, TRes]) error {
+// runtime dispatch ambiguity (core-concepts.md §2) - or if AsDefault declares a second default
+// for the topic id.
+func Register[TReq, TRes any](r *Registry, topic Topic, handler Handler[TReq, TRes], opts ...RegisterOption) error {
+	var cfg registerConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	if _, exists := r.handlers[topic]; exists {
 		return fmt.Errorf("benzene: handler already registered for topic %q", topic)
+	}
+	declareDefault := cfg.asDefault && topic.Version != ""
+	if existing, ok := r.defaults[topic.ID]; ok && declareDefault {
+		return fmt.Errorf("benzene: topic %q already declares version %q as its default; cannot also declare %q", topic.ID, existing, topic.Version)
+	}
+
+	if r.handlers == nil {
+		r.handlers = make(map[Topic]handlerRegistration)
+		r.versions = make(map[string]int)
+		r.defaults = make(map[string]string)
 	}
 	r.handlers[topic] = handlerRegistration{
 		handler: func(ctx context.Context, raw any) (ResultInfo, error) {
@@ -104,15 +149,69 @@ func Register[TReq, TRes any](r *Registry, topic Topic, handler Handler[TReq, TR
 		request:  reflect.TypeOf((*TReq)(nil)).Elem(),
 		response: reflect.TypeOf((*TRes)(nil)).Elem(),
 	}
+	r.versions[topic.ID]++
+	if declareDefault {
+		r.defaults[topic.ID] = topic.Version
+	}
 	return nil
 }
 
-// resolve looks up the handler registered for topic. Topic matching is exact - the topic
-// id and version travel as literal strings once resolved (core-concepts.md §2); any
-// normalization a transport binding wants to apply happens before calling resolve.
-func (r *Registry) resolve(topic Topic) (erasedHandler, bool) {
-	reg, ok := r.handlers[topic]
-	return reg.handler, ok
+// selection is why a lookup did or did not find a handler.
+type selection int
+
+const (
+	selected       selection = iota
+	unknownTopic             // no handler is registered for the topic id at any version
+	unknownVersion           // the topic id has handlers, but none at the message's version
+	noDefault                // no version was sent and the topic has no default handler
+)
+
+// lookup selects the handler for topic per core-concepts.md §2. A message carrying a version matches
+// exactly: this port ships no payload casting, so there is no cast-reachable step, and there is never
+// a "nearest" or "highest available" fallback - serving another version's behaviour to a caller that
+// named a version is the failure versioning exists to prevent. A message without one goes to the
+// topic's default handler: the unversioned handler, else the declared default (AsDefault). Topic ids
+// and versions are literal strings once resolved; any normalization a transport wants happens first.
+func (r *Registry) lookup(topic Topic) (erasedHandler, selection) {
+	if reg, ok := r.handlers[topic]; ok {
+		return reg.handler, selected
+	}
+	if r.versions[topic.ID] == 0 {
+		return nil, unknownTopic
+	}
+	if topic.Version != "" {
+		return nil, unknownVersion
+	}
+	if version, ok := r.defaults[topic.ID]; ok {
+		return r.handlers[topic.WithVersion(version)].handler, selected
+	}
+	return nil, noDefault
+}
+
+// DefaultVersion reports which handler a message without a version is routed to for topic id: "" for
+// the unversioned handler, the declared version for an AsDefault registration. ok is false when the
+// topic is unknown, or when every handler it has is versioned and none is declared default.
+func (r *Registry) DefaultVersion(id string) (version string, ok bool) {
+	if _, unversioned := r.handlers[NewTopic(id)]; unversioned {
+		return "", true
+	}
+	version, ok = r.defaults[id]
+	return version, ok
+}
+
+// TopicsWithoutDefault returns, sorted, the ids of topics whose handlers are all versioned with none
+// declared default (AsDefault). Such a topic is valid, but every message to it that carries no version
+// is not-found - so core-concepts.md §2 asks for it to be reported at start-up, which RouterMiddleware
+// does when it is built. Call it from a start-up check or a test to fail fast instead.
+func (r *Registry) TopicsWithoutDefault() []string {
+	var ids []string
+	for id := range r.versions {
+		if _, ok := r.DefaultVersion(id); !ok {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // TopicTypes returns the request and response types captured when topic's handler was
@@ -171,8 +270,8 @@ func (r *Registry) Topics() []Topic {
 // In both forms TReq/TRes are inferred from handler's signature; the explicit
 // benzene.Handler[TReq, TRes](fn) conversion is never required for a function that already has
 // the handler shape.
-func MustRegister[TReq, TRes any](r *Registry, topic Topic, handler Handler[TReq, TRes]) {
-	if err := Register(r, topic, handler); err != nil {
+func MustRegister[TReq, TRes any](r *Registry, topic Topic, handler Handler[TReq, TRes], opts ...RegisterOption) {
+	if err := Register(r, topic, handler, opts...); err != nil {
 		panic(err)
 	}
 }
