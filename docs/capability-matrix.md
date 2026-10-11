@@ -152,8 +152,8 @@ inherits these facts:
 | Event Hub self-hosted consumer | `azureeventhub` — `consumer.go` `Consumer` | stream (`eventhub`) | redeliver in place: the failed event and the rest of its batch are held and re-dispatched after `ErrorBackoff` before anything new is received; never checkpointed past | redeliver on restart — panics out of `Run`; not checkpointed | per event, in partition order |
 | Functions Cosmos DB change feed | `azurefunctions` — `cosmos.go` `CosmosHandler` | stream (`cosmosdb-changefeed`) | redeliver (outer 500, whole batch) | redeliver — no response | per batch (fan-in: one invocation) |
 | Cosmos DB self-hosted worker | `azurecosmos` — `worker.go` `Worker` | stream (`cosmosdb-changefeed`) | redeliver (token not advanced; re-read after `ErrorBackoff`) | redeliver on restart — panics out of `Run` | per page (continuation token; fan-in) |
-| Cloud Functions Gen2 CloudEvent | `gcpfunctions` — `gcpfunctions.go` `RegisterCloudEvent` | — (no fixture id) | redeliver² (returns an error) | redeliver² — functions-framework v1.9.2 re-panics; cloudevents sdk-go v2.16.2 recovers it into an error result | per event |
-| CloudEvents over HTTP | `cloudevents` — `http.go` `Handler` | — (no fixture id) | redeliver (HTTP 500) | redeliver — no response | per event (batched mode answers 415) |
+| Cloud Functions Gen2 CloudEvent | `gcpfunctions` — `gcpfunctions.go` `RegisterCloudEvent` | `cloudevents` (one-shot) | redeliver² (returns an error) | redeliver² — functions-framework v1.9.2 re-panics; cloudevents sdk-go v2.16.2 recovers it into an error result | per event |
+| CloudEvents over HTTP | `cloudevents` — `http.go` `Handler` | `cloudevents` (one-shot) | redeliver (HTTP 500) | redeliver — no response | per event (batched mode answers 415) |
 
 ² The binding fails the invocation. Whether the platform then redelivers depends on the trigger's
 retry configuration, which this repo cannot verify against a live host. In particular, how the

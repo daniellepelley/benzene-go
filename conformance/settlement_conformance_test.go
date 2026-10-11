@@ -84,10 +84,9 @@ func settlementBindings(zero outcome) []goBinding {
 		{"grpcbinding.UnaryServerInterceptor", "grpc", "request-response", notApplicable, "grpcbinding"},
 		{"httpbinding.EnvelopeHandler", "envelope", "request-response", notApplicable, ""},
 		{"awslambda.EnvelopeHandler", "envelope", "request-response", notApplicable, ""},
-		// One-way bindings the fixture names no id for. They settle like the zero Settlement (redeliver
-		// a failure); they are reported here, not added to the fixture, which is the spec's to extend.
-		{"cloudevents.Handler (CloudEvents over HTTP push)", "", "", zero, ""},
-		{"gcpfunctions.RegisterCloudEvent (Eventarc/Pub/Sub CloudEvent function)", "", "", zero, "gcpfunctions"},
+		// CloudEvents: a push delivery or a CloudEvent-triggered function, which the sender retries.
+		{"cloudevents.Handler (CloudEvents over HTTP push)", "cloudevents", "one-shot", zero, ""},
+		{"gcpfunctions.RegisterCloudEvent (Eventarc/Pub/Sub CloudEvent function)", "cloudevents", "one-shot", zero, "gcpfunctions"},
 	}
 }
 
