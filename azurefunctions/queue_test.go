@@ -192,7 +192,7 @@ func TestResolveQueueRequest(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := resolveQueueRequest(tt.inv, tt.dataName)
+			req := resolveQueueRequest(tt.inv, tt.dataName, wire.DefaultTopicKey)
 			if req.Topic != tt.wantTopic {
 				t.Errorf("Topic = %q, want %q", req.Topic, tt.wantTopic)
 			}
@@ -208,5 +208,29 @@ func TestResolveQueueRequest(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestQueueHandler_HonorsBuilderReservedNames(t *testing.T) {
+	// wire-contracts.md §2: the topic key is configured once, on the builder, and every inbound
+	// binding built off it reads that key - the default "topic" is then an ordinary header.
+	builder := newTestBuilder(t)
+	builder.UseReservedNames(wire.ReservedNames{TopicKey: "x-my-topic"})
+	handler := QueueHandler(builder, "mySbMsg")
+
+	routed := `{
+		"Data": {"mySbMsg": "{\"name\":\"ServiceBus\"}"},
+		"Metadata": {"UserProperties": {"X-My-Topic": "greet", "topic": "not-the-topic"}}
+	}`
+	if rec := invokeQueue(t, handler, routed); rec.Code != http.StatusOK {
+		t.Fatalf("outer status = %d, want %d (routed by the overridden key); body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	unrouted := `{
+		"Data": {"mySbMsg": "{\"name\":\"ServiceBus\"}"},
+		"Metadata": {"UserProperties": {"topic": "greet"}}
+	}`
+	if rec := invokeQueue(t, handler, unrouted); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("outer status = %d, want %d (the default key no longer routes); body = %s", rec.Code, http.StatusInternalServerError, rec.Body.String())
 	}
 }

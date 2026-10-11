@@ -299,7 +299,7 @@ func TestResolveEventHubRequest(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := resolveEventHubRequest(tt.eventBody, tt.properties)
+			req := resolveEventHubRequest(tt.eventBody, tt.properties, wire.DefaultTopicKey)
 			if req.Topic != tt.wantTopic {
 				t.Errorf("Topic = %q, want %q", req.Topic, tt.wantTopic)
 			}
@@ -315,5 +315,33 @@ func TestResolveEventHubRequest(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestEventHubHandler_HonorsBuilderReservedNames(t *testing.T) {
+	// wire-contracts.md §2: the topic key configured on the builder is the one an event's
+	// properties are read under; the default "topic" is then an ordinary header.
+	var seen []greetRequest
+	builder := newEventHubBuilder(t, &seen)
+	builder.UseReservedNames(wire.ReservedNames{TopicKey: "x-my-topic"})
+	handler := EventHubHandler(builder, "eventHubMessages")
+
+	routed := `{
+		"Data": {"eventHubMessages": ["{\"name\":\"Alice\"}"]},
+		"Metadata": {"PropertiesArray": [{"X-My-Topic": "greet", "topic": "not-the-topic"}]}
+	}`
+	if rec := invokeEventHub(t, handler, routed); rec.Code != http.StatusOK {
+		t.Fatalf("outer status = %d, want %d (routed by the overridden key); body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if len(seen) != 1 {
+		t.Fatalf("pipeline ran %d times, want 1", len(seen))
+	}
+
+	unrouted := `{
+		"Data": {"eventHubMessages": ["{\"name\":\"Bob\"}"]},
+		"Metadata": {"PropertiesArray": [{"topic": "greet"}]}
+	}`
+	if rec := invokeEventHub(t, handler, unrouted); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("outer status = %d, want %d (the default key no longer routes); body = %s", rec.Code, http.StatusInternalServerError, rec.Body.String())
 	}
 }

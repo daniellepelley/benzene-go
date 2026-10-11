@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strings"
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/wire"
@@ -35,8 +34,9 @@ type queueSuccessResponse struct {
 //
 // Topic resolution follows wire-contracts.md §2, the same order as awssqs/awssns:
 //
-//  1. a "topic" entry in Metadata.UserProperties (Service Bus application properties - the
-//     native-attribute transport; the remaining properties become headers), else
+//  1. the reserved topic entry in Metadata.UserProperties (Service Bus application properties -
+//     the native-attribute transport), named by builder.ReservedNames (default "topic") and
+//     matched case-insensitively; the remaining string properties become headers, else
 //  2. the message body parsed as a full wire.Request envelope (the only option on Azure
 //     Storage Queues, which have no per-message attributes), else
 //  3. the request carries an empty topic, which RouterMiddleware maps to ValidationError -
@@ -71,7 +71,7 @@ func QueueHandler(builder *benzene.ApplicationBuilder, dataName string, opts ...
 			return
 		}
 
-		if outcome := settlement.Dispatch(r.Context(), builder.Pipeline, builder.Container, resolveQueueRequest(inv, dataName)); !outcome.Acknowledge {
+		if outcome := settlement.Dispatch(r.Context(), builder.Pipeline, builder.Container, resolveQueueRequest(inv, dataName, builder.ReservedNames.Topic())); !outcome.Acknowledge {
 			failInvocation(w, outcome.Response)
 			return
 		}
@@ -91,10 +91,10 @@ func QueueHandler(builder *benzene.ApplicationBuilder, dataName string, opts ...
 }
 
 // resolveQueueRequest resolves the message's topic/headers/body per the order documented on
-// QueueHandler. The message text is Data[dataName]: the host serializes the trigger input as
-// JSON, so a text message arrives as a JSON string (unquoted here) and a JSON message may
-// arrive as an object (kept verbatim as the body).
-func resolveQueueRequest(inv queueInvocationRequest, dataName string) wire.Request {
+// QueueHandler, reading the topic under topicKey. The message text is Data[dataName]: the host
+// serializes the trigger input as JSON, so a text message arrives as a JSON string (unquoted here)
+// and a JSON message may arrive as an object (kept verbatim as the body).
+func resolveQueueRequest(inv queueInvocationRequest, dataName, topicKey string) wire.Request {
 	var messageBody string
 	if raw, ok := inv.Data[dataName]; ok {
 		if err := json.Unmarshal(raw, &messageBody); err != nil {
@@ -102,27 +102,13 @@ func resolveQueueRequest(inv queueInvocationRequest, dataName string) wire.Reque
 		}
 	}
 
-	headers := map[string]string{}
-	var topic string
+	var properties map[string]json.RawMessage
 	if raw, ok := inv.Metadata["UserProperties"]; ok {
-		// Application properties are typed (string/number/bool); only string values map onto
-		// the flat wire header contract, so non-string values are skipped rather than failing
-		// the whole property map.
-		var properties map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &properties); err == nil {
-			for name, rawValue := range properties {
-				var value string
-				if err := json.Unmarshal(rawValue, &value); err != nil {
-					continue
-				}
-				if strings.EqualFold(name, "topic") {
-					topic = value
-					continue
-				}
-				headers[name] = value
-			}
-		}
+		// A malformed UserProperties is treated as none: the message falls through to its
+		// envelope-in-body/empty-topic resolution rather than failing outright.
+		_ = json.Unmarshal(raw, &properties)
 	}
+	topic, headers := wire.ResolveMetadataTopic(stringProperties(properties), topicKey)
 
 	if topic != "" {
 		return wire.Request{Topic: topic, Headers: headers, Body: messageBody}
@@ -137,4 +123,19 @@ func resolveQueueRequest(inv queueInvocationRequest, dataName string) wire.Reque
 	}
 
 	return wire.Request{Topic: "", Headers: headers, Body: messageBody}
+}
+
+// stringProperties keeps the string-valued entries of a host-forwarded application-property map.
+// Application properties are typed (string/number/bool); only string values map onto the flat wire
+// header contract, so non-string values are skipped rather than failing the message.
+func stringProperties(properties map[string]json.RawMessage) map[string]string {
+	metadata := make(map[string]string, len(properties))
+	for name, rawValue := range properties {
+		var value string
+		if err := json.Unmarshal(rawValue, &value); err != nil {
+			continue
+		}
+		metadata[name] = value
+	}
+	return metadata
 }

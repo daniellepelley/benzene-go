@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strings"
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/wire"
@@ -46,8 +45,9 @@ type eventHubInvocationRequest struct {
 // invocation (its own DI scope), resolving topic/headers/body per
 // event with the exact same precedence QueueHandler uses for a Service Bus message:
 //
-//  1. a "topic" entry in that event's properties (PropertiesArray[i]) - the remaining string-valued
-//     properties become headers, else
+//  1. the reserved topic entry in that event's properties (PropertiesArray[i]), named by
+//     builder.ReservedNames (default "topic") and matched case-insensitively - the remaining
+//     string-valued properties become headers, else
 //  2. the event body parsed as a full wire.Request envelope, else
 //  3. the event carries an empty topic, which RouterMiddleware maps to ValidationError - failed,
 //     never silently dropped.
@@ -93,7 +93,7 @@ func EventHubHandler(builder *benzene.ApplicationBuilder, dataName string, opts 
 			return
 		}
 
-		for _, req := range resolveEventHubBatch(inv, dataName) {
+		for _, req := range resolveEventHubBatch(inv, dataName, builder.ReservedNames.Topic()) {
 			if outcome := settlement.Dispatch(r.Context(), builder.Pipeline, builder.Container, req); !outcome.Acknowledge {
 				failInvocation(w, outcome.Response)
 				return
@@ -119,7 +119,7 @@ func EventHubHandler(builder *benzene.ApplicationBuilder, dataName string, opts 
 // QueueHandler/CosmosHandler/TimerHandler handle); either way it is unwrapped to the raw array
 // first. An absent binding name, or a present-but-null value, yields an empty batch (a no-op that
 // checkpoints) rather than a failure - the host does not fire this trigger without events anyway.
-func resolveEventHubBatch(inv eventHubInvocationRequest, dataName string) []wire.Request {
+func resolveEventHubBatch(inv eventHubInvocationRequest, dataName, topicKey string) []wire.Request {
 	raw, ok := inv.Data[dataName]
 	if !ok {
 		return nil
@@ -141,7 +141,7 @@ func resolveEventHubBatch(inv eventHubInvocationRequest, dataName string) []wire
 	properties := resolveEventHubProperties(inv, len(bodies))
 	requests := make([]wire.Request, len(bodies))
 	for i, eventBody := range bodies {
-		requests[i] = resolveEventHubRequest(eventBody, properties[i])
+		requests[i] = resolveEventHubRequest(eventBody, properties[i], topicKey)
 	}
 	return requests
 }
@@ -166,30 +166,17 @@ func resolveEventHubProperties(inv eventHubInvocationRequest, n int) []map[strin
 }
 
 // resolveEventHubRequest resolves one event's topic/headers/body per the precedence documented on
-// EventHubHandler. The event body is read the same way QueueHandler reads a message: the host
-// serializes each array element as JSON, so a text event arrives as a JSON string (unquoted here)
-// and a JSON event may arrive as an object (kept verbatim as the body).
-func resolveEventHubRequest(eventBody json.RawMessage, properties map[string]json.RawMessage) wire.Request {
+// EventHubHandler, reading the topic under topicKey. The event body is read the same way
+// QueueHandler reads a message: the host serializes each array element as JSON, so a text event
+// arrives as a JSON string (unquoted here) and a JSON event may arrive as an object (kept verbatim as
+// the body). Non-string property values are skipped (stringProperties).
+func resolveEventHubRequest(eventBody json.RawMessage, properties map[string]json.RawMessage, topicKey string) wire.Request {
 	var messageBody string
 	if err := json.Unmarshal(eventBody, &messageBody); err != nil {
 		messageBody = string(eventBody)
 	}
 
-	headers := map[string]string{}
-	var topic string
-	// Application properties are typed (string/number/bool); only string values map onto the
-	// flat wire header contract, so non-string values are skipped rather than failing the event.
-	for name, rawValue := range properties {
-		var value string
-		if err := json.Unmarshal(rawValue, &value); err != nil {
-			continue
-		}
-		if strings.EqualFold(name, "topic") {
-			topic = value
-			continue
-		}
-		headers[name] = value
-	}
+	topic, headers := wire.ResolveMetadataTopic(stringProperties(properties), topicKey)
 
 	if topic != "" {
 		return wire.Request{Topic: topic, Headers: headers, Body: messageBody}
