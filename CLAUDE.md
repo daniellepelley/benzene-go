@@ -9,10 +9,10 @@ its own repo: an idiomatic `module` path, independent versioning/tagging, and a 
 surface that doesn't require a .NET toolchain.
 
 The main repo's `docs/specification/` is the source of truth for cross-language behavior -
-`design-principles.md` (the "opinionated but optional" strategy and the `/benzene/`-prefixed
-default service standard, which `httpbinding.EnvelopePath`/`HealthPath` and `meshd.ViewPath`
-implement here), `core-concepts.md`, `wire-contracts.md`, `transport-bindings.md`,
-`porting-guide.md`. When this
+`transport-bindings.md` §1 (the `/benzene/`-prefixed default paths, which
+`httpbinding.EnvelopePath`/`HealthPath` and `meshd.ViewPath` implement here; the strategy behind
+them is `docs/guides/design-principles.md`), `core-concepts.md`, `wire-contracts.md`, `transport-bindings.md`,
+`docs/guides/porting-guide.md`. When this
 port and the spec disagree, the spec wins; fix the Go code, not the spec, unless the
 disagreement reveals a genuine spec bug (rare - raise it explicitly if so).
 
@@ -36,7 +36,7 @@ alongside the shared spec.
 - Root package (`benzene`) - Topic, Status, Result[T], Registry, Middleware/Pipeline, the
   DI-lite Container/Scope, the three-phase App lifecycle. No sub-package may import this in a
   cycle; everything else imports it. Each capability here carries both rungs of
-  design-principles.md §4.1's ladder, and the shorthand is always literally composed from the
+  core-concepts.md §11's shorthand rule, and the shorthand is always literally composed from the
   explicit form - keep it that way when adding to it: `Register` returns the error /
   `MustRegister` panics with it (`mesh.RegisterOutbound`/`MustRegisterOutbound` mirror the pair);
   `UsePipeline` takes any pipeline / `UseDefaultPipeline` is one line of `UsePipeline(NewPipeline(

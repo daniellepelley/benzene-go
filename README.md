@@ -337,7 +337,7 @@ extracted from it, the vendored `mesh-*.json` fixtures in `conformance/` pin it 
 the two implementations have hosted each other's services in live cross-language fleets.
 
 Both implementations also follow the spec's default service standard (the main repo's
-`docs/specification/design-principles.md`): framework-provided HTTP surfaces mount under a
+`docs/guides/design-principles.md`, normative paths in `docs/specification/transport-bindings.md` §1): framework-provided HTTP surfaces mount under a
 well-known `/benzene/` prefix - here `httpbinding.EnvelopePath` (`/benzene/invoke`),
 `httpbinding.HealthPath` (`/benzene/health`), and `meshd.ViewPath` (`/benzene/fleet-ui`) - so
 they read as infrastructure rather than domain endpoints, with every path overridable per
