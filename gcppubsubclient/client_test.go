@@ -85,6 +85,13 @@ func TestSend(t *testing.T) {
 			wantStatus:    benzene.StatusServiceUnavailable,
 			wantErrSubstr: "gcppubsubclient: publish failed: boom",
 		},
+		{
+			name:       "deadline exceeded maps to timeout",
+			topic:      "t",
+			message:    []byte("b"),
+			publishErr: context.DeadlineExceeded,
+			wantStatus: benzene.StatusTimeout,
+		},
 	}
 
 	for _, tc := range tests {

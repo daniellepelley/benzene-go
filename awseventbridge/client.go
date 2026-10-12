@@ -60,7 +60,7 @@ func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[stri
 
 	output, err := c.API.PutEvents(ctx, &eventbridge.PutEventsInput{Entries: []types.PutEventsRequestEntry{entry}})
 	if err != nil {
-		return benzene.ServiceUnavailable[json.RawMessage]("awseventbridge: put failed: " + err.Error())
+		return client.CallFailure(ctx, err, "awseventbridge: put failed: "+err.Error())
 	}
 	if output.FailedEntryCount > 0 {
 		detail := "entry rejected"

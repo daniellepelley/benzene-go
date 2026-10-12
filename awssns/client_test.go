@@ -110,6 +110,22 @@ func TestClient_TransportFailureIsServiceUnavailable(t *testing.T) {
 	}
 }
 
+// A send that fails because the caller's deadline elapsed is timeout, not service-unavailable
+// (transport-bindings.md §1, outbound clients).
+func TestClient_DeadlineExceededIsTimeout(t *testing.T) {
+	api := &fakePublishAPI{err: context.DeadlineExceeded}
+	c := NewClient(api, "arn:aws:sns:us-east-1:123456789012:example")
+
+	result := c.Send(context.Background(), benzene.NewTopic("greet"), nil, []byte("{}"))
+
+	if result.Status != benzene.StatusTimeout {
+		t.Errorf("Status = %q, want %q", result.Status, benzene.StatusTimeout)
+	}
+	if len(result.Errors) == 0 {
+		t.Error("Timeout result should carry an error message")
+	}
+}
+
 func TestClient_MessageGroupIDIsSetWhenConfigured(t *testing.T) {
 	api := &fakePublishAPI{}
 	c := NewClient(api, "arn:aws:sns:us-east-1:123456789012:example.fifo")

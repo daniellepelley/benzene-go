@@ -120,6 +120,21 @@ func TestClient_TransportErrorIsServiceUnavailable(t *testing.T) {
 	}
 }
 
+// A send that fails because the caller's deadline elapsed is timeout, not service-unavailable
+// (transport-bindings.md §1, outbound clients).
+func TestClient_DeadlineExceededIsTimeout(t *testing.T) {
+	api := &fakePublishAPI{err: context.DeadlineExceeded}
+	client := NewClient(api, "s")
+
+	result := client.Send(context.Background(), benzene.NewTopic("greet"), nil, []byte(`{}`))
+	if result.Status != benzene.StatusTimeout {
+		t.Errorf("Status = %q, want %q", result.Status, benzene.StatusTimeout)
+	}
+	if len(result.Errors) == 0 {
+		t.Error("Errors should carry the transport failure detail")
+	}
+}
+
 func TestClient_EmptySourceIsServiceUnavailable(t *testing.T) {
 	// Event Grid requires a non-empty CloudEvent source; NewCloudEvent rejects an empty one, so
 	// a misconfigured client fails to service-unavailable rather than publishing (or panicking).

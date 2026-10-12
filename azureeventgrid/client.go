@@ -89,7 +89,7 @@ func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[stri
 	}
 
 	if _, err := c.API.PublishCloudEvents(ctx, []messaging.CloudEvent{event}, nil); err != nil {
-		return benzene.ServiceUnavailable[json.RawMessage]("azureeventgrid: publish failed: " + err.Error())
+		return client.CallFailure(ctx, err, "azureeventgrid: publish failed: "+err.Error())
 	}
 	return benzene.Result[json.RawMessage]{Status: benzene.StatusAccepted}
 }

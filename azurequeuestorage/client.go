@@ -66,7 +66,7 @@ func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[stri
 	}
 
 	if _, err := c.API.EnqueueMessage(ctx, string(envelope), nil); err != nil {
-		return benzene.ServiceUnavailable[json.RawMessage]("azurequeuestorage: enqueue failed: " + err.Error())
+		return client.CallFailure(ctx, err, "azurequeuestorage: enqueue failed: "+err.Error())
 	}
 	return benzene.Result[json.RawMessage]{Status: benzene.StatusAccepted}
 }

@@ -90,7 +90,7 @@ func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[stri
 
 	// immediate is always false: it was removed from the AMQP 0-9-1 spec and RabbitMQ rejects it.
 	if err := c.Publisher.PublishWithContext(ctx, c.Exchange, topic.String(), c.Mandatory, false, msg); err != nil {
-		return benzene.ServiceUnavailable[json.RawMessage]("rabbitmq: publish failed: " + err.Error())
+		return client.CallFailure(ctx, err, "rabbitmq: publish failed: "+err.Error())
 	}
 	return benzene.Result[json.RawMessage]{Status: benzene.StatusAccepted}
 }

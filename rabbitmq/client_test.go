@@ -142,3 +142,19 @@ func TestClient_PublishFailureIsServiceUnavailable(t *testing.T) {
 		t.Error("Errors should carry the transport failure detail")
 	}
 }
+
+// A send that fails because the caller's deadline elapsed is timeout, not service-unavailable
+// (transport-bindings.md §1, outbound clients).
+func TestClient_DeadlineExceededIsTimeout(t *testing.T) {
+	pub := &fakePublisher{err: context.DeadlineExceeded}
+	client := NewClient(pub, "orders")
+
+	result := client.Send(context.Background(), benzene.NewTopic("greet"), nil, []byte(`{}`))
+
+	if result.Status != benzene.StatusTimeout {
+		t.Errorf("Status = %q, want %q", result.Status, benzene.StatusTimeout)
+	}
+	if len(result.Errors) == 0 {
+		t.Error("Errors should carry the transport failure detail")
+	}
+}

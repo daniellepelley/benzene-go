@@ -79,7 +79,7 @@ func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[stri
 		ApplicationProperties: properties,
 	}
 	if err := c.API.SendMessage(ctx, msg, nil); err != nil {
-		return benzene.ServiceUnavailable[json.RawMessage]("azureservicebus: send failed: " + err.Error())
+		return client.CallFailure(ctx, err, "azureservicebus: send failed: "+err.Error())
 	}
 	return benzene.Result[json.RawMessage]{Status: benzene.StatusAccepted}
 }

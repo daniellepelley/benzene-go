@@ -55,7 +55,7 @@ func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[stri
 	}
 
 	if err := c.Writer.WriteMessages(ctx, msg); err != nil {
-		return benzene.ServiceUnavailable[json.RawMessage]("kafka: write failed: " + err.Error())
+		return client.CallFailure(ctx, err, "kafka: write failed: "+err.Error())
 	}
 	return benzene.Result[json.RawMessage]{Status: benzene.StatusAccepted}
 }

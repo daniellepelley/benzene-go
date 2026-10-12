@@ -72,7 +72,7 @@ func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[stri
 	}
 
 	if _, err := c.API.SendMessage(ctx, input); err != nil {
-		return benzene.ServiceUnavailable[json.RawMessage]("awssqs: send failed: " + err.Error())
+		return client.CallFailure(ctx, err, "awssqs: send failed: "+err.Error())
 	}
 	return benzene.Result[json.RawMessage]{Status: benzene.StatusAccepted}
 }

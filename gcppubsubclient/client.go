@@ -85,7 +85,7 @@ func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[stri
 	attributes[c.ReservedNames.Topic()] = topic.String()
 
 	if _, err := c.Publisher.Publish(ctx, c.TopicID, message, attributes); err != nil {
-		return benzene.ServiceUnavailable[json.RawMessage]("gcppubsubclient: publish failed: " + err.Error())
+		return client.CallFailure(ctx, err, "gcppubsubclient: publish failed: "+err.Error())
 	}
 	return benzene.Result[json.RawMessage]{Status: benzene.StatusAccepted}
 }

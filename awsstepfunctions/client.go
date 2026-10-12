@@ -81,7 +81,7 @@ func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[stri
 		if errors.As(err, &already) {
 			return benzene.Result[json.RawMessage]{Status: benzene.StatusAccepted}
 		}
-		return benzene.ServiceUnavailable[json.RawMessage]("awsstepfunctions: start execution failed: " + err.Error())
+		return client.CallFailure(ctx, err, "awsstepfunctions: start execution failed: "+err.Error())
 	}
 	return benzene.Result[json.RawMessage]{Status: benzene.StatusAccepted}
 }

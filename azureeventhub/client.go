@@ -69,7 +69,7 @@ func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[stri
 	}
 
 	if err := c.Producer.SendEvent(ctx, message, properties, partitionKey); err != nil {
-		return benzene.ServiceUnavailable[json.RawMessage]("azureeventhub: send failed: " + err.Error())
+		return client.CallFailure(ctx, err, "azureeventhub: send failed: "+err.Error())
 	}
 	return benzene.Result[json.RawMessage]{Status: benzene.StatusAccepted}
 }
