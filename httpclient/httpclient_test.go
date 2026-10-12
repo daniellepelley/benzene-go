@@ -384,3 +384,82 @@ func (r *stringReader) Read(p []byte) (int, error) {
 	r.i += n
 	return n, nil
 }
+
+// wire-contracts.md §4.1: a client that reads a problem document takes the result's status from its
+// benzeneStatus, so an application-defined status survives the hop; the reverse HTTP table applies
+// to every other failure.
+func TestSend_ProblemDocumentStatusComesFromBenzeneStatus(t *testing.T) {
+	tests := []struct {
+		name       string
+		code       int
+		body       string
+		want       benzene.Status
+		wantErrors []benzene.Error
+	}{
+		{
+			name:       "an application-defined status survives",
+			code:       500,
+			body:       `{"type":"https://example.com/problems/insufficient-funds","status":500,"benzeneStatus":"insufficient-funds","detail":"balance too low","errors":[{"message":"balance too low","field":"/amount","code":"funds"}]}`,
+			want:       "insufficient-funds",
+			wantErrors: []benzene.Error{{Message: "balance too low", Field: "/amount", Code: "funds"}},
+		},
+		{
+			name:       "a framework status the HTTP code collapses is recovered",
+			code:       400,
+			body:       `{"status":400,"benzeneStatus":"validation-error","detail":"name is required"}`,
+			want:       benzene.StatusValidationError,
+			wantErrors: []benzene.Error{{Message: "name is required"}},
+		},
+		{
+			name:       "a problem with nothing but a status still carries it",
+			code:       503,
+			body:       `{"benzeneStatus":"rate-limited"}`,
+			want:       "rate-limited",
+			wantErrors: []benzene.Error{{Message: "outbound request returned HTTP 503 with no response envelope"}},
+		},
+		{
+			name:       "a success benzeneStatus contradicts the failure and is not taken",
+			code:       500,
+			body:       `{"benzeneStatus":"ok","detail":"confused peer"}`,
+			want:       benzene.StatusUnexpectedError,
+			wantErrors: []benzene.Error{{Message: "confused peer"}},
+		},
+		{
+			name:       "no benzeneStatus falls back to the reverse table",
+			code:       404,
+			body:       `{"type":"about:blank","status":404,"detail":"no such order"}`,
+			want:       benzene.StatusNotFound,
+			wantErrors: []benzene.Error{{Message: "no such order"}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := stubResponse(tt.code, tt.body).Send(context.Background(), benzene.NewTopic("greet"), nil, nil)
+			if result.Status != tt.want {
+				t.Errorf("Status = %q, want %q", result.Status, tt.want)
+			}
+			if result.IsSuccessful() {
+				t.Error("IsSuccessful() = true, want a failure")
+			}
+			if !reflect.DeepEqual(result.Errors, tt.wantErrors) {
+				t.Errorf("Errors = %+v, want %+v", result.Errors, tt.wantErrors)
+			}
+		})
+	}
+
+	// The real thing: a route-mapped httpbinding answering an application-defined failure.
+	registry := benzene.NewRegistry()
+	handler := benzene.Handler[greetRequest, greetResponse](func(_ context.Context, _ greetRequest) benzene.Result[greetResponse] {
+		return benzene.Fail[greetResponse]("insufficient-funds", "balance too low")
+	})
+	if err := benzene.Register(registry, benzene.NewTopic("pay"), handler); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	builder := &benzene.ApplicationBuilder{Registry: registry, Container: benzene.NewContainer(), Pipeline: benzene.NewPipeline(benzene.RouterMiddleware(registry))}
+	server := httptest.NewServer(httpbinding.Handler(builder, []httpbinding.Route{{Method: http.MethodPost, Path: "/pay", Topic: benzene.NewTopic("pay")}}))
+	defer server.Close()
+	result := NewClient(server.URL+"/pay").Send(context.Background(), benzene.NewTopic("pay"), nil, []byte(`{}`))
+	if result.Status != "insufficient-funds" || result.IsSuccessful() {
+		t.Errorf("Send() to a route = %+v, want the application-defined insufficient-funds failure", result)
+	}
+}

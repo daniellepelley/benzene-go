@@ -105,10 +105,18 @@ func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[stri
 // with field and code intact (core-concepts.md §12, error fidelity), errors when present, else
 // detail as one opaque message. Only a body that yields no error at all (a gateway's HTML page, an
 // empty body, a JSON object with neither errors nor detail) falls back to a message naming the code.
+//
+// The status of such a failure is the problem's benzeneStatus when it carries one (§4.1: a client
+// that reads a problem document SHOULD take the status from it, so an application-defined status
+// survives the hop), and the reverse table's status otherwise. A benzeneStatus that is a success
+// status contradicts the failure the HTTP code reports, and is not taken.
 func fromHTTPStatus(code int, body []byte) benzene.Result[json.RawMessage] {
 	status := httpstatus.FromHTTP(code)
 	if status.IsFailure() {
 		if problem, err := wire.UnmarshalErrorPayload(body); err == nil {
+			if carried := benzene.Status(problem.BenzeneStatus); carried != "" && !carried.IsSuccess() {
+				status = carried
+			}
 			if problems := problem.Problems(); len(problems) > 0 {
 				return benzene.FailWith[json.RawMessage](status, problems...)
 			}
