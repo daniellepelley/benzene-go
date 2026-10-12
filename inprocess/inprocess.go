@@ -43,6 +43,7 @@ import (
 	"sync"
 
 	benzene "github.com/daniellepelley/benzene-go"
+	"github.com/daniellepelley/benzene-go/client"
 )
 
 // PipelineSet accumulates one named in-process pipeline per module - the Go counterpart of
@@ -184,12 +185,21 @@ func (s *FanOutSender) Send(ctx context.Context, topic benzene.Topic, headers ma
 // FanOutSender.Send. Mirrors benzenetest.Invoke's scope/InvocationContext/Pipeline.Run
 // sequence, generalized to the type-erased client.Sender contract (benzenetest.Invoke is
 // typed, TReq/TRes generic, and test-only).
+//
+// A call whose context is already done is not dispatched - the in-process counterpart of a real
+// transport refusing a send past its deadline - and a pipeline that fails with a Go error yields a
+// Result, not that error: both through client.CallFailure (transport-bindings.md §1), so Timeout
+// when the caller's deadline elapsed and ServiceUnavailable otherwise.
 func dispatch(ctx context.Context, builder *benzene.ApplicationBuilder, topic benzene.Topic, headers map[string]string, message []byte) benzene.Result[json.RawMessage] {
+	if err := ctx.Err(); err != nil {
+		return client.CallFailure(ctx, err, "inprocess: not dispatched: "+err.Error())
+	}
+
 	scope := builder.Container.NewScope()
 	ic := benzene.NewInvocationContext(topic, headers, message, scope)
 
 	if err := builder.Pipeline.Run(ctx, ic); err != nil {
-		return benzene.ServiceUnavailable[json.RawMessage](err.Error())
+		return client.CallFailure(ctx, err, err.Error())
 	}
 	if ic.Result == nil {
 		return benzene.UnexpectedError[json.RawMessage]("pipeline completed without producing a result")

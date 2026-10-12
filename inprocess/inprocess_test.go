@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	benzene "github.com/daniellepelley/benzene-go"
 )
@@ -246,4 +247,72 @@ func TestSender_PipelineErrorIsServiceUnavailable(t *testing.T) {
 	if result.Status != benzene.StatusServiceUnavailable {
 		t.Errorf("Status = %q, want %q", result.Status, benzene.StatusServiceUnavailable)
 	}
+}
+
+// transport-bindings.md §1: a call that fails before any reply yields a Result - timeout when the
+// caller's deadline elapsed, service-unavailable otherwise. In process, "before any reply" is a
+// context already done when Send is called (nothing is dispatched) or a pipeline that fails with a
+// Go error instead of producing a result.
+func TestSender_FailureBeforeAnyReply(t *testing.T) {
+	newSender := func(t *testing.T, builder *benzene.ApplicationBuilder) *Sender {
+		t.Helper()
+		set := NewPipelineSet()
+		if err := set.Add("target", builder); err != nil {
+			t.Fatalf("Add() error = %v", err)
+		}
+		sender, err := NewSender(set, "target")
+		if err != nil {
+			t.Fatalf("NewSender() error = %v", err)
+		}
+		return sender
+	}
+
+	expired, cancelExpired := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancelExpired()
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	for _, tt := range []struct {
+		name string
+		ctx  context.Context
+		want benzene.Status
+	}{
+		{"a deadline already passed is a timeout", expired, benzene.StatusTimeout},
+		{"a cancelled call is service-unavailable", cancelled, benzene.StatusServiceUnavailable},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dispatched := false
+			sender := newSender(t, newBuilder(t, "target:echo", func(ctx context.Context, req echoRequest) benzene.Result[echoResponse] {
+				dispatched = true
+				return echoHandler(ctx, req)
+			}))
+
+			result := sender.Send(tt.ctx, benzene.NewTopic("target:echo"), nil, mustMarshal(t, echoRequest{Message: "hi"}))
+
+			if result.Status != tt.want {
+				t.Errorf("Status = %q, want %q", result.Status, tt.want)
+			}
+			if dispatched {
+				t.Error("the handler ran, want a call whose context is done not to be dispatched")
+			}
+		})
+	}
+
+	t.Run("a pipeline that fails past the deadline is a timeout", func(t *testing.T) {
+		sender := newSender(t, &benzene.ApplicationBuilder{
+			Container: benzene.NewContainer(),
+			Pipeline: benzene.NewPipeline(func(ctx context.Context, _ *benzene.InvocationContext, _ func(context.Context) error) error {
+				<-ctx.Done()
+				return ctx.Err()
+			}),
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+
+		result := sender.Send(ctx, benzene.NewTopic("anything"), nil, nil)
+
+		if result.Status != benzene.StatusTimeout {
+			t.Errorf("Status = %q, want %q", result.Status, benzene.StatusTimeout)
+		}
+	})
 }

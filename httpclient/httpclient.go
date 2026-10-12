@@ -62,9 +62,10 @@ func (c *Client) httpClient() *http.Client {
 // a message naming the code otherwise, and a success code that status with the body as the payload
 // when it is JSON.
 //
-// A transport-level failure (a network error, an unreadable response) maps to ServiceUnavailable,
-// per transport-bindings §1.7's failure rule: the caller always gets a Result back, never a Go
-// error. Use Unmarshal to convert the raw payload into an application type.
+// A call that fails before a reply is read (no connection, a refused or reset request, an
+// unreadable response) is a Result too, never a Go error (transport-bindings.md §1, via
+// client.CallFailure): Timeout when the deadline elapsed - ctx's own, or HTTPClient.Timeout - and
+// ServiceUnavailable otherwise. Use Unmarshal to convert the raw payload into an application type.
 func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[string]string, message []byte) benzene.Result[json.RawMessage] {
 	reqBody, err := wire.MarshalRequest(wire.Request{Topic: topic.String(), Headers: headers, Body: string(message)})
 	if err != nil {
@@ -81,13 +82,13 @@ func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[stri
 
 	httpResp, err := c.httpClient().Do(httpReq)
 	if err != nil {
-		return benzene.ServiceUnavailable[json.RawMessage]("outbound request failed: " + err.Error())
+		return client.CallFailure(ctx, err, "outbound request failed: "+err.Error())
 	}
 	defer httpResp.Body.Close()
 
 	respBody, err := io.ReadAll(httpResp.Body)
 	if err != nil {
-		return benzene.ServiceUnavailable[json.RawMessage]("failed to read outbound response: " + err.Error())
+		return client.CallFailure(ctx, err, "failed to read outbound response: "+err.Error())
 	}
 
 	if resp, err := wire.UnmarshalResponse(respBody); err == nil && resp.StatusCode != "" {

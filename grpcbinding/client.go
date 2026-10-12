@@ -62,6 +62,12 @@ func NewClient(conn grpc.ClientConnInterface, routes []ClientRoute) *Client {
 // to marshal into the route's proto type, or a response that fails to marshal back to JSON,
 // maps to ServiceUnavailable - "client-side send failures" per the status vocabulary's own
 // description, matching every other Sender in this repo's transport-failure default.
+//
+// A call that fails before any reply is a Result, never a Go error (transport-bindings.md §1): a
+// dead peer (no connection, refused, reset) arrives from grpc-go as Unavailable and the caller's
+// own deadline as DeadlineExceeded, which the reverse table reads as service-unavailable and
+// timeout; an error that is not a gRPC status at all goes through client.CallFailure to the same
+// two statuses.
 func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[string]string, message []byte) benzene.Result[json.RawMessage] {
 	route, ok := c.routes[topic.String()]
 	if !ok {
@@ -82,7 +88,12 @@ func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[stri
 	resp := route.NewResponse()
 	err := c.Conn.Invoke(outCtx, route.Method, req, resp, grpc.Trailer(&trailer))
 
-	grpcResult := grpcstatuspkg.Convert(err) // never nil: err == nil -> Code() == codes.OK
+	grpcResult, ok := grpcstatuspkg.FromError(err) // err == nil -> Code() == codes.OK
+	if !ok {
+		// Not a gRPC status: the conn failed before any reply (a custom ClientConnInterface, an
+		// interceptor), which grpc-go's own conn reports as Unavailable/DeadlineExceeded itself.
+		return client.CallFailure(ctx, err, "grpcbinding: call failed: "+err.Error())
+	}
 	benzeneStatus := recoverStatus(int(grpcResult.Code()), trailer)
 
 	if grpcResult.Code() != codes.OK {

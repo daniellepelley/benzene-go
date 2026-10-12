@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
+	"time"
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"github.com/daniellepelley/benzene-go/httpbinding"
@@ -462,4 +463,63 @@ func TestSend_ProblemDocumentStatusComesFromBenzeneStatus(t *testing.T) {
 	if result.Status != "insufficient-funds" || result.IsSuccessful() {
 		t.Errorf("Send() to a route = %+v, want the application-defined insufficient-funds failure", result)
 	}
+}
+
+// transport-bindings.md §1: a call that fails before any reply yields a Result - timeout when the
+// deadline elapsed, service-unavailable otherwise - never a Go error.
+func TestSend_FailureBeforeAnyReply(t *testing.T) {
+	t.Run("a dead peer is service-unavailable", func(t *testing.T) {
+		server := httptest.NewServer(http.NotFoundHandler())
+		endpoint := server.URL
+		server.Close() // nothing listens there any more: the connection is refused
+
+		result := NewClient(endpoint).Send(context.Background(), benzene.NewTopic("greet"), nil, nil)
+
+		if result.Status != benzene.StatusServiceUnavailable || len(result.Errors) == 0 {
+			t.Errorf("Send() = %+v, want service-unavailable with the failure as its error", result)
+		}
+	})
+
+	slow := func(t *testing.T) *httptest.Server {
+		t.Helper()
+		release := make(chan struct{})
+		server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
+		t.Cleanup(func() { close(release); server.Close() })
+		return server
+	}
+
+	t.Run("the caller's context deadline is a timeout", func(t *testing.T) {
+		server := slow(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+
+		result := NewClient(server.URL).Send(ctx, benzene.NewTopic("greet"), nil, nil)
+
+		if result.Status != benzene.StatusTimeout {
+			t.Errorf("Status = %q, want %q", result.Status, benzene.StatusTimeout)
+		}
+	})
+
+	t.Run("the HTTP client's own timeout is a timeout", func(t *testing.T) {
+		server := slow(t)
+		c := &Client{Endpoint: server.URL, HTTPClient: &http.Client{Timeout: 50 * time.Millisecond}}
+
+		result := c.Send(context.Background(), benzene.NewTopic("greet"), nil, nil)
+
+		if result.Status != benzene.StatusTimeout {
+			t.Errorf("Status = %q, want %q", result.Status, benzene.StatusTimeout)
+		}
+	})
+
+	t.Run("a cancelled call is service-unavailable", func(t *testing.T) {
+		server := slow(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		result := NewClient(server.URL).Send(ctx, benzene.NewTopic("greet"), nil, nil)
+
+		if result.Status != benzene.StatusServiceUnavailable {
+			t.Errorf("Status = %q, want %q", result.Status, benzene.StatusServiceUnavailable)
+		}
+	})
 }

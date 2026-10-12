@@ -211,8 +211,9 @@ result := sender.Send(ctx, benzene.NewTopic("greet"), nil, []byte(`{"name":"Worl
 // result.Status is recovered from the benzene-status trailer verbatim when present, else from the
 // coarse gRPC code via grpcstatus.FromGRPC; result.Errors from the google.rpc.BadRequest field
 // violations in the grpc-status-details-bin trailer when the server sent them, else the status
-// message as a single error. A missing route -> not-implemented; a marshalling or
-// transport failure -> service-unavailable.
+// message as a single error. A missing route -> not-implemented; a marshalling failure or a dead
+// peer -> service-unavailable; the call's own deadline elapsing -> timeout. A failed call is always
+// a Result, never a Go error.
 ```
 
 ## 7. Testing

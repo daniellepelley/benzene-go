@@ -3,7 +3,9 @@ package awslambdaclient
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
@@ -180,6 +182,33 @@ func TestClient_TransportFailureIsServiceUnavailable(t *testing.T) {
 	if len(result.Errors) == 0 {
 		t.Error("ServiceUnavailable result should carry an error message")
 	}
+}
+
+// TestClient_DeadlineIsTimeout pins transport-bindings.md §1: an invoke that fails before any
+// reply because the caller's deadline elapsed is a timeout result, not service-unavailable and not a
+// Go error - whether the SDK's error wraps context.DeadlineExceeded or only the context says so.
+func TestClient_DeadlineIsTimeout(t *testing.T) {
+	t.Run("the SDK error wraps the deadline", func(t *testing.T) {
+		api := &fakeInvokeAPI{err: fmt.Errorf("operation error Lambda: Invoke, %w", context.DeadlineExceeded)}
+
+		result := NewClient(api, "target-fn").Send(context.Background(), benzene.NewTopic("greet"), nil, []byte("{}"))
+
+		if result.Status != benzene.StatusTimeout {
+			t.Errorf("Status = %q, want %q", result.Status, benzene.StatusTimeout)
+		}
+	})
+
+	t.Run("the caller's context deadline has passed", func(t *testing.T) {
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer cancel()
+		api := &fakeInvokeAPI{err: errors.New("request canceled")}
+
+		result := NewClient(api, "target-fn").Send(ctx, benzene.NewTopic("greet"), nil, []byte("{}"))
+
+		if result.Status != benzene.StatusTimeout {
+			t.Errorf("Status = %q, want %q", result.Status, benzene.StatusTimeout)
+		}
+	})
 }
 
 func TestClient_UnparseablePayloadIsServiceUnavailable(t *testing.T) {

@@ -100,7 +100,9 @@ alongside the shared spec.
 - `client/` - the outbound-client seam: `Sender` (the single interface every outbound transport -
   `httpclient`, `awssqs.Client`, the in-process sender, ... - satisfies) plus the `With*` decorators
   (`WithRetry`, `WithCorrelationID`, `WithTraceContext`) and `RegisterSender`/`GetSender` for wiring one
-  onto a `Container`. An application constructs a `Sender` and uses it directly - there is no
+  onto a `Container`. `CallFailure` is the one rule every reply-receiving client uses for a call that
+  fails before any reply: `timeout` when the deadline elapsed, else `service-unavailable`
+  (transport-bindings §1). An application constructs a `Sender` and uses it directly - there is no
   container-wide outbound routing table (a deliberate port divergence; see `inprocess`).
 - `inprocess/` - an in-process `client.Sender` that dispatches an outbound send straight to a handler
   pipeline built in the same runtime (the shared `[]byte`/`json.RawMessage` envelope, no wire - not even
@@ -439,7 +441,8 @@ alongside the shared spec.
   a target function with a wire envelope payload. `RequestResponse` (default) parses the target's
   envelope response back into a `Result` (same `toResult` rules as `httpclient`); `Event`
   fire-and-forget returns `accepted` without a body; a set `FunctionError` (the target threw) becomes
-  `unexpected-error`, not a mis-parsed success; a transport failure becomes `service-unavailable`.
+  `unexpected-error`, not a mis-parsed success; a transport failure becomes `timeout` when the
+  deadline elapsed, else `service-unavailable` (`client.CallFailure`).
   Narrow `InvokeAPI` for fake-based tests.
 - `awsstepfunctions/` - **outbound Step Functions client**, in its **own Go module** (needs
   `aws-sdk-go-v2/service/sfn`), the Go form of `Benzene.Clients.Aws.StepFunctions`. `Client` satisfies

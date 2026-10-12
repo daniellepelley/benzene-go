@@ -3,12 +3,17 @@ package grpcbinding
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
 	"testing"
+	"time"
 
 	benzene "github.com/daniellepelley/benzene-go"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	grpcstatuspkg "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -351,4 +356,60 @@ func TestRecoverErrors(t *testing.T) {
 			t.Errorf("recoverErrors() = %v, want the message-only fallback", got)
 		}
 	})
+}
+
+// TestClient_Send_FailureBeforeAnyReply pins transport-bindings.md §1: a call that fails before any
+// reply yields a Result - timeout when the deadline elapsed, service-unavailable otherwise - never a
+// Go error. A real grpc-go conn reports both as status codes the reverse table already reads; a
+// ClientConnInterface that returns a plain error is mapped the same way.
+func TestClient_Send_FailureBeforeAnyReply(t *testing.T) {
+	t.Run("a dead peer is service-unavailable", func(t *testing.T) {
+		conn, err := grpc.NewClient("passthrough:///dead",
+			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+				return nil, errors.New("connection refused")
+			}),
+			grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			t.Fatalf("grpc.NewClient() error = %v", err)
+		}
+		t.Cleanup(func() { conn.Close() })
+
+		result := NewClient(conn, clientRoutes()).Send(withTimeout(t), benzene.NewTopic("greet"), nil, []byte(`{"name":"World"}`))
+
+		if result.Status != benzene.StatusServiceUnavailable || len(result.Errors) == 0 {
+			t.Errorf("Send() = %+v, want service-unavailable with the failure as its error", result)
+		}
+	})
+
+	t.Run("the caller's deadline is a timeout", func(t *testing.T) {
+		blocking := func(ctx context.Context, _ greetRequest) benzene.Result[greetResponse] {
+			<-ctx.Done()
+			return benzene.Timeout[greetResponse]()
+		}
+		conn := newTestServer(t, UnaryServerInterceptor(newBuilderFor(t, blocking), greetRoutes()))
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+
+		result := NewClient(conn, clientRoutes()).Send(ctx, benzene.NewTopic("greet"), nil, []byte(`{"name":"World"}`))
+
+		if result.Status != benzene.StatusTimeout {
+			t.Errorf("Status = %q, want %q", result.Status, benzene.StatusTimeout)
+		}
+	})
+
+	for _, tt := range []struct {
+		name string
+		err  error
+		want benzene.Status
+	}{
+		{"a plain error is service-unavailable", errors.New("connection reset by peer"), benzene.StatusServiceUnavailable},
+		{"a plain deadline error is a timeout", fmt.Errorf("dial: %w", context.DeadlineExceeded), benzene.StatusTimeout},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			result := NewClient(&fakeConn{err: tt.err}, clientRoutes()).Send(context.Background(), benzene.NewTopic("greet"), nil, []byte(`{"name":"World"}`))
+			if result.Status != tt.want {
+				t.Errorf("Status = %q, want %q", result.Status, tt.want)
+			}
+		})
+	}
 }

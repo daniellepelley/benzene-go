@@ -52,8 +52,9 @@ func NewClient(api InvokeAPI, functionName string) *Client {
 // Send invokes the target function with a wire-contracts.md envelope (topic/headers/message) as
 // its payload and maps the outcome back to a Result[json.RawMessage].
 //
-// A transport-level failure (the invoke call itself erroring) maps to ServiceUnavailable, per
-// transport-bindings §1.7's failure rule: the caller always gets a Result back, never a Go error.
+// A call that fails before any reply (the invoke call itself erroring - no connection, a refused or
+// reset request, the caller's own deadline) is a Result too, never a Go error (transport-bindings.md
+// §1, via client.CallFailure): Timeout when the deadline elapsed, ServiceUnavailable otherwise.
 // For a fire-and-forget (Event) invocation there is no response body, so a successful invoke maps
 // to StatusAccepted. For a request/response invocation, a set FunctionError means the target
 // function threw - AWS returns the error object, not the normal output, as the payload, so that is
@@ -74,7 +75,7 @@ func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[stri
 		Payload:        payload,
 	})
 	if err != nil {
-		return benzene.ServiceUnavailable[json.RawMessage]("awslambdaclient: invoke failed: " + err.Error())
+		return client.CallFailure(ctx, err, "awslambdaclient: invoke failed: "+err.Error())
 	}
 
 	// A fire-and-forget invocation returns no response payload to parse.
