@@ -58,8 +58,8 @@ go run github.com/daniellepelley/benzene-go/codegen/cmd/benzene-codegen build \
 | `-topics` | comma-separated topic include-list (`contract-document.md` §5.2) |
 
 The CLI exits non-zero — with a message on stderr naming the problem — on an unknown flag, an
-unparseable document, a `schemaDialect` other than `openapi-3.0` (`contract-document.md` §1: a
-consumer rejects a dialect it does not know), or an include-listed topic the document doesn't have (the error names both the
+unparseable document, a `schemaDialect` other than `openapi-3.0` or none at all (`contract-document.md`
+§1: a consumer rejects a dialect it does not know, and a missing one is unknown), or an include-listed topic the document doesn't have (the error names both the
 unknown topic(s) and the document's actual topics, per §5.2's fail-loud rule).
 
 ## Two output shapes
