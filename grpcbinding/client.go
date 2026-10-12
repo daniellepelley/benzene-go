@@ -103,8 +103,10 @@ func (c *Client) Send(ctx context.Context, topic benzene.Topic, headers map[stri
 
 // recoverErrors rebuilds the failed result's structured errors from the gRPC error model
 // (wire-contracts.md §4.2): one benzene.Error per google.rpc.BadRequest FieldViolation carried in
-// the "grpc-status-details-bin" trailer, Description -> Message and Field -> Field, so the field a
-// message belongs to survives the hop instead of being flattened into prose. The violation's dotted
+// the "grpc-status-details-bin" trailer, Description -> Message, Field -> Field and Reason -> Code
+// (§4.2: a client SHOULD read the error's code back from FieldViolation.reason), so the field a
+// message belongs to and the rule that rejected it survive the hop instead of being flattened into
+// prose. The violation's dotted
 // path is turned back into the JSON Pointer errors[].field is everywhere else (§1.3; pointerPath),
 // so a caller sees one form of field whichever transport the failure came over.
 //
@@ -125,6 +127,7 @@ func recoverErrors(status *grpcstatuspkg.Status, detail string) []benzene.Error 
 			errors = append(errors, benzene.Error{
 				Message: violation.GetDescription(),
 				Field:   pointerPath(violation.GetField()),
+				Code:    violation.GetReason(),
 			})
 		}
 		return errors

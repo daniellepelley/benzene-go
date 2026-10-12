@@ -266,8 +266,8 @@ func TestClient_Send_RecoversFieldsFromStatusDetails(t *testing.T) {
 		t.Fatalf("Errors = %v, want both of the handler's errors", result.Errors)
 	}
 	want := []benzene.Error{
-		{Message: "name is required", Field: "/name"},
-		{Message: "greeting is too long", Field: "/greeting"},
+		{Message: "name is required", Field: "/name", Code: "required"},
+		{Message: "greeting is too long", Field: "/greeting", Code: "max-length"},
 	}
 	for i, got := range result.Errors {
 		if got.Message != want[i].Message {
@@ -276,11 +276,9 @@ func TestClient_Send_RecoversFieldsFromStatusDetails(t *testing.T) {
 		if got.Field != want[i].Field {
 			t.Errorf("Errors[%d].Field = %q, want %q", i, got.Field, want[i].Field)
 		}
-		// google.rpc.BadRequest has no agreed home for an error's `code` yet, so the ports
-		// deliberately do not carry it - asserted so that inventing one is a test change, not a
-		// silent divergence between this port and the others.
-		if got.Code != "" {
-			t.Errorf("Errors[%d].Code = %q, want empty until the spec says where a code travels", i, got.Code)
+		// wire-contracts.md §4.2: the code travels in FieldViolation.reason and is read back.
+		if got.Code != want[i].Code {
+			t.Errorf("Errors[%d].Code = %q, want %q", i, got.Code, want[i].Code)
 		}
 	}
 	if result.Payload != nil {
@@ -325,14 +323,14 @@ func TestClient_Send_ForeignPeerWithoutDetailsIsUnaffected(t *testing.T) {
 func TestRecoverErrors(t *testing.T) {
 	t.Run("field violations become structured errors", func(t *testing.T) {
 		status, err := grpcstatuspkg.New(codes.InvalidArgument, "name is required").WithDetails(&errdetails.BadRequest{
-			FieldViolations: []*errdetails.BadRequest_FieldViolation{{Field: "items[0].sku", Description: "sku is required"}},
+			FieldViolations: []*errdetails.BadRequest_FieldViolation{{Field: "items[0].sku", Description: "sku is required", Reason: "required"}},
 		})
 		if err != nil {
 			t.Fatalf("WithDetails() error = %v", err)
 		}
 		got := recoverErrors(status, "sku is required")
-		if len(got) != 1 || got[0].Message != "sku is required" || got[0].Field != "/items/0/sku" {
-			t.Errorf("recoverErrors() = %v, want one error carrying the field as a JSON Pointer", got)
+		if len(got) != 1 || got[0].Message != "sku is required" || got[0].Field != "/items/0/sku" || got[0].Code != "required" {
+			t.Errorf("recoverErrors() = %v, want one error carrying the field as a JSON Pointer and the reason as its code", got)
 		}
 	})
 

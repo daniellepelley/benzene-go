@@ -199,8 +199,9 @@ func resultError(code codes.Code, resp wire.Response) error {
 // this dispatch produced) onto google.rpc.BadRequest field violations: message ->
 // FieldViolation.Description, field -> FieldViolation.Field converted from the §1.3 JSON Pointer to
 // gRPC's dotted path (dottedPath), left unset rather than empty when the error is not scoped to a
-// field. Nothing else crosses: the spec does not say where an error's
-// `code` goes, and a port inventing a home for it is how three ports end up with three shapes.
+// field, and code -> FieldViolation.Reason (wire-contracts.md §4.2: a server SHOULD write the
+// error's code there, so it survives a gRPC hop as it does an HTTP one), unset when the error has
+// no code.
 //
 // A body that is not a problem document at all (or one with no errors member) yields no
 // violations, so no details trailer is attached - a failure carrying only a detail string keeps
@@ -216,6 +217,7 @@ func fieldViolations(resp wire.Response) []*errdetails.BadRequest_FieldViolation
 		violations = append(violations, &errdetails.BadRequest_FieldViolation{
 			Field:       dottedPath(item.Field),
 			Description: item.Message,
+			Reason:      item.Code,
 		})
 	}
 	return violations

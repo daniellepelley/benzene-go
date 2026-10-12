@@ -157,8 +157,9 @@ some — it's an ordinary interceptor.
   joined error messages as its detail.
 - **Structured errors:** there is no JSON problem document over gRPC (wire-contracts.md §4.2), so a
   failed result's `errors` travel as a `google.rpc.BadRequest` in the `grpc-status-details-bin`
-  trailer — one `FieldViolation` per error, the message as its `description` and the field as its
-  `field` — and `grpcbinding.Client` reads them straight back into `result.Errors`. A failure with
+  trailer — one `FieldViolation` per error, the message as its `description`, the field as its
+  `field` (a dotted path) and the error's `code` as its `reason` — and `grpcbinding.Client` reads
+  them straight back into `result.Errors`, so `field` and `code` survive the hop. A failure with
   no structured errors attaches no details, and a client reading such a peer still gets the single
   message-only error it always did.
 - **Cancellation:** a context already cancelled or past its deadline maps to `Canceled` /

@@ -466,7 +466,11 @@ func TestUnaryServerInterceptor_StructuredErrorsBecomeBadRequestDetails(t *testi
 	}
 	wantFields := []string{"name", "greeting"} // the handler's pointers, as gRPC's dotted paths (§4.2)
 	wantDescriptions := []string{"name is required", "greeting is too long"}
+	wantReasons := []string{"required", "max-length"} // each error's code (§4.2)
 	for i, violation := range violations {
+		if violation.GetReason() != wantReasons[i] {
+			t.Errorf("FieldViolations[%d].Reason = %q, want %q", i, violation.GetReason(), wantReasons[i])
+		}
 		if violation.GetField() != wantFields[i] {
 			t.Errorf("FieldViolations[%d].Field = %q, want %q", i, violation.GetField(), wantFields[i])
 		}
@@ -571,6 +575,9 @@ func TestFieldViolations(t *testing.T) {
 		}
 		if got[0].GetField() != "name" || got[0].GetDescription() != "name is required" {
 			t.Errorf("fieldViolations()[0] = %v, want field name (the pointer /name, dotted) and the message as description", got[0])
+		}
+		if got[0].GetReason() != "required" {
+			t.Errorf("fieldViolations()[0].Reason = %q, want the error's code %q (§4.2)", got[0].GetReason(), "required")
 		}
 	})
 
