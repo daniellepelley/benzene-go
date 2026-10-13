@@ -46,5 +46,5 @@ done
 
 echo "Created:$tags"
 echo
-echo "Publish them (the root first is not required; one push carries all of them):"
+echo "Publish them, all in one push:"
 echo "  git push origin$tags"

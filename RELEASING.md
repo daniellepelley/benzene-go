@@ -113,15 +113,19 @@ own CI and local development.
 
 ## Current status
 
-A `v0.1.0` tag for the root module was created locally but **could not be pushed** in the
-sandbox this was developed in - the session's git proxy rejected the tag push (403), unlike
-ordinary branch pushes, which worked throughout. To actually publish the first release:
+**Nothing is tagged yet.** The first release is `v0.1.0-beta.1`, matching the other ports'
+pre-releases (`0.1.0-alpha.1` on NuGet, `0.1.0-beta.2` on npm, `0.1.0b2` on PyPI). Every nested
+module's `go.mod` already requires the root and its siblings at `v0.1.0-beta.1`, so each tag resolves
+for a real consumer the moment it is pushed. From a clean checkout of `main`:
 
 ```
-git push origin v0.1.0
+scripts/tag-release.sh v0.1.0-beta.1
 ```
 
-Once that's live, `awssqs`'s and `awssns`'s own `require github.com/daniellepelley/benzene-go
-v0.1.0` (and each example's requires on both its root and binding module) resolve for real over
-the network too - though, as above, this repo's own tooling doesn't depend on that happening,
-thanks to `go.work`.
+It creates 19 annotated tags (the root and the 18 library modules; examples and templates are not
+libraries and are not tagged) and prints the one `git push origin ...` that publishes them. A later
+release moves the requires to the new version first: the script refuses to tag while any require
+names a different one.
+
+An earlier attempt pushed a root `v0.1.0` tag from a sandbox whose git proxy refused tag pushes
+(403); nothing reached the remote, and `v0.1.0` stays unused.
