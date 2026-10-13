@@ -3,8 +3,8 @@ module github.com/daniellepelley/benzene-go/examples/grpc-helloworld
 go 1.24.7
 
 require (
-	github.com/daniellepelley/benzene-go v0.1.0
-	github.com/daniellepelley/benzene-go/grpcbinding v0.1.0
+	github.com/daniellepelley/benzene-go v0.1.0-beta.1
+	github.com/daniellepelley/benzene-go/grpcbinding v0.1.0-beta.1
 	google.golang.org/grpc v1.68.0
 	google.golang.org/protobuf v1.35.2
 )

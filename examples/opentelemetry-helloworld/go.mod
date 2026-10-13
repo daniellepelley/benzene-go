@@ -3,8 +3,8 @@ module github.com/daniellepelley/benzene-go/examples/opentelemetry-helloworld
 go 1.24.7
 
 require (
-	github.com/daniellepelley/benzene-go v0.1.0
-	github.com/daniellepelley/benzene-go/diagnostics v0.1.0
+	github.com/daniellepelley/benzene-go v0.1.0-beta.1
+	github.com/daniellepelley/benzene-go/diagnostics v0.1.0-beta.1
 	go.opentelemetry.io/otel v1.38.0
 	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.38.0
 	go.opentelemetry.io/otel/sdk v1.38.0

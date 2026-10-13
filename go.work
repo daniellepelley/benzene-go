@@ -38,24 +38,24 @@ use (
 // reconciliation wants these modules' real go.mod, which isn't resolvable purely from the `use`
 // directives above until they're actually tagged and pushed.
 replace (
-	github.com/daniellepelley/benzene-go v0.1.0 => ./
-	github.com/daniellepelley/benzene-go/awseventbridge v0.1.0 => ./awseventbridge
-	github.com/daniellepelley/benzene-go/awslambdaclient v0.1.0 => ./awslambdaclient
-	github.com/daniellepelley/benzene-go/awssns v0.1.0 => ./awssns
-	github.com/daniellepelley/benzene-go/awssqs v0.1.0 => ./awssqs
-	github.com/daniellepelley/benzene-go/awsstepfunctions v0.1.0 => ./awsstepfunctions
-	github.com/daniellepelley/benzene-go/azurecosmos v0.1.0 => ./azurecosmos
-	github.com/daniellepelley/benzene-go/azureeventgrid v0.1.0 => ./azureeventgrid
-	github.com/daniellepelley/benzene-go/azureeventhub v0.1.0 => ./azureeventhub
-	github.com/daniellepelley/benzene-go/azurequeuestorage v0.1.0 => ./azurequeuestorage
-	github.com/daniellepelley/benzene-go/azureservicebus v0.1.0 => ./azureservicebus
-	github.com/daniellepelley/benzene-go/circuitbreaker v0.1.0 => ./circuitbreaker
-	github.com/daniellepelley/benzene-go/diagnostics v0.1.0 => ./diagnostics
-	github.com/daniellepelley/benzene-go/gcpfunctions v0.1.0 => ./gcpfunctions
-	github.com/daniellepelley/benzene-go/gcppubsubclient v0.1.0 => ./gcppubsubclient
-	github.com/daniellepelley/benzene-go/grpcbinding v0.1.0 => ./grpcbinding
-	github.com/daniellepelley/benzene-go/kafka v0.1.0 => ./kafka
-	github.com/daniellepelley/benzene-go/rabbitmq v0.1.0 => ./rabbitmq
+	github.com/daniellepelley/benzene-go v0.1.0-beta.1 => ./
+	github.com/daniellepelley/benzene-go/awseventbridge v0.1.0-beta.1 => ./awseventbridge
+	github.com/daniellepelley/benzene-go/awslambdaclient v0.1.0-beta.1 => ./awslambdaclient
+	github.com/daniellepelley/benzene-go/awssns v0.1.0-beta.1 => ./awssns
+	github.com/daniellepelley/benzene-go/awssqs v0.1.0-beta.1 => ./awssqs
+	github.com/daniellepelley/benzene-go/awsstepfunctions v0.1.0-beta.1 => ./awsstepfunctions
+	github.com/daniellepelley/benzene-go/azurecosmos v0.1.0-beta.1 => ./azurecosmos
+	github.com/daniellepelley/benzene-go/azureeventgrid v0.1.0-beta.1 => ./azureeventgrid
+	github.com/daniellepelley/benzene-go/azureeventhub v0.1.0-beta.1 => ./azureeventhub
+	github.com/daniellepelley/benzene-go/azurequeuestorage v0.1.0-beta.1 => ./azurequeuestorage
+	github.com/daniellepelley/benzene-go/azureservicebus v0.1.0-beta.1 => ./azureservicebus
+	github.com/daniellepelley/benzene-go/circuitbreaker v0.1.0-beta.1 => ./circuitbreaker
+	github.com/daniellepelley/benzene-go/diagnostics v0.1.0-beta.1 => ./diagnostics
+	github.com/daniellepelley/benzene-go/gcpfunctions v0.1.0-beta.1 => ./gcpfunctions
+	github.com/daniellepelley/benzene-go/gcppubsubclient v0.1.0-beta.1 => ./gcppubsubclient
+	github.com/daniellepelley/benzene-go/grpcbinding v0.1.0-beta.1 => ./grpcbinding
+	github.com/daniellepelley/benzene-go/kafka v0.1.0-beta.1 => ./kafka
+	github.com/daniellepelley/benzene-go/rabbitmq v0.1.0-beta.1 => ./rabbitmq
 )
 
 // examples/aws-sns-helloworld has no genuinely external dependency of its own beyond what

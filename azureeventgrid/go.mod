@@ -5,7 +5,7 @@ go 1.24.7
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.9.2
 	github.com/Azure/azure-sdk-for-go/sdk/messaging/eventgrid/azeventgrid v1.0.0
-	github.com/daniellepelley/benzene-go v0.1.0
+	github.com/daniellepelley/benzene-go v0.1.0-beta.1
 )
 
 require (

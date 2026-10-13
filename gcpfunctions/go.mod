@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/GoogleCloudPlatform/functions-framework-go v1.9.2
 	github.com/cloudevents/sdk-go/v2 v2.16.2
-	github.com/daniellepelley/benzene-go v0.1.0
+	github.com/daniellepelley/benzene-go v0.1.0-beta.1
 )
 
 require (

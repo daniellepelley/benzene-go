@@ -8,11 +8,11 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/lambda v1.101.2
 	github.com/aws/aws-sdk-go-v2/service/sns v1.41.1
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.45.1
-	github.com/daniellepelley/benzene-go v0.1.0
-	github.com/daniellepelley/benzene-go/awseventbridge v0.1.0
-	github.com/daniellepelley/benzene-go/awslambdaclient v0.1.0
-	github.com/daniellepelley/benzene-go/awssns v0.1.0
-	github.com/daniellepelley/benzene-go/awssqs v0.1.0
+	github.com/daniellepelley/benzene-go v0.1.0-beta.1
+	github.com/daniellepelley/benzene-go/awseventbridge v0.1.0-beta.1
+	github.com/daniellepelley/benzene-go/awslambdaclient v0.1.0-beta.1
+	github.com/daniellepelley/benzene-go/awssns v0.1.0-beta.1
+	github.com/daniellepelley/benzene-go/awssqs v0.1.0-beta.1
 )
 
 require (

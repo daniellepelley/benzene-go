@@ -7,10 +7,10 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/messaging/azeventhubs/v2 v2.0.2
 	github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus v1.10.0
 	github.com/Azure/azure-sdk-for-go/sdk/messaging/eventgrid/azeventgrid v1.0.0
-	github.com/daniellepelley/benzene-go v0.1.0
-	github.com/daniellepelley/benzene-go/azureeventgrid v0.1.0
-	github.com/daniellepelley/benzene-go/azureeventhub v0.1.0
-	github.com/daniellepelley/benzene-go/azureservicebus v0.1.0
+	github.com/daniellepelley/benzene-go v0.1.0-beta.1
+	github.com/daniellepelley/benzene-go/azureeventgrid v0.1.0-beta.1
+	github.com/daniellepelley/benzene-go/azureeventhub v0.1.0-beta.1
+	github.com/daniellepelley/benzene-go/azureservicebus v0.1.0-beta.1
 )
 
 require (

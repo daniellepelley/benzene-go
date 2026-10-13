@@ -4,7 +4,7 @@ go 1.24.7
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azqueue v1.0.1
-	github.com/daniellepelley/benzene-go v0.1.0
+	github.com/daniellepelley/benzene-go v0.1.0-beta.1
 )
 
 require (

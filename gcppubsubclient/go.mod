@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	cloud.google.com/go/pubsub v1.51.0
-	github.com/daniellepelley/benzene-go v0.1.0
+	github.com/daniellepelley/benzene-go v0.1.0-beta.1
 )
 
 require (

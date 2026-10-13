@@ -3,8 +3,8 @@ module github.com/daniellepelley/benzene-go/templates/aws-sqs
 go 1.24.7
 
 require (
-	github.com/daniellepelley/benzene-go v0.1.0
-	github.com/daniellepelley/benzene-go/awssqs v0.1.0
+	github.com/daniellepelley/benzene-go v0.1.0-beta.1
+	github.com/daniellepelley/benzene-go/awssqs v0.1.0-beta.1
 )
 
 require (

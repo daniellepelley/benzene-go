@@ -5,7 +5,7 @@ go 1.24.7
 require (
 	github.com/aws/aws-sdk-go-v2 v1.42.1
 	github.com/aws/aws-sdk-go-v2/service/sns v1.41.1
-	github.com/daniellepelley/benzene-go v0.1.0
+	github.com/daniellepelley/benzene-go v0.1.0-beta.1
 )
 
 require (
