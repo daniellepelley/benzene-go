@@ -136,6 +136,7 @@ type issueState struct {
 	lastSeen         time.Time
 	exemplarTraceIds []string
 	resolutionHint   string
+	errors           []mesh.IssueError
 }
 
 type instanceState struct {
@@ -422,6 +423,7 @@ func (s *store) addIssues(batch mesh.IssueBatch) int {
 			merged.lastSeen = issue.LastSeen
 		}
 		merged.exemplarTraceIds = newestExemplars(merged.exemplarTraceIds, issue.ExemplarTraceIds)
+		merged.errors = mesh.MergeIssueErrors(merged.errors, issue.Errors)
 	}
 	return accepted
 }
@@ -491,6 +493,7 @@ func (s *store) fleetIssues() []IssueView {
 				LastSeen:         issue.lastSeen,
 				ExemplarTraceIds: issue.exemplarTraceIds,
 				ResolutionHint:   issue.resolutionHint,
+				Errors:           issue.errors,
 			})
 		}
 	}
@@ -610,6 +613,17 @@ func (s *store) traceSummaries(limit int) []TraceSummary {
 	summaries := make([]TraceSummary, 0, len(byTrace))
 	for traceID, events := range byTrace {
 		summary := TraceSummary{TraceID: traceID, Events: len(events), StartedAt: events[0].StartedAt}
+		// The flow's status (mesh.md §4): its earliest-started failing event's when it failed, else its
+		// earliest-started event's. A stable sort keeps receipt order between equal start times.
+		ordered := append([]mesh.TraceEvent(nil), events...)
+		sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].StartedAt.Before(ordered[j].StartedAt) })
+		summary.Status = ordered[0].Status
+		for _, event := range ordered {
+			if benzene.Status(event.Status).IsFailure() {
+				summary.Status = event.Status
+				break
+			}
+		}
 		var end time.Time
 		services := map[string]bool{}
 		for _, event := range events {

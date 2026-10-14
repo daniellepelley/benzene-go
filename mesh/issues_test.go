@@ -3,6 +3,7 @@ package mesh
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -333,5 +334,94 @@ func TestPushIssueExporter_CloseFlushesTail(t *testing.T) {
 
 	if batch := sender.last(); len(batch.Issues) != 1 {
 		t.Errorf("Close should flush the tail; last batch = %+v", batch)
+	}
+}
+
+func TestIssueMiddleware_CarriesFieldAndCodeNeverTheMessage(t *testing.T) {
+	// mesh.md §4.1: an issue's error detail is (field, code) pairs from the failing result's problem
+	// document. The message is free text a validator may have built from the payload, so it is dropped,
+	// and an error with neither member says nothing to count.
+	recorder := &fakeRecorder{}
+	result := benzene.ValidationErrorWith[any](
+		benzene.Error{Message: "orderId 'o-17' is required", Field: "/orderId", Code: "required"},
+		benzene.Error{Message: "totals disagree", Code: "TotalsDisagree"},
+		benzene.Error{Message: "prose only"},
+	)
+	runIssueMiddleware(t, recorder, result, map[string]string{})
+
+	if len(recorder.occurrences) != 1 {
+		t.Fatalf("occurrences = %d, want 1", len(recorder.occurrences))
+	}
+	want := []IssueError{{Field: "/orderId", Code: "required", Count: 1}, {Code: "TotalsDisagree", Count: 1}}
+	if got := recorder.occurrences[0].Errors; !reflect.DeepEqual(got, want) {
+		t.Errorf("errors = %+v, want %+v", got, want)
+	}
+}
+
+func TestPushIssueExporter_ErrorDetailIsCountedAndBoundedAtTheFlush(t *testing.T) {
+	sender := &issueCaptureSender{}
+	exporter := NewPushIssueExporter(sender, "orders", PushIssueExporterOptions{FlushInterval: time.Hour})
+	defer exporter.Close()
+
+	at := time.Date(2026, 7, 25, 9, 0, 0, 0, time.UTC)
+	occ := IssueOccurrence{Service: "orders", Topic: "order:create", Status: "validation-error", At: at}
+	// Twelve distinct fields once each, then /orderId three more times: /orderId leads, and the bound
+	// keeps the next nine by field order.
+	for _, field := range []string{"/l", "/k", "/j", "/i", "/h", "/g", "/f", "/e", "/d", "/c", "/b", "/a"} {
+		occ.Errors = []IssueError{{Field: field, Code: "required", Count: 1}}
+		exporter.Record(occ)
+	}
+	occ.Errors = []IssueError{{Field: "/orderId", Code: "required", Count: 1}}
+	for range 3 {
+		exporter.Record(occ)
+	}
+
+	exporter.Flush()
+	issue := sender.last().Issues[0]
+	if len(issue.Errors) != MaxIssueErrors {
+		t.Fatalf("errors = %d entries, want the bound of %d", len(issue.Errors), MaxIssueErrors)
+	}
+	if issue.Errors[0] != (IssueError{Field: "/orderId", Code: "required", Count: 3}) {
+		t.Errorf("first = %+v, want /orderId x3", issue.Errors[0])
+	}
+	if issue.Errors[1].Field != "/a" || issue.Errors[9].Field != "/i" {
+		t.Errorf("ties = %+v, want /a../i in field order", issue.Errors[1:])
+	}
+}
+
+func TestIssueErrors_DecodingSkipsInvalidEntries(t *testing.T) {
+	var issue Issue
+	body := `{"fingerprint":"f","errors":["required",{"count":1},{"field":"/a","count":0},{"field":"/a","count":1.5},{"field":7,"count":1},{"field":"/b","code":"required","count":2}]}`
+	if err := json.Unmarshal([]byte(body), &issue); err != nil {
+		t.Fatalf("an invalid error entry must not fail the issue: %v", err)
+	}
+	want := IssueErrors{{Field: "/b", Code: "required", Count: 2}}
+	if !reflect.DeepEqual(issue.Errors, want) {
+		t.Errorf("errors = %+v, want %+v", issue.Errors, want)
+	}
+}
+
+func TestMergeIssueErrors_OrdersTiesByFieldThenCodeAndSumsByIdentity(t *testing.T) {
+	if got := MergeIssueErrors(nil, nil); got != nil {
+		t.Errorf("nothing merged = %+v, want nil", got)
+	}
+	got := MergeIssueErrors(
+		[]IssueError{{Field: "/a", Code: "b", Count: 1}, {Code: "z", Count: 1}},
+		[]IssueError{{Field: "/a", Code: "a", Count: 1}, {Code: "z", Count: 1}},
+	)
+	// An absent field sorts first; equal fields fall to the code.
+	want := []IssueError{{Code: "z", Count: 2}, {Field: "/a", Code: "a", Count: 1}, {Field: "/a", Code: "b", Count: 1}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("merged = %+v, want %+v", got, want)
+	}
+}
+
+func TestIssueErrors_ANonArrayIsNoDetailNotAFailure(t *testing.T) {
+	var issue Issue
+	if err := json.Unmarshal([]byte(`{"fingerprint":"f","errors":"required"}`), &issue); err != nil {
+		t.Fatalf("a malformed errors member must not fail the issue: %v", err)
+	}
+	if issue.Errors != nil {
+		t.Errorf("errors = %+v, want none", issue.Errors)
 	}
 }

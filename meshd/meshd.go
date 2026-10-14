@@ -79,6 +79,9 @@ type IssueView struct {
 	LastSeen         time.Time `json:"lastSeen"`
 	ExemplarTraceIds []string  `json:"exemplarTraceIds,omitempty"`
 	ResolutionHint   string    `json:"resolutionHint,omitempty"`
+	// Errors is the merged error detail (mesh.md §4.1): cumulative (field, code) counts, bounded to
+	// mesh.MaxIssueErrors, highest first.
+	Errors []mesh.IssueError `json:"errors,omitempty"`
 }
 
 // Health classification of a service, from its instances' latest heartbeats.
@@ -152,6 +155,9 @@ type TraceSummary struct {
 	StartedAt  time.Time `json:"startedAt"`
 	DurationMs float64   `json:"durationMs"`
 	Failed     bool      `json:"failed"`
+	// Status is the flow's earliest-started failing event's status when it failed, else its
+	// earliest-started event's (mesh.md §4) - how the flow ended for its caller.
+	Status string `json:"status,omitempty"`
 }
 
 // ServiceView is the benzene:mesh:query:service response. Descriptor is the registered Contract

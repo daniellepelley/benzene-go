@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"sort"
 	"sync"
 	"time"
 
@@ -126,6 +127,7 @@ func IssueMiddleware(info ServiceInfo, exporter IssueRecorder) benzene.Middlewar
 				TraceID: traceID,
 				Service: info.Service,
 				At:      time.Now().UTC(),
+				Errors:  issueErrorsOf(ic.Result),
 			})
 		}
 		return err
@@ -145,6 +147,60 @@ func issueWorthRecording(result benzene.ResultInfo) bool {
 	return result.ResultStatus().IsFailure()
 }
 
+// issueErrorsOf is a failing result's problem-document errors reduced to (field, code) pairs with a
+// count of one each: the message is free text a validator may have built from the payload, so it
+// never leaves the service, and an error carrying neither member says nothing an issue can count.
+func issueErrorsOf(result benzene.ResultInfo) []IssueError {
+	if result == nil {
+		return nil
+	}
+	var errors []IssueError
+	for _, problem := range benzene.ProblemsOf(result) {
+		if problem.Field == "" && problem.Code == "" {
+			continue
+		}
+		errors = append(errors, IssueError{Field: problem.Field, Code: problem.Code, Count: 1})
+	}
+	return errors
+}
+
+// MaxIssueErrors bounds an issue's error detail on both sides of the feed (mesh.md §4.1).
+const MaxIssueErrors = 10
+
+// MergeIssueErrors adds delta into existing by (field, code) identity and returns the bounded result:
+// the MaxIssueErrors highest counts, ordered by count descending, then field, then code (ordinal,
+// absent first). The emitter uses it to accumulate a flush window's detail and the collector to merge
+// a batch's deltas into an issue, so both sides apply the same bound and the same order.
+func MergeIssueErrors(existing, delta []IssueError) []IssueError {
+	if len(existing) == 0 && len(delta) == 0 {
+		return nil
+	}
+	type key struct{ field, code string }
+	counts := map[key]int64{}
+	for _, list := range [][]IssueError{existing, delta} {
+		for _, entry := range list {
+			counts[key{entry.Field, entry.Code}] += entry.Count
+		}
+	}
+	merged := make([]IssueError, 0, len(counts))
+	for k, count := range counts {
+		merged = append(merged, IssueError{Field: k.field, Code: k.code, Count: count})
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		if merged[i].Count != merged[j].Count {
+			return merged[i].Count > merged[j].Count
+		}
+		if merged[i].Field != merged[j].Field {
+			return merged[i].Field < merged[j].Field
+		}
+		return merged[i].Code < merged[j].Code
+	})
+	if len(merged) > MaxIssueErrors {
+		merged = merged[:MaxIssueErrors]
+	}
+	return merged
+}
+
 // IssueOccurrence is one failure the middleware observed, before classification/fingerprinting.
 // ExceptionType is left empty by the standard middleware: Go's router converts a handler panic to
 // a service-unavailable Result before this middleware sees it, so there is no language-native
@@ -157,6 +213,9 @@ type IssueOccurrence struct {
 	ExceptionType string
 	TraceID       string
 	At            time.Time
+	// Errors is the failing result's structured errors as (field, code) pairs - never the message
+	// (mesh.md §4.1). An error with neither is not carried.
+	Errors []IssueError
 }
 
 // IssueRecorder receives the failure occurrences IssueMiddleware observes. Implementations must be
@@ -187,7 +246,14 @@ type pendingIssue struct {
 	firstSeen      time.Time
 	lastSeen       time.Time
 	exemplars      []string
+	// errors counts the window's (field, code) pairs. Bounded to MaxIssueErrors only at the flush,
+	// so a pair that becomes frequent late in the window is not evicted early; distinct pairs past
+	// maxPendingIssueErrors are not admitted, which caps a window's memory.
+	errors map[IssueError]int64
 }
+
+// maxPendingIssueErrors caps the distinct (field, code) pairs one issue accumulates in a window.
+const maxPendingIssueErrors = 100
 
 // PushIssueExporter is the emitter half of the issue feed (mesh.md §4.1): it deduplicates failure
 // occurrences by fingerprint at the source (per-occurrence events are never sent), accumulating
@@ -263,6 +329,15 @@ func (e *PushIssueExporter) Record(occurrence IssueOccurrence) {
 	}
 	issue.count++
 	issue.lastSeen = occurrence.At
+	for _, entry := range occurrence.Errors {
+		pair := IssueError{Field: entry.Field, Code: entry.Code}
+		if issue.errors == nil {
+			issue.errors = map[IssueError]int64{}
+		}
+		if _, seen := issue.errors[pair]; seen || len(issue.errors) < maxPendingIssueErrors {
+			issue.errors[pair] += max(entry.Count, 1)
+		}
+	}
 	if occurrence.TraceID != "" {
 		issue.exemplars = newestExemplars(issue.exemplars, []string{occurrence.TraceID})
 	}
@@ -327,7 +402,20 @@ func snapshotIssueBatch(service string, pending map[string]*pendingIssue) IssueB
 			FirstSeen:        issue.firstSeen,
 			LastSeen:         issue.lastSeen,
 			ExemplarTraceIds: issue.exemplars,
+			Errors:           pendingIssueErrors(issue.errors),
 		})
 	}
 	return batch
+}
+
+// pendingIssueErrors bounds a window's error counts for the wire.
+func pendingIssueErrors(counts map[IssueError]int64) IssueErrors {
+	if len(counts) == 0 {
+		return nil
+	}
+	delta := make([]IssueError, 0, len(counts))
+	for pair, count := range counts {
+		delta = append(delta, IssueError{Field: pair.Field, Code: pair.Code, Count: count})
+	}
+	return MergeIssueErrors(nil, delta)
 }

@@ -1,6 +1,8 @@
 package mesh
 
 import (
+	"bytes"
+	"encoding/json"
 	"time"
 
 	"github.com/daniellepelley/benzene-go/healthcheck"
@@ -62,6 +64,62 @@ type Issue struct {
 	// ExemplarTraceIds links the signature to concrete flows; the collector keeps the newest ≤3.
 	ExemplarTraceIds []string `json:"exemplarTraceIds,omitempty"`
 	ResolutionHint   string   `json:"resolutionHint,omitempty"`
+	// Errors is the structured detail behind the failures counted (mesh.md §4.1): field and code
+	// pairs from the failing results' problem documents, never the message, each with a delta count,
+	// bounded to MaxIssueErrors. Not part of the fingerprint.
+	Errors IssueErrors `json:"errors,omitempty"`
+}
+
+// IssueError is one entry of an issue's error detail (mesh.md §4.1). Its identity is the (Field,
+// Code) pair; an empty string is an absent member. Count is a delta on the wire, like Issue.Count.
+type IssueError struct {
+	Field string `json:"field,omitempty"`
+	Code  string `json:"code,omitempty"`
+	Count int64  `json:"count"`
+}
+
+// IssueErrors decodes leniently: an entry that is not an object, has neither field nor code, or
+// whose count is not a positive integer is skipped, so one malformed entry never costs the issue
+// (or the batch) it arrived in (mesh.md §4.1).
+type IssueErrors []IssueError
+
+// UnmarshalJSON implements the lenient decoding described on IssueErrors.
+func (e *IssueErrors) UnmarshalJSON(data []byte) error {
+	var raw []json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		*e = nil
+		return nil
+	}
+	entries := IssueErrors{}
+	for _, item := range raw {
+		var entry struct {
+			Field *string      `json:"field"`
+			Code  *string      `json:"code"`
+			Count *json.Number `json:"count"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(item))
+		decoder.UseNumber()
+		if decoder.Decode(&entry) != nil || entry.Count == nil {
+			continue
+		}
+		count, err := entry.Count.Int64()
+		if err != nil || count <= 0 {
+			continue
+		}
+		var field, code string
+		if entry.Field != nil {
+			field = *entry.Field
+		}
+		if entry.Code != nil {
+			code = *entry.Code
+		}
+		if field == "" && code == "" {
+			continue
+		}
+		entries = append(entries, IssueError{Field: field, Code: code, Count: count})
+	}
+	*e = entries
+	return nil
 }
 
 // Heartbeat is the body of a benzene:mesh:heartbeat message (mesh.md §5): the standard aggregate

@@ -323,7 +323,9 @@ alongside the shared spec.
   with `healthcheck.Run`'s aggregate - retrying registration while the collector comes up; a nil
   `Sender` is a nil, no-op `Announcer`. Also the trace middleware + log/push exporters, the outbound
   `WithTraceContext`, and the issue feed's emitter half (`IssueMiddleware` + `PushIssueExporter`:
-  source-side dedup by the normative §4.1 classification + SHA-256 fingerprint, delta counts,
+  source-side dedup by the normative §4.1 classification + SHA-256 fingerprint, delta counts, each
+  failing result's (field, code) error pairs - never the message - counted and bounded by
+  `MergeIssueErrors` (the one rule meshd merges with too),
   liveness flush; `ClassificationContractDrift` is exported for meshd's collector-derived §4.2 drift
   issues). Every feed is independent and optional - degradation (nil sender, nil or failing
   exporter, unreachable collector) must reduce the mesh, never break the service. The
