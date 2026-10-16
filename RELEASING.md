@@ -123,7 +123,9 @@ scripts/tag-release.sh v0.1.0-beta.1
 ```
 
 It creates 19 annotated tags (the root and the 18 library modules; examples and templates are not
-libraries and are not tagged) and prints the one `git push origin ...` that publishes them. A later
+libraries and are not tagged) and prints the one `git push origin ...` that publishes them. The
+**Tag release** workflow (Actions → Tag release → Run workflow, with the version) runs the same script
+on `main` and pushes the tags itself, for when tags can't be pushed from where you are. A later
 release moves the requires to the new version first: the script refuses to tag while any require
 names a different one.
 

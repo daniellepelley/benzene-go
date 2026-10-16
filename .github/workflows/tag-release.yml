@@ -1,0 +1,48 @@
+name: Tag release
+
+# Publishes a release by tagging it: runs scripts/tag-release.sh on `main` and pushes the tags it
+# creates (the root module's `<version>` and every library module's `<dir>/<version>`). Go has no
+# registry upload; the pushed tags ARE the release (RELEASING.md).
+#
+# The same script can be run from a clone; this workflow exists so a release can be cut where pushing
+# tags from a workstation isn't possible. It refuses, as the script does, when any go.mod requires a
+# sibling module at a version other than the one being tagged.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to tag, e.g. v0.1.0-beta.1"
+        required: true
+
+permissions:
+  contents: write # to push the tags
+
+jobs:
+  tag:
+    name: Tag and push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the script tags HEAD; the full history lets git see existing tags
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work # `go work edit -json` lists the modules to tag
+
+      - name: Create the tags
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          scripts/tag-release.sh "$VERSION"
+
+      - name: Push the tags
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          tags=$(git tag --points-at HEAD | grep -E "(^|/)${VERSION//./\\.}$")
+          echo "Pushing:"; echo "$tags"
+          git push origin $tags
