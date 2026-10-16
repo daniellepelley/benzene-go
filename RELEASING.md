@@ -113,21 +113,23 @@ own CI and local development.
 
 ## Current status
 
-**Nothing is tagged yet.** The first release is `v0.1.0-beta.1`, matching the other ports'
-pre-releases (`0.1.0-alpha.1` on NuGet, `0.1.0-beta.2` on npm, `0.1.0b2` on PyPI). Every nested
-module's `go.mod` already requires the root and its siblings at `v0.1.0-beta.1`, so each tag resolves
-for a real consumer the moment it is pushed. From a clean checkout of `main`:
+**`v0.1.0-beta.1` is released** (2026-10-16), matching the other ports' pre-releases
+(`0.1.0-alpha.1` on NuGet, `0.1.0-beta.2` on npm, `0.1.0b2` on PyPI). The Tag release workflow
+pushed 19 tags at `37d0014` — the root `v0.1.0-beta.1` and `<dir>/v0.1.0-beta.1` for each of the 18
+library modules (examples and templates are not libraries and are not tagged) — and
+`proxy.golang.org` serves them, so `go get github.com/daniellepelley/benzene-go/<module>@v0.1.0-beta.1`
+works.
+
+To cut the next release, move every nested module's requires to the new version, then run the
+**Tag release** workflow (Actions → Tag release → Run workflow, with the version), or from a clean
+checkout of `main`:
 
 ```
-scripts/tag-release.sh v0.1.0-beta.1
+scripts/tag-release.sh v0.1.0-beta.2
 ```
 
-It creates 19 annotated tags (the root and the 18 library modules; examples and templates are not
-libraries and are not tagged) and prints the one `git push origin ...` that publishes them. The
-**Tag release** workflow (Actions → Tag release → Run workflow, with the version) runs the same script
-on `main` and pushes the tags itself, for when tags can't be pushed from where you are. A later
-release moves the requires to the new version first: the script refuses to tag while any require
-names a different one.
+The script refuses to tag while any require names a different version, and prints the one
+`git push origin ...` that publishes the tags; the workflow pushes them itself.
 
 An earlier attempt pushed a root `v0.1.0` tag from a sandbox whose git proxy refused tag pushes
 (403); nothing reached the remote, and `v0.1.0` stays unused.
